@@ -88,3 +88,42 @@ matched open current-head PRs; no stale cancellation was justified.
 Owner report: [fast-mlsirm #2171 comment](https://github.com/ContextualWisdomLab/fast-mlsirm/pull/2171#issuecomment-5853298639).
 Repair tracking: #2408, Project #1 In Progress. Hosted current-head acceptance
 and qualifying independent review remain required.
+
+## 2026-09-27 security prerequisite integration
+
+Noema #2387's hosted pip-audit job `108414598334` is a real shared-lock
+failure: `requirements-strix-ci-hashes.txt` still selects AnyIO 4.14.0.
+The audit lists CVE-2026-63374, CVE-2026-64847 and CVE-2026-63349, each with
+4.14.2 as the patched version. This is separate from the startup scheduling
+failure and the retry-dispatch credential defect.
+
+The canonical dependency repair is #2278 at
+`8a5251bf409fe84b3dd0cba1e48992f5b8d9eda5`. Its complete three-dot delta
+against protected main is exactly the six-line AnyIO pin/hash change. The
+current-head requested-changes review cites failed coverage and contains no
+source-backed lock finding; there are no inline review comments. That review
+is retained, and no approval or main merge is inferred from the dependency
+verification.
+
+An ordinary two-parent integration carries the canonical owner's exact commit
+into this isolated repair branch. The integration changes only that lockfile;
+it does not modify the owner's branch or copy unrelated foundation repairs.
+The release wheel and sdist were downloaded from PyPI's official distribution
+host and their actual SHA-256 bytes matched both committed hashes:
+
+- wheel: `9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494`
+- sdist: `cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f`
+
+A hash-pinned pip-audit 2.10.1 installed in an isolated project venv audited
+all 106 distributions listed in the original and repaired Strix lock, with
+`--strict --disable-pip --no-deps --format json`. The original returns exit 1
+with exactly those three AnyIO findings; the repaired lock returns exit 0
+with zero findings. Both JSON results contain 106 dependencies and zero
+skipped entries. Target dependencies were not installed or executed. HTTP
+cache entries that could not be decoded were ignored by the tool; the audit
+completed. This establishes the changed lock's advisory result, not the
+security of every repository input or a live Strix run.
+
+Primary advisory basis: [AnyIO process-pool stderr advisory](https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp)
+and [supplementary-group advisory](https://github.com/agronholm/anyio/security/advisories/GHSA-3w57-8xmc-8v26).
+The existing gate and its severity/ignore policy remain intact.
