@@ -130,7 +130,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert workflow.count("ref: 84a8a12aa006f917689db178971843a0fcb7f4ec") == 3
+    assert workflow.count("ref: fb2dd27c0609358681f33c6812b17cc62b059c8c") == 3
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
@@ -186,7 +186,7 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
     assert "needs: prepare" in matrix
     assert matrix.index("Require every Strix provider credential") < matrix.index("Run Strix against this isolated synthetic fixture") < matrix.index("Upload this run-attempt binding")
     collector = _job("gate")
-    assert "needs: [prepare, strix]" in collector
+    assert "needs: [prepare, strix, strix_overflow]" in collector
     assert collector.index("Recompute the exact licence-approved fixture matrix") < collector.index("Refuse unless every current-attempt binding") < collector.index("Seal exactly the gated bytes")
 
 
@@ -195,9 +195,16 @@ def test_matrix_and_collector_require_the_exact_attempt_set() -> None:
     assert "matrix_json: ${{ steps.fanout.outputs.matrix_json }}" in prepare
     assert "matrix: ${{ fromJSON(needs.prepare.outputs.matrix_json) }}" in matrix
     assert "fail-fast: false" in matrix
-    assert "max-parallel: 8" in matrix
+    assert "has_overflow == 'true' && 4 || 8" in matrix
+    overflow = _job("strix_overflow")
+    assert "max-parallel: 4" in overflow
+    assert "steps: *strix_steps" in overflow
+    assert "steps: &strix_steps" in matrix
+    assert "matrix_overflow_json" in prepare and "matrix_overflow_json" in overflow
+    assert "needs.strix_overflow.result == 'success'" in collector
+    assert "needs.strix_overflow.result == 'skipped'" in collector
     assert "name: ${{ matrix.artifact_name }}" in matrix
-    assert "needs: [prepare, strix]" in collector
+    assert "needs: [prepare, strix, strix_overflow]" in collector
     assert "--run-attempt \"$GITHUB_RUN_ATTEMPT\"" in collector
     assert "--verified-distributions \"${RUNNER_TEMP}/verified-distributions.json\"" in collector
     assert "--verdict \"${RUNNER_TEMP}/full-set-verdict.json\"" in collector
@@ -316,9 +323,9 @@ def test_failure_evidence_survives_the_failure_that_produced_it() -> None:
     assert sum("if-no-files-found: error" in line for line in executable) == 5
     # `always()` is forbidden outright by test_gate_has_no_bypass_of_any_kind; the
     # only conditions in this workflow are the two evidence-retention ones plus the
-    # pre-existing lock-only install guard.
+    # pre-existing lock-only install guard and the two overflow execution guards.
     conditions = [line.strip() for line in executable if line.strip().startswith("if:")]
-    assert len(conditions) == 4
+    assert len(conditions) == 6
 
 
 def _render_report_names(evidence_name: str) -> set[str]:
@@ -529,3 +536,25 @@ def test_both_cargo_workspaces_are_collected_before_licence_prescreen():
     assert "cargo_dev_manifest_path:" in text
     assert text.count("CARGO_DEV_MANIFEST_PATH: ${{ inputs.cargo_dev_manifest_path }}") == 2
     assert text.count('--cargo-dev-manifest "$cargo_dev_manifest"') == 2
+
+
+def test_collector_condition_refuses_failed_missing_or_unexpectedly_skipped_matrix():
+    """Evaluate the actual YAML condition for every upstream terminal state."""
+    from itertools import product
+    from types import SimpleNamespace
+
+    collector = _job("gate")
+    expression = collector.split("    if: >-\n", 1)[1].split("    name:", 1)[0]
+    expression = expression.strip().removeprefix("${{").removesuffix("}}")
+    expression = expression.replace("&&", " and ").replace("||", " or ").replace("!cancelled()", "not cancelled()")
+    states = ("success", "failure", "cancelled", "skipped")
+    for flag, prepare, primary, overflow, cancelled in product(("true", "false", ""), states, states, states, (True, False)):
+        needs = SimpleNamespace(prepare=SimpleNamespace(result=prepare, outputs=SimpleNamespace(has_overflow=flag)),
+                                strix=SimpleNamespace(result=primary),
+                                strix_overflow=SimpleNamespace(result=overflow))
+        actual = eval(" ".join(expression.split()), {"__builtins__": {}},
+                      {"needs": needs, "cancelled": lambda: cancelled})
+        expected = (not cancelled and prepare == primary == "success"
+                    and ((flag == "true" and overflow == "success")
+                         or (flag == "false" and overflow == "skipped")))
+        assert actual == expected, (flag, prepare, primary, overflow, cancelled)

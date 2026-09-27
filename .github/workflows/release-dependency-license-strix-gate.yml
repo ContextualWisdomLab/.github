@@ -169,6 +169,8 @@ jobs:
       actions: read
     outputs:
       matrix_json: ${{ steps.fanout.outputs.matrix_json }}
+      matrix_overflow_json: ${{ steps.fanout.outputs.matrix_overflow_json }}
+      has_overflow: ${{ steps.fanout.outputs.has_overflow }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -180,7 +182,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 84a8a12aa006f917689db178971843a0fcb7f4ec
+          ref: fb2dd27c0609358681f33c6812b17cc62b059c8c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -200,7 +202,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=84a8a12aa006f917689db178971843a0fcb7f4ec
+          expected=fb2dd27c0609358681f33c6812b17cc62b059c8c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
@@ -459,9 +461,9 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: ${{ needs.prepare.outputs.has_overflow == 'true' && 4 || 8 }}
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix_json) }}
-    steps:
+    steps: &strix_steps
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
@@ -472,7 +474,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 84a8a12aa006f917689db178971843a0fcb7f4ec
+          ref: fb2dd27c0609358681f33c6812b17cc62b059c8c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -492,7 +494,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=84a8a12aa006f917689db178971843a0fcb7f4ec
+          expected=fb2dd27c0609358681f33c6812b17cc62b059c8c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
@@ -702,8 +704,27 @@ jobs:
           path: ${{ runner.temp }}/binding/${{ matrix.slug }}.json
           if-no-files-found: error
 
+
+  strix_overflow:
+    name: Strix overflow ${{ matrix.key }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_overflow == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix_overflow_json) }}
+    steps: *strix_steps
+
   gate:
-    needs: [prepare, strix]
+    needs: [prepare, strix, strix_overflow]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.strix.result == 'success' &&
+          ((needs.prepare.outputs.has_overflow == 'true' && needs.strix_overflow.result == 'success') ||
+           (needs.prepare.outputs.has_overflow == 'false' && needs.strix_overflow.result == 'skipped')) }}
     name: Collect every Strix binding and seal the complete verdict
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -741,7 +762,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 84a8a12aa006f917689db178971843a0fcb7f4ec
+          ref: fb2dd27c0609358681f33c6812b17cc62b059c8c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -761,7 +782,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=84a8a12aa006f917689db178971843a0fcb7f4ec
+          expected=fb2dd27c0609358681f33c6812b17cc62b059c8c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
