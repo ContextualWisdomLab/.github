@@ -898,3 +898,35 @@ def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path,
     with pytest.raises(gate.GateError, match="exceeds bounded size"):
         gate.capture_license_selections(source, sha, capture)
     assert not capture.exists()
+
+
+@pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT"])
+def test_cargo_legacy_pair_keeps_choice_and_text_checks(expression: str) -> None:
+    evidence = _cargo_evidence(license_expression=expression)
+    subject = "cargo/greencrate@0.1.0"
+    selection = {"chosen": "Apache-2.0", "rationale": "Reviewed the bundled Apache text."}
+    failures, decision, source = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert decision.allowed and not failures
+    assert source == "Cargo legacy licence pair"
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, None)
+    assert not decision.allowed
+    assert any(f.code == "LICENSE_SELECTION_REQUIRED" for f in failures)
+    evidence["license_texts"] = {"LICENSE": "Unverified custom restrictions"}
+    failures, _, _ = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+    evidence["license_texts"] = {}
+    failures, _, _ = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert any(f.code == "LICENSE_TEXT_MISSING" for f in failures)
+
+
+@pytest.mark.parametrize("ecosystem,expression", [
+    ("pypi", "MIT/Apache-2.0"), ("cargo", "MIT//Apache-2.0"),
+    ("cargo", "MIT/GPL-3.0-only"), ("cargo", "MIT/Apache-2.0 AND BSD-3-Clause"),
+])
+def test_legacy_pair_does_not_relax_other_expressions(ecosystem: str, expression: str) -> None:
+    evidence = _cargo_evidence(ecosystem=ecosystem, license_expression=expression)
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, f"{ecosystem}/example@1", {"chosen": "MIT", "rationale": "reviewed"}
+    )
+    assert not decision.allowed
+    assert any(f.code == "LICENSE_UNPARSEABLE" for f in failures)

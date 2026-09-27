@@ -305,5 +305,53 @@
     "normalized_sha256": "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf",
     "identifier": "MIT",
     "fixture": "memchr-2.8.3-LICENSE-MIT.txt"
+  },
+  {
+    "package": "matrixmultiply@0.3.11",
+    "ecosystem": "cargo",
+    "artifact_filename": "matrixmultiply-0.3.11.crate",
+    "artifact_sha256": "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7",
+    "artifact_url": "https://static.crates.io/crates/matrixmultiply/matrixmultiply-0.3.11.crate",
+    "member": "matrixmultiply-0.3.11/LICENSE-MIT",
+    "raw_sha256": "792d075c7bad6dac258a44e799eb64cbf465e24d9932d27669be08c5ec957e27",
+    "normalized_sha256": "f7539d10705fa2869dabf2d5ecaf51ed026d337e26865967e8d431a30b71833a",
+    "identifier": "MIT",
+    "fixture": "matrixmultiply-0.3.11-LICENSE-MIT.txt"
+  },
+  {
+    "package": "pollster@1.0.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "pollster-1.0.1.crate",
+    "artifact_sha256": "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336",
+    "artifact_url": "https://static.crates.io/crates/pollster/pollster-1.0.1.crate",
+    "member": "pollster-1.0.1/LICENSE-MIT",
+    "raw_sha256": "cc02a53316678ca2575cc69d12daa7b1833935d4b7742c31fbab7bd74a481077",
+    "normalized_sha256": "31639cdc357735ba41f11654af24649688897149e857718df92dbd4fb746fad4",
+    "identifier": "MIT",
+    "fixture": "pollster-1.0.1-LICENSE-MIT.txt"
+  },
+  {
+    "package": "rawpointer@0.2.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "rawpointer-0.2.1.crate",
+    "artifact_sha256": "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3",
+    "artifact_url": "https://static.crates.io/crates/rawpointer/rawpointer-0.2.1.crate",
+    "member": "rawpointer-0.2.1/LICENSE-MIT",
+    "raw_sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+    "normalized_sha256": "f6b06eca855bbfd854ba2f545c684dade8593e27cc95877587fa21a8932100bb",
+    "identifier": "MIT",
+    "fixture": "rawpointer-0.2.1-LICENSE-MIT.txt"
+  },
+  {
+    "package": "version_check@0.9.5",
+    "ecosystem": "cargo",
+    "artifact_filename": "version_check-0.9.5.crate",
+    "artifact_sha256": "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
+    "artifact_url": "https://static.crates.io/crates/version_check/version_check-0.9.5.crate",
+    "member": "version_check-0.9.5/LICENSE-MIT",
+    "raw_sha256": "b7e650f3fce5c53249d1cdc608b54df156a97edd636cf9d23498d0cfe7aec63e",
+    "normalized_sha256": "8963f9b21e899360aa4add8b67cc1c9d6319a073011db97829381fc267d515a3",
+    "identifier": "MIT",
+    "fixture": "version_check-0.9.5-LICENSE-MIT.txt"
   }
 ]

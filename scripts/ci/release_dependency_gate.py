@@ -979,6 +979,14 @@ def evaluate_dependency_license(
     """Decide one dependency's license from metadata and bundled license text."""
 
     expression, source = declared_license_expression(evidence)
+    # Cargo Book, manifest licence fields and footnote 1:
+    # https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields
+    # Only this reviewed legacy pair is adapted; SPDX parsing remains strict.
+    if evidence.get("ecosystem") == "cargo" and expression in {
+        "MIT/Apache-2.0", "Apache-2.0/MIT"
+    }:
+        expression = "MIT OR Apache-2.0"
+        source = "Cargo legacy licence pair"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
