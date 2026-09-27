@@ -30,17 +30,27 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(STRIX)
 
     def test_opencode_review_uses_explicit_supported_image(self) -> None:
-        """Require every OpenCode Review job to use explicit Ubuntu 24.04."""
-        self.assert_explicit_supported_image(OPENCODE_REVIEW)
+        """Keep metadata-only OpenCode admission on the trusted control pool."""
+        workflow = OPENCODE_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count('"group":"CWL central control"'), 6)
+        self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 6)
+        self.assertNotIn("runs-on: ubuntu-24.04", workflow)
+        self.assertNotIn("actions/checkout", workflow)
+        self.assertEqual(workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main'"), 6)
+        self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 6)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Require every Noema Review job to use explicit Ubuntu 24.04."""
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')"), 5)
         self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 5)
         self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 5)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
+        self.assertEqual(workflow.count('"cwlab-control"'), 4)
+        review = workflow.split("\n  noema-review:\n", 1)[1].split("\n  noema-transport-redispatch:\n", 1)[0]
+        self.assertNotIn("cwlab-control", review)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:
         """Require OpenCode dispatch jobs to use the compatible dedicated group.

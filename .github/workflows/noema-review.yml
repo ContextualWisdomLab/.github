@@ -41,7 +41,7 @@ jobs:
         && github.event.action != 'converted_to_draft'
         && github.event.pull_request.head.repo.full_name == github.repository
       )
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON(github.repository == 'ContextualWisdomLab/.github' && '{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}' || '{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     outputs:
       admitted: ${{ steps.live_head.outputs.admitted }}
@@ -92,7 +92,7 @@ jobs:
     # PR/REPO lookup naturally falls through to "scan everything" for that
     # path, matching strix.yml's identical repository_dispatch behavior.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON(github.repository == 'ContextualWisdomLab/.github' && '{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}' || '{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -148,7 +148,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'closed' || github.event.action == 'converted_to_draft')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON(github.repository == 'ContextualWisdomLab/.github' && '{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}' || '{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     # Bound this job well short of GitHub's 360-minute platform default. Its
     # only step is a single-repository, status-filtered gh api --paginate
     # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
@@ -326,7 +326,7 @@ jobs:
   noema-review:
     name: noema-review
     needs: [admit-current-head, changed-scope]
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     outputs:
       transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible }}
       transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
@@ -856,7 +856,7 @@ jobs:
       && needs.admit-current-head.outputs.admitted == 'true'
       && needs.noema-review.result == 'failure'
       && needs.noema-review.outputs.transport_retry_eligible == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON(github.repository == 'ContextualWisdomLab/.github' && '{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}' || '{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 10
     permissions:
       contents: write
