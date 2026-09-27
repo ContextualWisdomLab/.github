@@ -114,6 +114,11 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: approvals: missing declarations, other files and incomplete scope still HOLD.
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "c8f231e806990fbae26a329908ad335584ee2448af43f743e40353675841e373": frozenset({"Apache-2.0"}),
+    "500e97bb9db8f7ed04ac270750cad498669224f165ed554531894f1cfb963434": frozenset({"MIT"}),
+    "1876d90fad39cffe11fb7db9bce71ac60795643b00c71d8f88661558b4426586": frozenset({"MIT"}),
+    "6bf6d79db7f6f622c369dc3a36429c9bfd0351ddfdcadd046e0bcf575f3d2614": frozenset({"MIT"}),
+    "c25311c4c60e634637fe8148151c9fc62b749205a8c83ad0bd02baeaf71c3209": frozenset({"MIT"}),
     "145806f1918280735937d8be844ea1da8d912251b1a234ce3406e9338e8cf9e0": frozenset({"Apache-2.0"}),
     "1f17794ed0a91f046d197aec731e880a0d318af4832967ff8d86580a16520f6e": frozenset({"MIT"}),
     "59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99": frozenset({"Apache-2.0"}),
