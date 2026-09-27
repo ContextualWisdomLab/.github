@@ -85,3 +85,27 @@ include `ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/hea
 Preserve every existing allowlist entry, repository restriction, and external
 contributor approval. Do not allow a feature-branch ref. Until that grant is
 verified, the source change is not an operational routing repair.
+
+
+## Issue 1565 review admission follow-up
+
+The SDK and naruon consumer Noema jobs still selected hosted Ubuntu after the
+initial runner rollout. Extend the existing repository allowlist to
+`ContextualWisdomLab/cwl-telemetry` and `ContextualWisdomLab/naruon`, only when
+`github.workflow_ref` is exactly the central Noema workflow at `refs/heads/main`.
+Metadata and continuation use the control pool; model review uses MCP remediation.
+PR-authored workflow refs retain hosted execution and existing fork admission,
+credentials, review publication, concurrency and inference-time policy remain.
+
+At 2026-09-27 12:12 UTC, group 3 repository membership was verified after two
+repository-specific PUT requests. Its selected-workflow restrictions remain;
+group 6 already allows repositories subject to its selected-workflow restrictions.
+This is runner admission, not approval or evidence of a completed model review.
+Existing queued runs retain their original workflow revision and may still wait
+until event-driven current-head recovery creates a new run.
+
+The allocation calculation from the initial rollout is reused; no new host
+capacity or independent service-time measurement justifies another solver.
+The routing regression fails against the unchanged baseline. Workflow syntax
+and affected contracts passed: 238 passed, 2 skipped with `GITHUB_ACTIONS=true`;
+`actionlint` and `git diff --check` passed.
