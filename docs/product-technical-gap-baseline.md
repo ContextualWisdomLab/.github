@@ -3456,6 +3456,16 @@ inventory and byte binding, runtime wheel identity, consumer native layout,
 lock drift, scope envelope/row identity, aggregate size, and both CLI entry
 paths. Production release code and workflow admission policy are unchanged.
 
+A same-PR continuation covers the adjacent release gate's real trust
+boundaries: bounded and nonregular archive input, declared Python/Cargo licence
+paths, archive links and member counts, raw-capture/destination symlinks, Cargo
+workspace identity, Strix fanout identity/fixture/runtime-report binding, and
+install-time licence rebinding. `parse_member_listing` and its isolated test
+were removed after repository-wide caller search proved that immutable archive
+bytes—not the unused shell listing—are the member authority. The redundant
+post-read length branch was also removed because both stdlib ZIP and tar readers
+already clamp reads to the entry size checked immediately beforehand.
+
 **Exact-tree evidence / remaining condition.** Distribution focused tests are
 15 passed with 200/200 statements and 84/84 branches; scope focused tests are
 48 passed with 242/242 statements and 120/120 branches. The warnings-as-errors
@@ -3470,3 +3480,13 @@ the predecessor's status. Qualifying independent approval is absent. Do not
 merge, tag, publish, or create an admission manifest until the remaining
 production surfaces reach 100%, all required checks are terminal GREEN on one
 exact head, and an independent current-head approval exists.
+
+The continuation's focused release-dependency suite is 442 passed with
+`release_dependency_gate.py` at 1,126/1,126 statements and 472/472 branches.
+The warnings-as-errors full suite is 3,976 passed and 28 skipped; uncovered
+repository statements fell 289→249 and partial branches 59→26, raising the
+rounded total to 99% but not satisfying the fail-under-100 gate. The remaining
+misses belong to queue health, Noema document review, and the separately owned
+Rust materializer work on `ContextualWisdomLab/.github#2360`; no duplicate Rust
+repair is introduced here. Current exact-head hosted runs and conclusions remain
+PR-body authority after the next ordinary-forward update.

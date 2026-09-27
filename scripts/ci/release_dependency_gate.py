@@ -1259,8 +1259,6 @@ def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
                 handle = archive.open(entry) if ecosystem == "pypi" else archive.extractfile(entry)
                 with handle:
                     data = handle.read(_MAX_METADATA_BYTES + 1)
-                if len(data) > _MAX_METADATA_BYTES:
-                    raise GateError(CAPTURE_INCOMPLETE, "archive text exceeds bounded read")
                 return data
 
             selected = {name for name in files if PurePosixPath(name).name.upper().startswith(
@@ -1309,28 +1307,6 @@ def _optional_text(path: Path) -> str | None:
     if path.is_symlink() or not path.is_file():
         return None
     return path.read_text(encoding="utf-8")
-
-
-def parse_member_listing(text: str) -> list[dict[str, str]]:
-    """Parse the tab-separated ``<type>\t<name>\t<linkname>`` archive listing."""
-
-    members: list[dict[str, str]] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) < 2:
-            raise GateError(
-                CAPTURE_INCOMPLETE, f"archive listing line is malformed: {line!r}"
-            )
-        members.append(
-            {
-                "type": parts[0].strip(),
-                "name": parts[1],
-                "linkname": parts[2] if len(parts) > 2 else "",
-            }
-        )
-    return members
 
 
 def build_evidence(raw_dir: Path, *, archive_bytes: bytes | None = None) -> tuple[Dependency, dict[str, Any]]:

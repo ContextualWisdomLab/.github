@@ -1,3 +1,7 @@
+### Release dependency gate trust boundaries reach executable 100% coverage
+
+- `release_dependency_gate.py` now has behavior-level coverage for bounded archive reads, unsafe or absent declared licence files, symlink/special members, archive-member limits, raw-capture and destination symlinks, Cargo workspace identity, Strix fanout identity/fixture/runtime-report validation, and install-time licence rebinding. The no-caller `parse_member_listing` helper and its isolated test were removed; immutable archive bytes remain the sole member authority. Focused evidence is 442 passed with 1,126/1,126 statements and 472/472 branches; the warnings-as-errors repository suite is 3,976 passed and 28 skipped. Repository-wide coverage rises from 98% to 99%, so the overall 100% release gate remains RED and the PR stays Draft.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
