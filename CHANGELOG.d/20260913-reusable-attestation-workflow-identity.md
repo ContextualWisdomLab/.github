@@ -1,0 +1,3 @@
+- Exact-artifact SBOM attestation의 trusted verifier checkout이 caller의 `github.workflow_sha`를 재사용하지 않고, GitHub Actions OIDC의 `job_workflow_ref`와 `job_workflow_sha`가 동일한 중앙 reusable workflow의 full commit SHA를 가리킬 때만 진행하도록 변경했습니다.
+- read-only intake job에도 called-workflow identity 확인에 한정한 `id-token: write`를 부여하되 attestation/artifact-metadata 쓰기 권한은 추가하지 않았습니다.
+- mutable ref, 잘못된 issuer/audience, self-hosted signer, workflow path 불일치, `job_workflow_ref`/`job_workflow_sha` 불일치는 모두 trusted checkout 전에 fail closed 합니다.
