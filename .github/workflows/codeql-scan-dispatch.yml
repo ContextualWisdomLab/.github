@@ -587,12 +587,38 @@ jobs:
         id: gate
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
+      - name: Detect optional Noema analysis-read credential
+        id: noema_analysis_config
+        if: steps.gate.outcome == 'success'
+        env:
+          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          NOEMA_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NOEMA_APP_CLIENT_ID" ] && [ -n "$NOEMA_APP_PRIVATE_KEY" ]; then
+            printf 'repository=%s\n' "${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint target-scoped Noema analysis-read token
+        id: noema_analysis_token
+        if: steps.gate.outcome == 'success' && steps.noema_analysis_config.outputs.available == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_analysis_config.outputs.repository }}
+          permission-security-events: read
+
       - name: Select target CodeQL analysis-read credential
         id: ghas_analysis_token
         if: steps.gate.outcome == 'success'
         env:
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           TARGET_APP_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          NOEMA_ANALYSIS_TOKEN: ${{ steps.noema_analysis_token.outputs.token || '' }}
           PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           WORKFLOW_TOKEN: ${{ github.token }}
@@ -625,7 +651,8 @@ jobs:
           if probe_analysis_read "target-app-token" "$TARGET_APP_TOKEN" ||
             probe_analysis_read "pr-review-merge-token" "$PR_REVIEW_MERGE_TOKEN" ||
             probe_analysis_read "opencode-approve-token" "$OPENCODE_APPROVE_TOKEN" ||
-            probe_analysis_read "github-token" "$WORKFLOW_TOKEN"; then
+            probe_analysis_read "github-token" "$WORKFLOW_TOKEN" ||
+            probe_analysis_read "noema-analysis-token" "$NOEMA_ANALYSIS_TOKEN"; then
             exit 0
           fi
 
