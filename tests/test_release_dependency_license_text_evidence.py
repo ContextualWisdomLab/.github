@@ -76,7 +76,7 @@ def test_a_recognized_text_that_contradicts_the_declaration_is_refused(
         tmp_path,
         license_expression="MIT",
         license_texts={"LICENSE": REVIEWED_TEXTS["atheris-3.1.0.txt"]},
-    ) == [gate.LICENSE_TEXT_DISAGREEMENT]
+    ) == [gate.LICENSE_TEXT_DISAGREEMENT, policy.LICENSE_TEXT_MISSING]
 
 
 def test_a_denied_title_still_fails_as_a_disagreement(tmp_path: Path) -> None:
@@ -137,7 +137,7 @@ def test_a_dual_licence_selection_is_checked_against_every_declared_identifier(
             }
         ],
     )
-    assert _codes(capture) == [gate.LICENSE_TEXT_DISAGREEMENT]
+    assert _codes(capture) == [gate.LICENSE_TEXT_DISAGREEMENT, policy.LICENSE_TEXT_MISSING]
 
 
 @pytest.mark.parametrize("expression,body", [

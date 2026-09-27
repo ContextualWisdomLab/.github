@@ -18,6 +18,7 @@
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
 | CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
+| CONTROL-PINGORA-DECLARED-BINARY-RUNTIME-01 | **Source repaired on `.github#2386@dea7532e`; protected integration pending** | A base-owned artifact-prefix declaration admitted a no-patch file after any non-UTF-8 byte, even when readable bytes contained `nginx -c /etc/nginx/nginx.conf`. The production-bound regression covers `.sh`, `.dat`, and `.txt`; the focused suite is the exact-head acceptance target. | `.github` owns `scripts/ci/pingora_edge_policy.py`. Replacement-decoded content must contain no `CONTENT_RULES` match before an unrecognized binary suffix is admitted. Current-head hosted security Checks, qualifying independent approval, ordinary protected merge, and downstream `late-life-anxiety-reanalysis#269` revalidation remain required. |
 
 ### 2026-09-27 CodeQL compatibility retirement delta
 
@@ -3619,6 +3620,15 @@ statements and 7,098 branches covered. Status stays Proposed/Draft and release
 admission remains HOLD pending terminal GREEN hosted Checks, downstream
 verdict-shape acceptance, and qualifying independent approval.
 
+## 2026-09-27 Strix AnyIO security-lock carryover
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2386`; fresh exact-head hosted Checks and qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` security/review bounded context owns the hash-locked Strix CI runtime. PyPI packages and the vulnerability advisory service are upstream evidence; product repositories consume only the released central workflow contract.
+
+**Gap / RCA.** Exact-head Python Security run [36236245577](https://github.com/ContextualWisdomLab/.github/actions/runs/36236245577), job `108402877544`, found AnyIO `4.14.0` vulnerable to `CVE-2026-63374`, `CVE-2026-64847`, and `CVE-2026-63349`; all three list `4.14.2` as fixed. The generated lock had no explicit AnyIO source constraint, so unrelated PR #2386 inherited a known-vulnerable transitive selection.
+
+**RED → GREEN / carryover.** RED `761be5b0f63422505b37e28a367a4c5170f302ba` imports #2385's source↔lock contract and fails `1 failed, 1 passed` because the source input lacks `anyio==4.14.2`. GREEN `c59ef9aed32ab4c5138c2b7770ddcc10d7ee8393` adds that exact source constraint; `a895dc5aec775076c3819679eadf0b50a563aa2e` adopts #2385's generated lock blob `eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac`, whose only predecessor differences are version line 143 and hash lines 144–145. Exact remote blobs pass the focused contract `2 passed`. This is complete three-file delta integration, not a claim that #2385 or #2386 is accepted. Completion still requires fresh exact-head pip-audit/other required Checks, no unresolved actionable review, qualifying independent approval, and ordinary protected-main integration.
 ## 2026-09-27 Git blob protocol-hash SAST authority
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2396`; fresh exact-head hosted Checks and qualifying independent approval remain mandatory.
@@ -3628,3 +3638,13 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / RCA.** Exact-head SAST run [36243375994](https://github.com/ContextualWisdomLab/.github/actions/runs/36243375994), job `108407968534`, reported `python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1` at `scripts/ci/pingora_edge_policy.py:602`. The call recomputes Git's protocol-defined `blob <length>\\0<bytes>` object ID with `usedforsecurity=False`; it is equality evidence for the exact GitHub blob, not a cryptographic signature. Replacing it with SHA-256 would contradict the upstream 40-hex blob identifier and remove tamper detection.
 
 **Action / evidence.** RED is the exact hosted failure above. Commit `53f447f73f0ef33eb708bf44202ec4d5954ade66`, formatted by `d00cdff974f5ac665a5f7481620d550735bd26c8`, adds one rule-scoped `nosemgrep` annotation plus the protocol rationale without changing the hash input, comparison, download bound, or failure behavior. Existing executable cases still require exact byte count and reject altered bytes by Git blob-ID mismatch. Completion requires fresh exact-head SAST GREEN, the remaining protected checks, no unresolved actionable review thread, qualifying independent approval, and ordinary merge.
+
+## 2026-09-27 CodeQL terminal-proof fallback run identity
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2405`; direct repair parent `5a77a8c711bc93330c24a4821dff7439f600a264`, tree `5ce8ba7448cb878a5b130ed1acaba1578e4940fd`. This documentation-only successor preserves that executable tree; the PR body is the authority for the current exact head and hosted-run IDs. Merge and required-workflow admission remain HOLD.
+
+**Context Map / owner.** The central `.github` CodeQL required-workflow and dispatch bounded context owns dispatch identity, terminal evidence, and exact job recovery. Product repositories consume the protected workflow contract; they do not copy the producer or manufacture success receipts.
+
+**Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
+
+**Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
