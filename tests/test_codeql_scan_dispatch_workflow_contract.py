@@ -36,7 +36,6 @@ RUN_BLOCK_STEP_NAMES = (
     "Exchange OpenCode app token for target repository content reads",
     "Re-validate live pull request metadata before privileged scan",
     "Fetch the pinned CodeQL SARIF gate and GHAS identity scripts",
-    "Materialize pull request head for CodeQL scan",
     "Verify GHAS base/head CodeQL configuration identity",
     "Publish CodeQL dispatch status",
     "Exchange OpenCode app token for run settlement",
@@ -1683,3 +1682,15 @@ def test_codeql_scan_dispatch_bridge_has_explicit_removal_condition() -> None:
 
     assert "LEGACY_V1_REMOVAL_CONDITION" in workflow
     assert "protected v2 producer" in workflow
+
+
+def test_codeql_materialization_cleans_reused_runner_workspace():
+    """Use the pinned native checkout at the validated head without retained credentials."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    step = workflow.split("      - name: Materialize pull request head for CodeQL scan\n", 1)[1].split("      - name:", 1)[0]
+    assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" in step
+    assert "repository: ${{ needs.validate-dispatch.outputs.target_repository }}" in step
+    assert "ref: ${{ needs.validate-dispatch.outputs.head_sha }}" in step
+    assert "persist-credentials: false" in step
+    assert "clean: true" in step
+    assert "git remote add origin" not in step
