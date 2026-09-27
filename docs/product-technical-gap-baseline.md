@@ -3490,3 +3490,22 @@ misses belong to queue health, Noema document review, and the separately owned
 Rust materializer work on `ContextualWisdomLab/.github#2360`; no duplicate Rust
 repair is introduced here. Current exact-head hosted runs and conclusions remain
 PR-body authority after the next ordinary-forward update.
+
+The queue-health continuation removes a responsibility contradiction rather
+than preserving it with tests: `actions_queue_health_core.py` still contained
+a second collector and CLI even though the Context Map assigns collection,
+identity reconciliation, and process exit to `actions_queue_health.py`. The
+duplicate was unreachable after the executable imported the core and replaced
+those names. A source-shape RED contract now prevents either entrypoint from
+returning to the core; the executable owns its `time.sleep` retry dependency
+directly. Boundary cases cover both pre-evidence identity retry outcomes,
+malformed active and terminal run IDs, irrelevant terminal conclusions,
+obsolete target cancellations, and remediation-action deduplication. The
+focused queue-health suite is 80 passed; both queue-health production modules
+are 100% statement and branch covered. No workflow permission, API scope,
+queue-age threshold, cancellation behavior, or merge policy changes. The
+full exact-tree suite is 3,982 passed, 28 skipped, and 40 subtests passed;
+uncovered statements fell from 249 to 163 and partial branches from 26 to 19.
+The only remaining uncovered production owners are the Noema document reader
+successor and Rust materializer `ContextualWisdomLab/.github#2360`. Hosted-run
+identity and conclusions remain PR-body authority.
