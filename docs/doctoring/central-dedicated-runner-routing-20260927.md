@@ -75,8 +75,8 @@ point-in-time observations, not a measured capacity forecast.
 
 Noema's admission, changed-scope, closed-run cleanup, and post-failure
 re-dispatch jobs now select `self-hosted`, `Linux`, `X64`, `cwlab-control`
-only in the central repository. Consumer repositories retain Ubuntu 24.04.
-The Noema model-review job retains Ubuntu 24.04: this change allocates short
+only in the central repository. The concurrent #2421 allocation for contextual-orchestrator consumers is preserved; other consumer repositories retain Ubuntu 24.04.
+The concurrent #2421 model-review allocation to the MCP remediation pool is preserved; this change allocates short
 control work and does not assert compatibility of a model sandbox with the
 one-core/four-GiB control guest.
 
