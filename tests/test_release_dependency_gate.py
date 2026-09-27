@@ -1175,3 +1175,46 @@ def test_raw_collector_keeps_both_independently_locked_cargo_workspaces(tmp_path
                    capture_output=True, text=True, check=True)
     assert (capture / "cargo/Cargo.lock").read_bytes() == (wheel / "Cargo.lock").read_bytes()
     assert (capture / "cargo-dev/Cargo.lock").read_bytes() == (source / "Cargo.lock").read_bytes()
+
+
+@pytest.mark.parametrize("ecosystem", ["cargo", "pypi"])
+@pytest.mark.parametrize("filename", ["AUTHORS", "AUTHORS.md", "COPYRIGHT"])
+def test_attribution_licence_text_is_captured_and_denied(ecosystem, filename):
+    text = "GNU LESSER GENERAL PUBLIC LICENSE\nAdditional attribution.\n"
+    raw = _fixture_archive({"LICENSE": REVIEWED_TEXTS["pytest-9.1.1.txt"],
+                            filename: text, "AUTHORS.txt": "Alice\nBob\n"}, ecosystem)
+    capture = gate.archive_license_evidence(raw, ecosystem)
+    assert capture["license_member_sha256"][filename] == hashlib.sha256(text.encode()).hexdigest()
+    assert capture["license_texts"][filename] == text
+    assert "AUTHORS.txt" not in capture["license_texts"]
+    failures, _, _ = gate.evaluate_dependency_license(
+        _python_evidence(**capture), "pypi/greenlib@1.0.0", None)
+    assert gate.LICENSE_TEXT_DISAGREEMENT in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize("version, digest", [
+    ("5.3.0", "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"),
+    ("6.0.0", "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"),
+])
+def test_actual_r_efi_authors_is_hash_bound_and_denied(version, digest):
+    raw = (Path(__file__).parent / "fixtures/release_license_texts" / f"r-efi-{version}.crate").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == digest
+    evidence = gate.archive_license_evidence(raw, "cargo")
+    member = f"r-efi-{version}/AUTHORS"
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        original = archive.extractfile(member).read()
+    assert evidence["license_texts"][member].encode() == original
+    assert evidence["license_member_sha256"][member] == hashlib.sha256(original).hexdigest()
+    evidence.update(ecosystem="cargo", license="MIT OR Apache-2.0 OR LGPL-2.1-or-later")
+    failures, _, _ = gate.evaluate_dependency_license(
+        evidence, f"cargo/r-efi@{version}", {"chosen": "MIT", "rationale": "Negative test: MIT cannot hide bundled GNU terms."})
+    assert gate.LICENSE_TEXT_DISAGREEMENT in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize("limit", ["_MAX_METADATA_BYTES", "_MAX_JSON_BYTES"])
+def test_attribution_candidate_reads_remain_bounded(monkeypatch, limit):
+    monkeypatch.setattr(gate, limit, 8)
+    raw = _fixture_archive({"AUTHORS": "Alice and Bob\n"}, "cargo")
+    with pytest.raises(gate.GateError) as error:
+        gate.archive_license_evidence(raw, "cargo")
+    assert error.value.code == gate.CAPTURE_INCOMPLETE

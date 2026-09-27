@@ -1487,6 +1487,17 @@ def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
 
             selected = {name for name in files if PurePosixPath(name).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE"))}
+            # AUTHORS can contain grants (r-efi), not just contributor names.
+            inspected = 0
+            for name in files:
+                if PurePosixPath(name).name.upper().split(".", 1)[0] not in {"AUTHORS", "COPYRIGHT"}:
+                    continue
+                data = read_member(name)
+                inspected += len(data)
+                if inspected > _MAX_JSON_BYTES:
+                    raise GateError(CAPTURE_INCOMPLETE, "attribution text set exceeds bounded read")
+                if re.search(rb"\b(?:licen[cs]e|copyright|permission|redistribution)\b", data, re.IGNORECASE):
+                    selected.add(name)
             if ecosystem == "pypi":
                 metadata_paths = [name for name in files if name.endswith(".dist-info/METADATA")]
                 for metadata_path in metadata_paths:
