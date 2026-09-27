@@ -21,7 +21,8 @@ was originally allowed so a wake-only API failure could not invalidate an
 otherwise complete scan, but the contract did not distinguish that harmless
 late failure from GHAS identity or SARIF-preservation failure.
 
-A clean result now requires the same three proof units in both paths:
+A clean result recovered from a producer job whose overall conclusion is
+failure now requires the same three proof units in both paths:
 
 1. `Enforce CodeQL Medium+ SARIF gate` succeeds;
 2. `Verify GHAS base/head CodeQL configuration identity` succeeds; and
@@ -29,9 +30,11 @@ A clean result now requires the same three proof units in both paths:
 
 A later failure confined to waking the exact required job remains outside the
 scan verdict and may still be reconciled. A Medium+ gate failure remains a
-terminal security failure and does not require a successful GHAS identity step.
-Missing, duplicate, skipped, cancelled, or failed clean-path proof stays
-fail-closed.
+terminal security failure and does not require a successful GHAS identity
+step. A producer job whose overall conclusion is success remains authenticated
+terminal proof because GitHub completed its non-optional steps successfully.
+Missing, duplicate, skipped, cancelled, or failed proof on the failed-job clean
+fallback stays fail-closed.
 
 ## Verification and ownership
 
