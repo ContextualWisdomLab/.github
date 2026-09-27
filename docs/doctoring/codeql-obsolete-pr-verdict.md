@@ -59,3 +59,17 @@ https://github.com/advisories/GHSA-82r6-8w77-94w6
 
 Python Package Index. (2026). *AnyIO 4.14.2*.
 https://pypi.org/project/anyio/4.14.2/
+
+## Dedicated control admission
+
+The five-runner allocation already documented in
+[central dedicated routing](central-dedicated-runner-routing-20260927.md) separates
+heavy CodeQL scans, long OpenCode reviews, and small control work. Compatibility
+language detection, verdict reads, and dispatch coordination use the control
+lane when `github.workflow_ref` identifies this exact trusted main workflow.
+PR-authored revisions retain hosted execution. The existing control group adds
+only this main workflow path to its allowlist; no PR ref or repository access
+is broadened. Heavy scans continue using the dedicated CodeQL group.
+
+GitHub. (n.d.). *Using self-hosted runners in a workflow: Using labels and groups*.
+https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow
