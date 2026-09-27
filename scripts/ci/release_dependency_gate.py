@@ -2255,7 +2255,8 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
         except GateError as error:
             report.failures.append(Failure(error.code, subject, error.detail))
             continue
-        license_evidence = {**evidence, "license_texts": {**evidence["license_texts"], **source_texts}}
+        license_evidence = {**evidence, "license_texts": {
+            **_require_mapping(evidence, "license_texts", subject), **source_texts}}
         license_failures, decision, license_source = evaluate_dependency_license(
             license_evidence, subject, selections.get(subject)
         )
@@ -2807,13 +2808,11 @@ def install_is_authorized(report: Path) -> None:
     if payload.get("stage") != LICENSE_STAGE:
         raise GateError(
             LICENSE_MISSING,
-        LICENSE_SELECTION_INVALID,
             f"prescreen report records stage {payload.get('stage')!r}, not {LICENSE_STAGE!r}",
         )
     if payload.get("result") != "PASS":
         raise GateError(
             LICENSE_MISSING,
-        LICENSE_SELECTION_INVALID,
             f"prescreen report records result {payload.get('result')!r}, not 'PASS'",
         )
 
