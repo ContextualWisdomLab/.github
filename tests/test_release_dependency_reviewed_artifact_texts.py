@@ -182,3 +182,46 @@ def test_regex_unicode_grant_remains_an_independent_obligation(mutation):
         evidence["ecosystem"] = "pypi"
     failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, choice)
     assert (decision.allowed and not failures) == (mutation in {None, "apache-choice"})
+
+
+@pytest.mark.parametrize("mutation", [None, "mit-only", "no-choice", "missing-package", "missing-sun",
+                                      "missing-bsd", "missing-mit-source", "changed-source", "changed-package",
+                                      "checksum", "subject", "pypi", "extra-denied"])
+def test_libm_complete_source_members_preserve_independent_notices(mutation):
+    raw = (ROOT / "libm-0.2.16.crate").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+    evidence = gate.archive_license_evidence(raw, "cargo")
+    evidence.update(ecosystem="cargo", license="MIT")
+    files = evidence["license_texts"]
+    assert len(files) == 70
+    subject = "cargo/libm@0.2.16"
+    choice = {"chosen": "MIT AND BSD-2-Clause AND SunPro",
+              "rationale": "Retain complete package and original file-specific notices."}
+    if mutation == "mit-only":
+        choice["chosen"] = "MIT"
+    elif mutation == "no-choice":
+        choice = None
+    elif mutation == "missing-package":
+        del files["libm-0.2.16/LICENSE.txt"]
+    elif mutation == "missing-sun":
+        del files["libm-0.2.16/src/math/acos.rs"]
+    elif mutation == "missing-bsd":
+        del files["libm-0.2.16/src/math/exp2.rs"]
+    elif mutation == "missing-mit-source":
+        del files["libm-0.2.16/src/math/cbrt.rs"]
+    elif mutation == "changed-source":
+        files["libm-0.2.16/src/math/exp2f.rs"] += "// Commercial use prohibited."
+    elif mutation == "changed-package":
+        files["libm-0.2.16/LICENSE.txt"] += "Commercial use prohibited."
+    elif mutation == "checksum":
+        evidence["source_sha256"] = "0" * 64
+    elif mutation == "subject":
+        subject = "cargo/libm@0.2.17"
+    elif mutation == "pypi":
+        evidence["ecosystem"] = "pypi"
+    elif mutation == "extra-denied":
+        files["EXTRA-LICENSE"] = "GNU GENERAL PUBLIC LICENSE Version 3"
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, choice)
+    assert (decision.allowed and not failures) == (mutation is None)
+    if mutation is None:
+        assert decision.selected == "MIT AND BSD-2-Clause AND SunPro"

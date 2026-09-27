@@ -85,6 +85,7 @@ ALLOWED_LICENSE_IDENTIFIERS: frozenset[str] = frozenset(
         "PostgreSQL",
         "Python-2.0",
         "Python-2.0.1",
+        "SunPro",
         "Unicode-3.0",
         "Unicode-DFS-2016",
         "Unlicense",

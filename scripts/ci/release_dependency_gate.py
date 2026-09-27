@@ -975,6 +975,86 @@ def _declared_identifiers(expression: str) -> frozenset[str]:
     return frozenset(token for token in tokens if token.upper() not in reserved)
 
 
+# Complete members from checksum-bound libm 0.2.16 (upstream dfd2203a).
+# LICENSE.txt explicitly delegates retained third-party notices to src files.
+# Full Sun/BSD notices were read and compared with SPDX SunPro/BSD-2-Clause;
+# MIT SPDX source headers use the complete package MIT grant. No comment parser
+# or source snippet classifies unknown files. The original crate is the fixture.
+_LIBM_ARCHIVE_SHA256 = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+_LIBM_LICENSE_MEMBERS = {
+    'libm-0.2.16/LICENSE.txt': ('3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7', 'MIT'),
+    'libm-0.2.16/src/math/acos.rs': ('efd83a6138061209867f06421c6a756b8ca3aab5c6c0a85c4aba31bedb299da5', 'SunPro'),
+    'libm-0.2.16/src/math/acosf.rs': ('c5c9c74d267725bbe5f9319e6f4a396af6ce46c890b601d3f963a5d74d12e4c3', 'SunPro'),
+    'libm-0.2.16/src/math/asin.rs': ('9693a7cb61674ec6fe22be9db8fe20276729c48b1562fd86d5421e372a0a12e4', 'SunPro'),
+    'libm-0.2.16/src/math/asinf.rs': ('25f6b7bbf46fc5aac4ebdd9e00118239747dcd28a79b90b858ddc4633d773d65', 'SunPro'),
+    'libm-0.2.16/src/math/atan.rs': ('54181dbddf4f77b90b32b9f6819ac989da570dc02b791f3685d20a23d51324be', 'SunPro'),
+    'libm-0.2.16/src/math/atan2.rs': ('7d028d4d397f7484b8feed7b228eda65b84acac94d27729d236d5df95e38d8f0', 'SunPro'),
+    'libm-0.2.16/src/math/atan2f.rs': ('b9497b5adb75e2788c404fd121aa64dcfa0e9357b67af3b3e7e6d4624dae1ca1', 'SunPro'),
+    'libm-0.2.16/src/math/atanf.rs': ('197762f16ed5951236e17d0869c529e857acc329cc287df019ff69e5401f3b4d', 'SunPro'),
+    'libm-0.2.16/src/math/cbrt.rs': ('1ed98a0943c46ca48e32af54b6baeb80b6e8da5dda550005711fcb26bfcf12c2', 'MIT'),
+    'libm-0.2.16/src/math/cbrtf.rs': ('7a2b4f190e8618c52cb23b47c040a4b4eacca739c68393cf14fb3f5d73988127', 'SunPro'),
+    'libm-0.2.16/src/math/cos.rs': ('6e81752899c471bd42d04bdf08e0b22bc10a29f92fa2a343281b995fd342f035', 'SunPro'),
+    'libm-0.2.16/src/math/cosf.rs': ('f48aa954f199fe4f54fd73b4e7886a75f2c08afba7fc31c6a36db5b5f90ced69', 'SunPro'),
+    'libm-0.2.16/src/math/erf.rs': ('5a69f440d5ca88a5c4a45119837c45b14238836a036675230e10fec41d293a3b', 'SunPro'),
+    'libm-0.2.16/src/math/erff.rs': ('62c30876390e532d7dc9ac1f1f1c1f654065fba2b2e534e531964d79e1766196', 'SunPro'),
+    'libm-0.2.16/src/math/exp.rs': ('1d486e847e1752fb9ce74a714096a11adcac935dacd4f17625ff63819103a80d', 'SunPro'),
+    'libm-0.2.16/src/math/exp2.rs': ('e7270f15a682b69a49e042c80503c206d37c6c895f2c63da59a5e2431fa5fedc', 'BSD-2-Clause'),
+    'libm-0.2.16/src/math/exp2f.rs': ('3b4b5cb2e5674e1ce66a6051710738c1a6edc1d1638686fe9c78f0af4792a634', 'BSD-2-Clause'),
+    'libm-0.2.16/src/math/expf.rs': ('33b01180ebd01bb2911379476c5411fd05b066f2e17ef66e48c4dde83a7f01c0', 'SunPro'),
+    'libm-0.2.16/src/math/expm1.rs': ('6cc612ca7cf1384dc15f541b301a1f176efbc79536aff1293408b3121cc30ad3', 'SunPro'),
+    'libm-0.2.16/src/math/expm1f.rs': ('2b517f1bcb6279c906aad737f08c83ac30d7871e3beff266ea50a01fa18ccc81', 'SunPro'),
+    'libm-0.2.16/src/math/fma.rs': ('16e72470f5c4407c44183cf06f5868f216c92e0532f3fb387b57dbccf815e2a7', 'MIT'),
+    'libm-0.2.16/src/math/generic/ceil.rs': ('66b3def2b00ed9dd6a4f59c73765a050853dfe06c828fdf731987ac99e7c2a88', 'MIT'),
+    'libm-0.2.16/src/math/generic/floor.rs': ('7d4f15369abefa27645d6deda51d30febbe60ee9dca76e72a9364d574d0711c0', 'MIT'),
+    'libm-0.2.16/src/math/generic/fma.rs': ('ba44930a56d7c1953ab0c96c7c767911c9dc6967083700c8ef02f43672c8482f', 'MIT'),
+    'libm-0.2.16/src/math/generic/fmax.rs': ('68d923950c3f1eab68baeab24679ab50918b663904839bc349ef666d9467518f', 'MIT'),
+    'libm-0.2.16/src/math/generic/fmaximum.rs': ('c4b8b7080821a2dc65d0a50baf717ccd9ee20b813ce6d6d3f9f01b5700b674fa', 'MIT'),
+    'libm-0.2.16/src/math/generic/fmaximum_num.rs': ('2f2d41e1f0160eb73469fa63db27d881b5b8eabc6d62fae7ca1b4b03eb35c5d5', 'MIT'),
+    'libm-0.2.16/src/math/generic/fmin.rs': ('9bbdece9606e5eac57f3a91a5db7aab814c8e2b28b6df1813723c6b5715efc55', 'MIT'),
+    'libm-0.2.16/src/math/generic/fminimum.rs': ('a6a33085356610eced23957ca86456b7dbe95e0f9d916298d59ce8bd90076b02', 'MIT'),
+    'libm-0.2.16/src/math/generic/fminimum_num.rs': ('f5db65654e690adea16da83839d62a707cc814c998fd4a77e63caaaea1472256', 'MIT'),
+    'libm-0.2.16/src/math/generic/fmod.rs': ('11aae62d08d656d815184eafd78a3b2d5764b6ce308b89e3819cd049bc491fe7', 'MIT'),
+    'libm-0.2.16/src/math/generic/rint.rs': ('deec183fd0da6c0a47ab272a256990cea4f9231db7faff314697886457d6841a', 'MIT'),
+    'libm-0.2.16/src/math/generic/sqrt.rs': ('c58e48ec07404d618109ad45332efe46c5246f42a2ddefdf5b25ba19e4ca9a0f', 'MIT'),
+    'libm-0.2.16/src/math/generic/trunc.rs': ('46dd2cc35f6da25099ea2202264d8da3330b5ff1a962a8afb671b54b6ef6002d', 'MIT'),
+    'libm-0.2.16/src/math/j0.rs': ('1cb991f0151a626744ad1832d4aedfaca681bcfcecc797de5ac5e9baf2342006', 'SunPro'),
+    'libm-0.2.16/src/math/j0f.rs': ('de97374b6a0019fd8b3d1f553be1708018546491d3b4a5fc650ee2dcdfc9620e', 'SunPro'),
+    'libm-0.2.16/src/math/j1.rs': ('e0a10746fd11a458d55ee61e758d9f016ff0f2203a07eb9907b5aca709a40469', 'SunPro'),
+    'libm-0.2.16/src/math/j1f.rs': ('27b586c94d510aa653923b6b83cfec174e1f5da326d9120b0a0135b1190e32dc', 'SunPro'),
+    'libm-0.2.16/src/math/jn.rs': ('ba36d25d4bbada83aadb3b2986879b7d88b91adb7b502061d21bf96ff3942194', 'SunPro'),
+    'libm-0.2.16/src/math/jnf.rs': ('b3861e19644ae669fe17db81d91aeaee9c9f9051b59957ab674017684c98fe32', 'SunPro'),
+    'libm-0.2.16/src/math/k_cos.rs': ('d4867527877c846aa8e2a0b43cf06f03e2d94c321a548acaf8d5171c09ff4057', 'SunPro'),
+    'libm-0.2.16/src/math/k_cosf.rs': ('8f76089d014e217b96c9eca520271e64d467dc0d6542bf313dd70eb96c040f7f', 'SunPro'),
+    'libm-0.2.16/src/math/k_sin.rs': ('dfe6524cb2d530ec51eb1a2ab233aeb65b3f12177c1fb2f50f044ea41170f5d8', 'SunPro'),
+    'libm-0.2.16/src/math/k_sinf.rs': ('cf0e8bbe8d73a6704b7f1f710f5b9d31f190f1c633e894d4f69c4e3bc359eba3', 'SunPro'),
+    'libm-0.2.16/src/math/k_tan.rs': ('dc3f8ece9187bbd65792a7d1068e676092e9c2a0886f28c80579f9bd94d744b7', 'SunPro'),
+    'libm-0.2.16/src/math/k_tanf.rs': ('3381d2d4865bfc98e87aadb96bd8986f7691a389569a58fb1cb8db74fb5d9c20', 'SunPro'),
+    'libm-0.2.16/src/math/lgamma_r.rs': ('5d56169c077b5b9f88902e2d243a7a4b4d06b89295aa84283d6fa15d9c244032', 'SunPro'),
+    'libm-0.2.16/src/math/lgammaf_r.rs': ('0bc2b5e0eec7666973adaca536f4d5fe978c8793bb340484fff9e5e7abb425f0', 'SunPro'),
+    'libm-0.2.16/src/math/log.rs': ('df5f4d1325e89621bfcd9cf7788d0d7e20a6ef7f429110fe35b370b3c9362615', 'SunPro'),
+    'libm-0.2.16/src/math/log10.rs': ('4a96dd2b6a2a505497f2bb7ea956a50491d068dab1b6055a573aec1724a52e40', 'SunPro'),
+    'libm-0.2.16/src/math/log10f.rs': ('784a576dd4a4071f4f67c670eb9b221cb03014818c4b2d71afbcbd2211431caf', 'SunPro'),
+    'libm-0.2.16/src/math/log1p.rs': ('bb8ce741e54d8f001d9c12450a14a663bd413014da2ade9ba1f5fbc9ff0c9a88', 'SunPro'),
+    'libm-0.2.16/src/math/log1pf.rs': ('8736222a9b9004b061f1339bb819c63c6b54414d4a01ef79d5f5a5f0a70677b5', 'SunPro'),
+    'libm-0.2.16/src/math/log2.rs': ('1ec0cdd94bf4435ff0402d209089b1bdbcb1ba9a4cd5f77807f9c84cf534f980', 'SunPro'),
+    'libm-0.2.16/src/math/log2f.rs': ('7b3b17ba08df6b5a57dacf6f945bfe1a3c088bee0eb11e201ac5affc7f65925a', 'SunPro'),
+    'libm-0.2.16/src/math/logf.rs': ('c7dfa5e89fcca0411624fdc594f64c62d5dfa3b91f061fcb7ac3aea18414f238', 'SunPro'),
+    'libm-0.2.16/src/math/pow.rs': ('c5566d0f48682d107e8803b0ed204ff3521503348f18a4f26cbe3f47fef15192', 'SunPro'),
+    'libm-0.2.16/src/math/powf.rs': ('819971cb8e927d80113aded3cfe90dcd501c031e0eb1c562b58842fddd1751be', 'SunPro'),
+    'libm-0.2.16/src/math/rem_pio2.rs': ('5a040ab09dc356bca6d57712327151ed43003e2bac156553e3eb87d1cdefd2d1', 'SunPro'),
+    'libm-0.2.16/src/math/rem_pio2_large.rs': ('986b5b9ad2c8fba828aee47bf198eab97fab243359ab03eb09783d98ca5847b5', 'SunPro'),
+    'libm-0.2.16/src/math/rem_pio2f.rs': ('fb34bab63f8d143dfefa4ef2e31e8166bf21f3c67f1519bfc3ca4fb8eb28cafe', 'SunPro'),
+    'libm-0.2.16/src/math/sin.rs': ('b48cebd120fc2ac93a6563059cabda28a72c8680304eb8335b92b412235cc232', 'SunPro'),
+    'libm-0.2.16/src/math/sincos.rs': ('a9c414e828c2e78b6bce4d5e4237b1baa93e81d78421aed5cedeab43df64067f', 'SunPro'),
+    'libm-0.2.16/src/math/sincosf.rs': ('c39b6e3b52be83ccf4015ff105dab55e693577ebfc43745881750e73eebc6fa6', 'SunPro'),
+    'libm-0.2.16/src/math/sinf.rs': ('b17db34d5da39a0f336d831abcb700fab69402c915321823870f1845e66c03d2', 'SunPro'),
+    'libm-0.2.16/src/math/support/int_traits/narrowing_div.rs': ('5f5378e33f1da56090d0dce2514926ab465dce65b89ad4ee2f7da07a92f8d5de', 'MIT'),
+    'libm-0.2.16/src/math/support/modular.rs': ('cf6a562d6bdf16336f31d41c59e828ad47f85388849d20d6d3b59fc1c3e388a2', 'MIT'),
+    'libm-0.2.16/src/math/tan.rs': ('2ea87ca18526753db6d149635ed6c895c8fbafd1e0fa7a9c04f7dc44b4eae986', 'SunPro'),
+    'libm-0.2.16/src/math/tanf.rs': ('f7140c4193a57709acde5d290c8f83435562da42924c54cab0aa3a4f26095190', 'SunPro'),
+}
+
+
 def evaluate_dependency_license(
     evidence: Mapping[str, Any],
     subject: str,
@@ -999,16 +1079,21 @@ def evaluate_dependency_license(
             and expression == "MIT OR Apache-2.0"):
         expression = "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
         source = "Cargo declaration plus exact archived Unicode data grant"
+    libm_scope = (evidence.get("ecosystem") == "cargo" and subject == "cargo/libm@0.2.16"
+                  and evidence.get("source_sha256") == _LIBM_ARCHIVE_SHA256 and expression == "MIT")
+    if libm_scope:
+        expression = "MIT AND BSD-2-Clause AND SunPro"
+        source = "Cargo declaration plus exact archived file-specific grants"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
         rationale=(selection or {}).get("rationale"),
     )
     failures: list[Failure] = []
-    if (expression == "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+    if ((libm_scope or source == "Cargo declaration plus exact archived Unicode data grant")
             and decision.allowed and (selection or {}).get("chosen") != decision.selected):
         failures.append(Failure(LICENSE_SELECTION_INVALID, subject,
-                                "selection must explicitly retain the independent Unicode obligation"))
+                                "selection must explicitly retain every independent third-party obligation"))
     if not decision.allowed:
         failures.append(Failure(decision.code, subject, decision.detail))
     texts = _require_mapping(evidence, "license_texts", subject)
@@ -1024,6 +1109,14 @@ def evaluate_dependency_license(
             )
         )
     recognized_texts = {name: recognize_license_text(str(text)) for name, text in texts.items()}
+    if libm_scope:
+        for name, (digest, identifier) in _LIBM_LICENSE_MEMBERS.items():
+            text = texts.get(name)
+            if not isinstance(text, str) or hashlib.sha256(text.encode()).hexdigest() != digest:
+                failures.append(Failure(LICENSE_TEXT_UNVERIFIED, subject,
+                                        f"reviewed file-specific licence member missing or changed: {name}"))
+            else:
+                recognized_texts[name] = frozenset({identifier})
     grants = frozenset().union(*(ids for ids in recognized_texts.values() if ids is not None))
     for filename in sorted(texts):
         recognized = recognized_texts[filename]
@@ -1406,6 +1499,8 @@ def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
                         if declaration.is_absolute() or ".." in declaration.parts or "\\" in declared:
                             raise GateError(ARCHIVE_PATH_ESCAPE, "unsafe declared license path")
                         selected.add(str(PurePosixPath(manifest).parent / declaration))
+            if ecosystem == "cargo" and hashlib.sha256(raw).hexdigest() == _LIBM_ARCHIVE_SHA256:
+                selected.update(_LIBM_LICENSE_MEMBERS)
             total = 0
             for name in sorted(selected):
                 data = read_member(name)
