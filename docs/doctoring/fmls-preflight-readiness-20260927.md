@@ -127,3 +127,34 @@ security of every repository input or a live Strix run.
 Primary advisory basis: [AnyIO process-pool stderr advisory](https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp)
 and [supplementary-group advisory](https://github.com/agronholm/anyio/security/advisories/GHSA-3w57-8xmc-8v26).
 The existing gate and its severity/ignore policy remain intact.
+
+## Current governance audit and correction of the historical diagnosis
+
+Live ruleset `18156473` still requires seven `.github@main` workflows,
+including `codeql-pr.yml`. That CodeQL entry is intentional: the protected
+rollout document's 2026-09-04 correction restored a dispatch-safe entrypoint
+that does not directly invoke `github/codeql-action`. The earlier transcript's
+claim that its presence disagreed with the removal policy is superseded by
+that correction. The July inventory warning still described removal/native
+setup as the current posture; this continuation repairs that stale wording
+without changing a required gate.
+
+The live organization payload also reveals a separate approval-policy
+mismatch. Its approving-review count is one and last-push approval is false;
+protected main's audit contract and July 23 rollout evidence require two and
+true. Running the existing auditor on the actual payload returns exactly those
+two errors. All seven workflow identities, required source ref, exclusions,
+stale-review dismissal, review-thread resolution, and branch protection rules
+pass that audit. The stacked ruleset `21732164` separately passes its audit.
+Code-owner review remains false as the maintainer requires.
+
+An unapplied candidate changing only those two approval fields passes the
+existing auditor. The current payload's SHA-256 is
+`d6e6efd8c67027ae4a3625753c0e90198f8f92c67c691a0857231bd81d8ce412`.
+The audit-log endpoint returned HTTP 404, so the reason or authority for the
+live approval settings cannot be established from that endpoint. The user has
+been asked which approval policy is intended before changing organization-wide
+merge conditions or the repository contract. No live ruleset has been changed.
+This mismatch does not explain an unassigned CI runner; job
+`108568126406` and the original OpenCode coverage job `108521250487` are
+separately confirmed queued with runner_id zero and no executed steps.
