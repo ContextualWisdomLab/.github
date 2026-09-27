@@ -799,17 +799,32 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
             "gh",
             "api",
             f"repos/{repo}/contents/{encoded_path}?ref={encoded_ref}",
-            "--jq",
-            ".content // empty",
+            "--header",
+            "Accept: application/vnd.github.object+json",
         ]
     )
-    compact = "".join(content.split())
-    if not compact:
-        return ""
+    try:
+        response = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GitHub content response was malformed") from exc
+    if (
+        not isinstance(response, dict)
+        or type(response.get("size")) is not int
+        or response["size"] < 0
+        or not isinstance(response.get("content"), str)
+    ):
+        raise RuntimeError("GitHub content response was malformed")
+    if response.get("encoding") != "base64":
+        raise RuntimeError("GitHub file content unavailable: API omitted the encoded body")
+    compact = "".join(response["content"].split())
+    if not compact and response["size"]:
+        raise RuntimeError("GitHub file content unavailable: nonempty file has no encoded body")
     try:
         raw = base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise RuntimeError("GitHub content response contained malformed base64") from exc
+    if len(raw) != response["size"]:
+        raise RuntimeError("GitHub content response size did not match the decoded body")
     suffix = PurePosixPath(path).suffix.lower()
     if suffix in {".docx", ".hwp", ".hwpx"}:
         try:

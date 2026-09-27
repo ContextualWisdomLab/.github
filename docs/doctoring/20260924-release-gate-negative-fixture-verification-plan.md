@@ -2,11 +2,13 @@
 
 Prepared, **not approved to run**. No hosted run, publish, merge, approval or re-run is authorized
 by this document. It closes the two written gaps the coordinator required alongside the reviewable
-exact head, and it records one refutation the owner must decide on before any run is scheduled.
+exact head, and records the source-policy constraints on the proposed fixture.
 
-Central head this describes: `65727fa8411ec92672e03b1c6447b3a47d2616fc` on
+Historical central head described by the original plan: `65727fa8411ec92672e03b1c6447b3a47d2616fc` on
 `feat/release-dependency-license-strix-gate-2342`, on top of the reviewed
 `3c3ca9b1445d4a73a9d47216ff88996f012f1757`.
+
+Source-directive assessment updated after integration `79be9bd3d2d1aeea62f0c32659d22318521b0a6c`; hosted-run claims below remain unverified by this document.
 
 Two claims are kept apart throughout, and must stay apart in any report that cites this file:
 
@@ -59,36 +61,25 @@ Verified by reading the current source:
 as something the real capture path genuinely collects — a distribution present in the lock, with a
 real `sha256`, whose own metadata carries the case.
 
-### The fixture-distribution shape: **refuted as currently specified**
+### The fixture-distribution shape: bounded source policy
 
-The proposed shape — a locally authored fixture wheel in the caller's artifact whose metadata
-declares `GPL-3.0-only` (or omits `License` entirely for `LICENSE_MISSING`) — is the right *idea*,
-because the case then rides on metadata the real collection reads. It does **not** work against the
-unmodified capture script, for a reason the owner must decide on before any run is scheduled:
+The earlier dropped-directive defect has been fixed. The capture script validates
+`lock-source-options` and passes the resulting `source_options` to `pip download`.
+It does not silently discard source directives.
 
-- `parse_python_lock` skips every directive line (`if not line or line.startswith("-")`), so a lock
-  may carry `--find-links ./wheels` without the gate's parser objecting — this part is verified by
-  reading the parser. Step 2's `pip install` reads the **real lock**, and pip's documented
-  requirements-file behavior is to honor an in-file `--find-links` under `--require-hashes
-  --only-binary=:all:`. That last point is **pip's documented behavior, not executed here**; no step
-  of this workflow has been run.
-- `release_dependency_capture_raw.sh:151` reconstructs a *plain* requirements file for `pip
-  download` with `grep -oE '^[A-Za-z0-9._-]+==[^ ;]+'`, which **drops every `-`-prefixed
-  directive**. Step 4's `pip download --no-deps --only-binary=:all:` therefore resolves against the
-  default index only.
+The supported sources remain deliberately narrow:
 
-So a locally authored wheel installs in step 2 and then fails to download in step 4
-(`ERROR: no fetched distribution for <name>==<version>`). The run would fail in collection, before
-the licence decision — which is *not* the licence rejection the fixture is meant to demonstrate.
+- Index URLs must use HTTPS, the default port, and no user information, with a host
+  of `pypi.org` or `files.pythonhosted.org`.
+- `--find-links` must name a normalized, bounded relative directory inside the
+  lock-file directory. The separately downloaded `release-distributions/`
+  directory in this plan does not meet that constraint.
+- Environment markers, `-r`/`--requirement`, and `-c`/`--constraint` are rejected
+  with `LOCK_SOURCE_UNSUPPORTED`.
 
-This is also a latent production defect independent of the fixture: a real release whose lock
-carries `--index-url`, `--extra-index-url` or `--find-links` has those dropped for the download, so
-step 4 either fails or fetches from the wrong index while step 2 installed from the right one.
-**Reported as a follow-up, not fixed here** — preserving index/find-links directives into the plain
-requirements file changes production collection semantics and needs the owner's decision.
-
-Until that is resolved, the only collectible negative case is one whose distribution the default
-index already serves, which conflicts with "never fetch or install any GPL/LGPL/AGPL package".
+A locally authored fixture therefore requires a hash-bound wheel under a permitted
+lock-relative directory. This document supplies no hosted collection result and
+establishes no release acceptance.
 
 ### A GPL-declaring fixture package is rejected
 
@@ -107,9 +98,9 @@ instead:
   source**, verified through a `LICENSE_MISSING` rejection. Nothing copyleft is fetched, declared or
   installed at any point.
 
-Note that the refutation above still applies to the `LICENSE_MISSING` fixture, because it is also a
-locally authored distribution: until the dropped-directive defect is decided, `pip download` in step
-4 cannot fetch it.
+The `LICENSE_MISSING` fixture must also satisfy the bounded source policy above.
+Its current placement outside the lock directory is unsuitable; collectibility
+requires compliant placement and an actual non-deploy collection run.
 
 ### Naming discipline for the eventual run
 
@@ -184,7 +175,7 @@ of run that would prove each:
 |---|---|
 | A copyleft dependency is refused by the **real collection path** | A run whose collected metadata carries a denied licence. No such run is planned, because authoring or installing a copyleft-declaring package is rejected. This gap stays open by policy. |
 | `release_dependency_capture_raw.sh` executes at all | Any hosted run that reaches step 4. No step of that script has ever executed, here or in CI. |
-| A locally authored fixture distribution is collectible | Resolution of the dropped-directive defect above, then one non-deploy run. |
+| A locally authored fixture distribution is collectible | A hash-bound wheel in a permitted lock-relative directory, then one non-deploy run. |
 | Strix succeeds and produces a real binding | A credentialed run that reaches step 12 with `verdict` and `findings` from an actual scan. |
 | `seal` output is accepted by the real attestation workflow on real bytes | A run composing `gate` → `attest` on a real wheel and sdist. Locally only the *shape* is checked, against a synthetic sealed directory. |
 | Capture/hash/metadata/artifact binding agree end to end | The same composed run, comparing `wheel_sha256` and `sdist_sha256` against the published artifact digests. |
@@ -200,6 +191,6 @@ concludes `failure` on a real runner; that the Strix steps report `skipped`; tha
 does not execute; that the capture script's real `pip inspect`/`pip download`/`cargo metadata`
 invocations behave as read (no step of `release_dependency_capture_raw.sh` has ever been executed,
 here or in CI); that `seal` and `exact-artifact-sbom-attestation.yml` agree on real bytes; and that
-the fixture distribution is collectible at all, which the refutation above says it currently is not.
+the fixture distribution is collectible under the bounded source policy described above.
 
 Refs #2342, #2347.

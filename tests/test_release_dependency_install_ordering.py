@@ -193,6 +193,7 @@ def test_an_unauthorized_licence_stage_installs_nothing(
 ) -> None:
     result, log = _install(tmp_path, payload)
     assert result.returncode == 2
+    assert "the licence verdict does not authorize installing these bytes" in result.stderr
     assert [call for call in _calls(log) if "install" in call] == []
 
 
