@@ -10,6 +10,7 @@ exact timestamp used for queue-age calculations.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 from pathlib import Path
 import sys
@@ -283,8 +284,9 @@ def collect_snapshot(
 
             observed_snapshot = dict(second_snapshot)
             observed_snapshot.update(terminal_diagnostic_snapshot)
-            runs_by_id: dict[int, dict[str, Any]] = {}
-            for workflow_run_id, workflow_run in observed_snapshot.items():
+            def collect_run_evidence(item: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+                """Read one independent run while preserving its exact identity."""
+                workflow_run_id, workflow_run = item
                 normalized_run = _normalise_run(
                     repository_name, workflow_run, []
                 )
@@ -301,8 +303,7 @@ def collect_snapshot(
                     )
                 )
                 if not needs_job_evidence:
-                    runs_by_id[workflow_run_id] = normalized_run
-                    continue
+                    return workflow_run_id, normalized_run
 
                 jobs_payload = github_json(
                     f"repos/{repository_name}/actions/runs/{workflow_run_id}/jobs"
@@ -315,10 +316,14 @@ def collect_snapshot(
                     "jobs",
                     max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
                 )
-                runs_by_id[workflow_run_id] = _normalise_run(
+                return workflow_run_id, _normalise_run(
                     repository_name, workflow_run, workflow_jobs
                 )
 
+
+            # ponytail: four concurrent metadata reads; revisit only with API-limit evidence.
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                runs_by_id = dict(executor.map(collect_run_evidence, observed_snapshot.items()))
             try:
                 post_evidence_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner

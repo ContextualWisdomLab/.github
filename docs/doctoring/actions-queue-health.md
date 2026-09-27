@@ -81,6 +81,13 @@ collector continues with the remaining allowlisted repositories; it never
 silently claims that the visible page is the whole queue. The JSON and HTML
 reports expose each collection error explicitly.
 
+Independent job-evidence reads use at most four worker threads per repository.
+Every selected run is still inspected; concurrency does not reduce the evidence
+set or change the page limits. Report rows remain sorted by run ID, and the
+final pull-request identity read happens after all job reads finish. A failed
+job read invalidates the repository snapshot exactly as a sequential failure
+does. Model calls and their execution budgets are unaffected.
+
 Every external `gh api` read has a 30-second subprocess timeout, and the
 collector job has a 30-minute execution ceiling. A timeout is typed as
 incomplete queue evidence rather than success. Repository names reject `.` and
