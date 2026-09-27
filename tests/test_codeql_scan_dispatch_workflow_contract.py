@@ -1684,13 +1684,13 @@ def test_codeql_scan_dispatch_bridge_has_explicit_removal_condition() -> None:
     assert "protected v2 producer" in workflow
 
 
-def test_codeql_materialization_cleans_reused_runner_workspace():
-    """Use the pinned native checkout at the validated head without retained credentials."""
+def test_codeql_scan_checkout_cleans_reused_workspace_without_persisting_token():
+    """Fetch the validated head with native checkout cleanup on persistent runners."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    step = workflow.split("      - name: Materialize pull request head for CodeQL scan\n", 1)[1].split("      - name:", 1)[0]
-    assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" in step
-    assert "repository: ${{ needs.validate-dispatch.outputs.target_repository }}" in step
-    assert "ref: ${{ needs.validate-dispatch.outputs.head_sha }}" in step
-    assert "persist-credentials: false" in step
-    assert "clean: true" in step
-    assert "git remote add origin" not in step
+    block = workflow.split('      - name: Materialize pull request head for CodeQL scan\n', 1)[1].split('\n      - name:', 1)[0]
+    assert 'uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' in block
+    assert 'repository: ${{ needs.validate-dispatch.outputs.target_repository }}' in block
+    assert 'ref: ${{ needs.validate-dispatch.outputs.head_sha }}' in block
+    assert 'persist-credentials: false' in block
+    assert 'clean: true' in block
+    assert 'git remote add origin' not in block

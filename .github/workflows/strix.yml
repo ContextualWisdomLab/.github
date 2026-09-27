@@ -130,7 +130,7 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -187,7 +187,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request_target' ||
       (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -260,7 +260,7 @@ jobs:
         github.event.pull_request.base.repo.full_name || github.repository }}-${{
         github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     # Bound this gh-api-only cleanup job so a stuck call (rate limit, hung
     # `gh api --paginate`) cannot silently occupy a runner for GitHub's
     # 360-minute platform default -- exactly the window when a busy PR is
@@ -323,7 +323,7 @@ jobs:
               --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
+                | select(.path == ".github/workflows/strix.yml")
                 | select(.event == "pull_request_target")
                 | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
                 | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
@@ -1172,7 +1172,7 @@ jobs:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     # Single-shot OIDC exchange plus a handful of curl/gh api calls, no loop
     # or pagination -- same shape as the agent-mention-*-dispatch.yml
     # validate-and-forward jobs, which bound at timeout-minutes: 5. Without

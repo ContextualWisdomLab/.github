@@ -568,6 +568,7 @@ jobs:
           token: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           persist-credentials: false
           clean: true
+          fetch-depth: 1
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
@@ -588,21 +589,30 @@ jobs:
         id: gate
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
-      - name: Mint target-scoped CodeQL analysis-read token
+      - name: Detect optional Noema analysis-read credential
+        id: noema_analysis_config
+        if: steps.gate.outcome == 'success' && matrix.build-mode == 'none' && contains(fromJSON('["actions","python","javascript-typescript"]'), matrix.language)
+        env:
+          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          NOEMA_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NOEMA_APP_CLIENT_ID" ] && [ -n "$NOEMA_APP_PRIVATE_KEY" ]; then
+            printf 'repository=%s\n' "${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint target-scoped Noema analysis-read token
         id: noema_analysis_token
-        # Keep the App private key out of shards that can execute target build hooks.
-        if: >-
-          steps.gate.outcome == 'success'
-          && vars.NOEMA_GITHUB_APP_CLIENT_ID != ''
-          && matrix.build-mode == 'none'
-          && contains(fromJSON('["actions","python","javascript-typescript"]'), matrix.language)
+        if: steps.gate.outcome == 'success' && matrix.build-mode == 'none' && contains(fromJSON('["actions","python","javascript-typescript"]'), matrix.language) && steps.noema_analysis_config.outputs.available == 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
           owner: ContextualWisdomLab
-          repositories: ${{ needs.validate-dispatch.outputs.target_repository_name }}
+          repositories: ${{ steps.noema_analysis_config.outputs.repository }}
           permission-security-events: read
 
       - name: Select target CodeQL analysis-read credential
@@ -642,10 +652,10 @@ jobs:
           }
 
           if probe_analysis_read "target-app-token" "$TARGET_APP_TOKEN" ||
-            probe_analysis_read "noema-analysis-token" "${NOEMA_ANALYSIS_TOKEN:-}" ||
             probe_analysis_read "pr-review-merge-token" "$PR_REVIEW_MERGE_TOKEN" ||
             probe_analysis_read "opencode-approve-token" "$OPENCODE_APPROVE_TOKEN" ||
-            probe_analysis_read "github-token" "$WORKFLOW_TOKEN"; then
+            probe_analysis_read "github-token" "$WORKFLOW_TOKEN" ||
+            probe_analysis_read "noema-analysis-token" "$NOEMA_ANALYSIS_TOKEN"; then
             exit 0
           fi
 

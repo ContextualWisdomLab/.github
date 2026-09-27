@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-767e67fbc6b881a452761f32abb69b9971b9b03b}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-01bf92a3ec67a0e1f9b68978eb16b60301e985fd}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -391,6 +391,10 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  if [ "$((i % 60))" -eq 0 ]; then
+    # Only report file presence; provider content stays in sanitized artifacts.
+    log "startup pending: polls=${i} discovery=$([ -s "$discovery_report" ] && echo present || echo absent) catalog=$([ -s "$catalog_file" ] && echo present || echo absent) policy=$([ -s "$policy_report" ] && echo present || echo absent) preflight=$([ -s "$preflight_report" ] && echo present || echo absent)"
+  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then

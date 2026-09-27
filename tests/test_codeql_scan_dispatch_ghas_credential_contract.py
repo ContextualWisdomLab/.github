@@ -95,10 +95,10 @@ def test_ghas_analysis_read_fails_closed_when_no_candidate_can_read_target(tmp_p
     assert "no configured credential can read target CodeQL analyses" in result.stdout
     assert result.call_log.read_text(encoding="utf-8").splitlines() == [
         "content-token",
-        "noema-analysis-token",
         "security-token",
         "approve-token",
         "workflow-token",
+        "noema-analysis-token",
     ]
 
 
@@ -113,29 +113,52 @@ def test_ghas_identity_step_consumes_only_probed_analysis_read_token() -> None:
     assert "codeql_ghas_configuration_identity.py" in verify_script
 
 
-def test_ghas_analysis_read_reuses_scoped_noema_authority(tmp_path: Path) -> None:
-    """An existing analysis-capable App is selected only after its target probe succeeds."""
+def test_ghas_analysis_read_uses_existing_noema_reader_after_other_denials(tmp_path: Path) -> None:
+    """Existing Noema analysis-read authority can recover a denied OpenCode reader."""
     result = _run_selector(tmp_path, succeeding_token="noema-analysis-token")
     assert result.returncode == 0, result.stdout + result.stderr
     output = result.output_path.read_text(encoding="utf-8")
-    assert "token=noema-analysis-token" in output
     assert "source=noema-analysis-token" in output
     assert result.call_log.read_text(encoding="utf-8").splitlines() == [
-        "content-token", "noema-analysis-token",
+        "content-token", "security-token", "approve-token", "workflow-token", "noema-analysis-token",
     ]
 
 
-def test_noema_analysis_token_excludes_build_hooks_and_unrelated_permissions() -> None:
-    """Only static shards can mint a one-repository, read-only analysis credential."""
+def test_noema_reader_is_target_scoped_and_cannot_publish_status() -> None:
+    """The optional reader has one read grant and never enters write-token selection."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    mint = workflow.split("      - name: Mint target-scoped CodeQL analysis-read token\n", 1)[1].split("      - name:", 1)[0]
-    assert "matrix.build-mode == 'none'" in mint
-    assert "contains(fromJSON('[\"actions\",\"python\",\"javascript-typescript\"]'), matrix.language)" in mint
-    assert "owner: ContextualWisdomLab" in mint
-    assert "repositories: ${{ needs.validate-dispatch.outputs.target_repository_name }}" in mint
-    assert [line.strip() for line in mint.splitlines() if "permission-" in line] == [
-        "permission-security-events: read",
-    ]
-    assert "skip-token-revoke:" not in mint
-    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in mint
-    assert "printf 'target_repository_name=%s\\n' \"${TARGET_REPOSITORY#*/}\"" in workflow
+    step = workflow.split("      - name: Mint target-scoped Noema analysis-read token\n", 1)[1].split("      - name:", 1)[0]
+    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in step
+    assert "repositories: ${{ steps.noema_analysis_config.outputs.repository }}" in step
+    assert "permission-security-events: read" in step
+    assert step.count("permission-") == 1
+    assert "skip-token-revoke" not in step
+    assert workflow.count("steps.noema_analysis_token.outputs.token") == 1
+
+
+def test_optional_noema_reader_requires_both_credentials(tmp_path: Path) -> None:
+    """Incomplete configuration skips minting; complete credentials scope the target."""
+    script = _extract_run_block(WORKFLOW_PATH.read_text(), "Detect optional Noema analysis-read credential")
+    for index, (client_id, key) in enumerate((("", ""), ("app", ""), ("", "private"), ("app", "private"))):
+        output = tmp_path / str(index)
+        result = subprocess.run(
+            ["/bin/bash"], input=script, text=True, capture_output=True, check=False,
+            env={**os.environ, "GITHUB_OUTPUT": str(output),
+                 "TARGET_REPOSITORY": "ContextualWisdomLab/OriginWeave",
+                 "NOEMA_APP_CLIENT_ID": client_id, "NOEMA_APP_PRIVATE_KEY": key},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "private" not in result.stdout + result.stderr
+        if client_id and key:
+            assert output.read_text() == "repository=OriginWeave\navailable=true\n"
+        else:
+            assert not output.exists()
+
+
+def test_noema_reader_private_key_excludes_target_build_hooks() -> None:
+    """Both key-bearing steps are restricted to static language shards."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    for name in ("Detect optional Noema analysis-read credential", "Mint target-scoped Noema analysis-read token"):
+        block = workflow.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+        assert "matrix.build-mode == 'none'" in block
+        assert "contains(fromJSON('[\"actions\",\"python\",\"javascript-typescript\"]'), matrix.language)" in block
