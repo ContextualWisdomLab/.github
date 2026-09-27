@@ -60,6 +60,7 @@ jobs:
     name: Detect CodeQL languages
     if: github.event.action != 'closed'
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -152,6 +153,8 @@ jobs:
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    # Verdict reads have exceeded five minutes; retain the ten-minute control budget.
+    timeout-minutes: 10
     permissions:
       actions: read
       contents: read
@@ -353,6 +356,7 @@ jobs:
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    timeout-minutes: 5
     permissions:
       contents: read
       id-token: write
