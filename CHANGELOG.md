@@ -56,6 +56,9 @@
 
 - `release_dependency_gate.py` now has behavior-level coverage for bounded archive reads, unsafe or absent declared licence files, symlink/special members, archive-member limits, raw-capture and destination symlinks, Cargo workspace identity, Strix fanout identity/fixture/runtime-report validation, and install-time licence rebinding. The no-caller `parse_member_listing` helper and its isolated test were removed; immutable archive bytes remain the sole member authority. Focused evidence is 442 passed with 1,126/1,126 statements and 472/472 branches; the warnings-as-errors repository suite is 3,976 passed and 28 skipped. Repository-wide coverage rises from 98% to 99%, so the overall 100% release gate remains RED and the PR stays Draft.
 
+### Pingora declared binary artifacts reject readable runtime directives
+
+- A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
 ### Queue-health permission contract rejects aggregate token grants
 
 - The queue-health workflow contract now pins both workflow-level and collector-job permissions to exactly `contents: read` plus `actions: read`, rejecting scalar `read-all`/`write-all`, quoting/spacing variants, inline maps, and unexpected write scopes.

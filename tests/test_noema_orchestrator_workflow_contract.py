@@ -214,7 +214,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "needs.noema-review.result == 'failure'" in continuation_job
     assert "      contents: write" in continuation_job
     assert "      pull-requests: read" in continuation_job
-    assert "GH_TOKEN: ${{ github.token }}" in continuation_job
+    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}" in continuation_job
     assert "${TARGET_REPOSITORY}" in continuation_job
     assert '"$GITHUB_REPOSITORY"' in continuation_job
     assert "uses: actions/checkout" not in continuation_job
@@ -231,8 +231,8 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
-def test_noema_continuation_dispatch_uses_only_live_same_repo_head_and_base(tmp_path: Path) -> None:
-    """Execute the privileged step against a fake API before allowing dispatch."""
+def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_path: Path) -> None:
+    """Central continuation preserves target identity and rejects stale or fork heads."""
     script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
@@ -240,10 +240,11 @@ def test_noema_continuation_dispatch_uses_only_live_same_repo_head_and_base(tmp_
         ).split("        run: |\n", 1)[1]
     )
     calls = tmp_path / "dispatch.json"
+    endpoint = tmp_path / "endpoint.txt"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         '#!/bin/bash\nif [[ "$*" == *"/pulls/"* ]]; then printf "%s" "$LIVE_PR"; '
-        'else cat >"$DISPATCH_FILE"; fi\n',
+        'else printf "%s" "$*" >"$ENDPOINT_FILE"; cat >"$DISPATCH_FILE"; exit "${POST_EXIT_CODE:-0}"; fi\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -265,10 +266,11 @@ def test_noema_continuation_dispatch_uses_only_live_same_repo_head_and_base(tmp_
         "PROVIDER_ATTEMPT_COUNT": "2",
         "TRANSPORT_HTTP_STATUS": "429",
         "DISPATCH_FILE": str(calls),
+        "ENDPOINT_FILE": str(endpoint),
         "LIVE_PR": json.dumps(
             {
                 "state": "open",
-                "head": {"sha": head},
+                "head": {"sha": head, "repo": {"full_name": "ContextualWisdomLab/demo"}},
                 "base": {"sha": base, "repo": {"full_name": "ContextualWisdomLab/demo"}},
             }
         ),
@@ -288,7 +290,22 @@ def test_noema_continuation_dispatch_uses_only_live_same_repo_head_and_base(tmp_
         "pr_head_sha": head,
         "transport_retry_attempt": 1,
     }
+    assert "repos/ContextualWisdomLab/.github/dispatches" in endpoint.read_text()
     calls.unlink()
+    central = {**env, "GITHUB_REPOSITORY": "ContextualWisdomLab/.github"}
+    assert run(central).returncode == 0
+    assert calls.exists()
+    calls.unlink()
+    refused = run({**central, "POST_EXIT_CODE": "1"})
+    assert refused.returncode != 0
+    assert "Scheduled Noema transport continuation" not in refused.stdout
+    calls.unlink()
+    fork = json.loads(env["LIVE_PR"])
+    fork["head"]["repo"]["full_name"] = "outside/demo"
+    assert run({**central, "LIVE_PR": json.dumps(fork)}).returncode == 0
+    assert not calls.exists()
+    assert run({**env, "GITHUB_REPOSITORY": "ContextualWisdomLab/unrelated"}).returncode != 0
+    assert not calls.exists()
     assert run({**env, "TARGET_REPOSITORY": "ContextualWisdomLab/other"}).returncode != 0
     assert not calls.exists()
     changed_base = json.loads(env["LIVE_PR"])
