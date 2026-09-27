@@ -182,7 +182,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 9d19d0de5244749a11554db2c48b93809198a3ef
+          ref: ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -202,7 +202,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=9d19d0de5244749a11554db2c48b93809198a3ef
+          expected=ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
@@ -474,7 +474,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 9d19d0de5244749a11554db2c48b93809198a3ef
+          ref: ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -494,7 +494,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=9d19d0de5244749a11554db2c48b93809198a3ef
+          expected=ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
@@ -762,7 +762,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 9d19d0de5244749a11554db2c48b93809198a3ef
+          ref: ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -782,7 +782,7 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=9d19d0de5244749a11554db2c48b93809198a3ef
+          expected=ee9662f5e3cb6e8609544538b8c08bf27a62dd85
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
