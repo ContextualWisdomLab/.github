@@ -1,3 +1,7 @@
+### Canonical Rust materializer integration closes the repository coverage gate
+
+- Ordinary-merged the complete `ContextualWisdomLab/.github#2360` owner branch into the release-control stack, preserving its foundation ancestry, multi-root `cargo vendor --sync --locked` implementation, target-path confinement, real-Cargo integration cases, and toolchain-independent mock/error/CLI contracts. The focused materializer suite is 26 passed and 3 real-Cargo skips with `materialize_base_rust_dependencies.py` at 155/155 statements and 60/60 branches. The merged exact tree is 4,030 passed, 8 skipped, and 40 subtests passed; all 17,144 production statements and 6,982 branches are covered. Draft remains required until fresh exact-head hosted Checks and qualifying independent review complete.
+
 ### Noema document-reader trust boundaries reach 100% executable coverage
 
 - Added behavior-level coverage for unsupported and oversized inputs, bounded DOCX ZIP/XML structure, empty documents, visible Word controls, ragged and escaped tables, missing or unstartable local HWP readers, oversized/non-UTF-8/empty adapter output, UTF-8-safe prompt truncation, and both CLI outcomes. Production reader behavior is unchanged. The focused suite is 11 passed and 2 optional real-fixture skips with `noema_review_document.py` at 144/144 statements and 52/52 branches. The warnings-as-errors full suite is 3,988 passed, 28 skipped, and 40 subtests passed; only the independently owned Rust dependency materializer on `ContextualWisdomLab/.github#2360` remains below 100%, so the repository gate remains RED and this PR remains Draft.
@@ -9,6 +13,10 @@
 ### Release dependency gate trust boundaries reach executable 100% coverage
 
 - `release_dependency_gate.py` now has behavior-level coverage for bounded archive reads, unsafe or absent declared licence files, symlink/special members, archive-member limits, raw-capture and destination symlinks, Cargo workspace identity, Strix fanout identity/fixture/runtime-report validation, and install-time licence rebinding. The no-caller `parse_member_listing` helper and its isolated test were removed; immutable archive bytes remain the sole member authority. Focused evidence is 442 passed with 1,126/1,126 statements and 472/472 branches; the warnings-as-errors repository suite is 3,976 passed and 28 skipped. Repository-wide coverage rises from 98% to 99%, so the overall 100% release gate remains RED and the PR stays Draft.
+
+### OpenCode coverage image materializes every Dockerfile lock input
+
+- Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 

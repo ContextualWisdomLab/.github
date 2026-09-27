@@ -109,6 +109,13 @@ def _list_payload(
             declared_total_counts.append(payload["total_count"])
     if not isinstance(values, list) or not all(isinstance(value, dict) for value in values):
         raise QueueHealthError(f"GitHub response field {key!r} must be an array of objects")
+    if key == "workflow_runs" and any(
+        isinstance(value.get("id"), bool)
+        or not isinstance(value.get("id"), int)
+        or value["id"] <= 0
+        for value in values
+    ):
+        raise QueueHealthError("workflow run id must be a positive integer")
     if isinstance(payload, dict) and PAGINATED_PAGES_KEY in payload:
         record_identities: list[tuple[str, int]] = []
         for value in values:
