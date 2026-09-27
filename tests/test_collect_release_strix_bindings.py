@@ -139,7 +139,7 @@ def test_native_report_is_recomputed_from_immutable_distributions(tmp_path, monk
     analyzer = {"path": "/usr/lib/llvm-18/bin/llvm-readobj", "version": "18.1.3",
                 "sha256": "a" * 64}
     case = _case(tmp_path)
-    native = {"schema": "cwl.release-native-links/1", "source_sha": SOURCE_SHA,
+    native = {"schema": "cwl.release-native-links/2", "source_sha": SOURCE_SHA,
               "analyzer": analyzer, "wheels": [{"leg": "linux-py3.12"}]}
     path = tmp_path / "native-links.json"
     path.write_text(json.dumps(native) + "\n")

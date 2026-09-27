@@ -535,6 +535,22 @@ def test_red_missing_native_link_inventory(tmp_path: Path) -> None:
         gate.gate(capture)
 
 
+def test_platform_native_review_refuses_cross_platform_runtime() -> None:
+    evidence = {"native_libraries": [{"path": "package/native.so",
+                                      "needed": ["libc.so.6"], "static_archives": []}],
+                "bundled_library_licenses": {}}
+    failures, _ = gate.evaluate_native_links(
+        evidence, "pypi/package@1", target="universal2-apple-darwin",
+        leg="universal2-apple-darwin-py3.14")
+    assert [failure.code for failure in failures] == [gate.NATIVE_LINK_UNKNOWN]
+    evidence["native_libraries"][0]["needed"] = ["/usr/lib/libSystem.B.dylib"]
+    failures, properties = gate.evaluate_native_links(
+        evidence, "pypi/package@1", target="universal2-apple-darwin",
+        leg="universal2-apple-darwin-py3.14")
+    assert failures == []
+    assert properties[0]["name"] == "cwl:native:system-runtime"
+
+
 def test_declared_dynamic_link_target_is_recorded(tmp_path: Path) -> None:
     """A declared, permissive bundled library passes and is recorded in provenance."""
     capture = build_capture(

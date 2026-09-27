@@ -128,6 +128,28 @@ NeededLibraries [
     )] == ["x86_64"]
 
 
+def test_release_link_review_accepts_only_named_external_runtimes():
+    review = SCAN["_review_link"]
+    member = "fast_mlsirm/_core.cpython-314-darwin.so"
+    assert review("libc.so.6", "x86_64-unknown-linux-gnu",
+                  "x86_64-unknown-linux-gnu-py3.14", member)["kind"] == "system-runtime"
+    assert review("/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+                  "universal2-apple-darwin", "universal2-apple-darwin-py3.14",
+                  member)["kind"] == "system-runtime"
+    assert review("@rpath/fast_mlsirm._core.cpython-314-darwin.so",
+                  "universal2-apple-darwin", "universal2-apple-darwin-py3.14",
+                  member)["kind"] == "self-install-name"
+    assert review("python314.dll", "x86_64-pc-windows-msvc",
+                  "x86_64-pc-windows-msvc-py3.14", member)["kind"] == "interpreter-runtime"
+    assert review("api-ms-win-core-synch-l1-2-0.dll", "x86_64-pc-windows-msvc",
+                  "x86_64-pc-windows-msvc-py3.14", member)["kind"] == "system-runtime"
+    for target, name in (("x86_64-unknown-linux-gnu", "libmystery.so"),
+                         ("universal2-apple-darwin", "@rpath/foreign.dylib"),
+                         ("x86_64-pc-windows-msvc", "foreign.dll")):
+        with pytest.raises(ValueError, match="unreviewed native link"):
+            review(name, target, f"{target}-py3.14", member)
+
+
 def test_link_parser_refuses_oversized_partial_wrong_format_and_malformed_output(monkeypatch):
     with pytest.raises(ValueError, match="extension exceeds"):
         SCAN["_links"](b"x" * (128 * 1024 * 1024 + 1),
@@ -166,6 +188,26 @@ def test_scan_rebinds_all_thirteen_distribution_bytes(tmp_path, monkeypatch):
     assert report["analyzer"] == analyzer
     (tmp_path / "source.tar.gz").write_bytes(b"changed")
     with pytest.raises(ValueError, match="bytes changed"):
+        SCAN["scan"](verified, tmp_path, "a" * 40, analyzer)
+
+
+def test_scan_records_review_for_each_link_and_refuses_unknown(tmp_path, monkeypatch):
+    names = {"x86_64-unknown-linux-gnu": "libc.so.6",
+             "aarch64-unknown-linux-gnu": "libc.so.6",
+             "universal2-apple-darwin": "/usr/lib/libSystem.B.dylib",
+             "x86_64-pc-windows-msvc": "KERNEL32.dll"}
+    def links(binary, target, reader):
+        return [{"arch": arch, "format": "native", "needed": [names[target]]}
+                for arch in sorted(SCAN["TARGET_ARCHES"][target])]
+    monkeypatch.setitem(SCAN["scan"].__globals__, "_links", links)
+    verified, _ = _distribution_case(tmp_path)
+    analyzer = {"path": "/reader", "version": "18.1.3", "sha256": "b" * 64}
+    report = SCAN["scan"](verified, tmp_path, "a" * 40, analyzer)
+    assert report["schema"] == "cwl.release-native-links/2"
+    assert all(len(link["reviews"]) == len(link["needed"]) == 1
+               for wheel in report["wheels"] for link in wheel["links"])
+    names["x86_64-pc-windows-msvc"] = "foreign.dll"
+    with pytest.raises(ValueError, match="unreviewed native link"):
         SCAN["scan"](verified, tmp_path, "a" * 40, analyzer)
 
 
@@ -260,7 +302,7 @@ def test_main_writes_once_to_a_new_report(tmp_path, monkeypatch):
     verified = tmp_path / "verified.json"
     verified.write_text(json.dumps({"verified_distributions": []}))
     output = tmp_path / "native.json"
-    report = {"schema": "cwl.release-native-links/1", "wheels": []}
+    report = {"schema": "cwl.release-native-links/2", "wheels": []}
     monkeypatch.setitem(SCAN["main"].__globals__, "_reader", lambda: {"path": "/reader"})
     monkeypatch.setitem(SCAN["main"].__globals__, "scan", lambda *args: report)
     monkeypatch.setattr(sys, "argv", ["scan_release_native_links.py",

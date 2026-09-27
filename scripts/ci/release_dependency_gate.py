@@ -226,6 +226,18 @@ SYSTEM_RUNTIME_SONAMES: dict[str, tuple[str, str]] = {
     "libutil.so.1": ("LGPL-2.1-or-later", "glibc utility runtime, dynamically linked"),
 }
 
+WINDOWS_SYSTEM_DLLS = {
+    "ADVAPI32.DLL", "BCRYPT.DLL", "CRYPT32.DLL", "GDI32.DLL", "KERNEL32.DLL",
+    "MSVCRT.DLL", "NTDLL.DLL", "OLE32.DLL", "SECUR32.DLL", "SHELL32.DLL",
+    "SHLWAPI.DLL", "UCRTBASE.DLL", "USER32.DLL", "WINMM.DLL", "WS2_32.DLL",
+}
+MAC_FRAMEWORK = re.compile(
+    r"/System/Library/Frameworks/([A-Za-z][A-Za-z0-9]*)\.framework/"
+    r"Versions/[A-Za-z0-9]+/\1\Z"
+)
+MAC_SYSTEM_DYLIB = re.compile(r"/usr/lib/lib[A-Za-z0-9._+-]+\.dylib\Z")
+WINDOWS_API_SET = re.compile(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll\Z", re.IGNORECASE)
+
 _LIBPYTHON_RE = re.compile(r"^libpython3\.\d+m?\.so(?:\.\d+\.\d+)?$")
 
 #: Source patterns that make an install/build hook untrusted.
@@ -819,8 +831,36 @@ def classify_soname(soname: str) -> tuple[str, str] | None:
     return None
 
 
+def classify_platform_link(name: str, target: str, leg: str, member: str) -> dict[str, str] | None:
+    """Review an external platform link; unknown links need separate licence evidence."""
+    kind = ""
+    basis = ""
+    if "linux" in target:
+        runtime = classify_soname(name)
+        if runtime is not None:
+            kind, basis = "system-runtime", f"{runtime[0]}; {runtime[1]}"
+    elif "darwin" in target:
+        if MAC_FRAMEWORK.fullmatch(name) or MAC_SYSTEM_DYLIB.fullmatch(name):
+            kind, basis = "system-runtime", "Apple-provided /System/Library/Frameworks or /usr/lib"
+        elif (member.startswith("fast_mlsirm/_core.")
+              and name == f"@rpath/fast_mlsirm.{PurePosixPath(member).name}"):
+            kind, basis = "self-install-name", "the inspected extension itself"
+    elif "windows" in target:
+        normalized = name.upper()
+        py_version = leg.rsplit("-py", 1)[1].replace(".", "")
+        if WINDOWS_API_SET.fullmatch(name):
+            kind, basis = "system-runtime", "Windows API-set loader contract"
+        elif normalized in WINDOWS_SYSTEM_DLLS:
+            kind, basis = "system-runtime", "Windows operating-system DLL"
+        elif normalized == f"PYTHON{py_version}.DLL":
+            kind, basis = "interpreter-runtime", "CPython runtime required by this wheel tag"
+        elif normalized in {"VCRUNTIME140.DLL", "VCRUNTIME140_1.DLL"}:
+            kind, basis = "external-runtime", "Visual C++ runtime is linked, not bundled"
+    return {"name": name, "kind": kind, "basis": basis} if kind else None
+
+
 def evaluate_native_links(
-    evidence: Mapping[str, Any], subject: str
+    evidence: Mapping[str, Any], subject: str, *, target: str = "", leg: str = ""
 ) -> tuple[list[Failure], list[dict[str, str]]]:
     """Evaluate dynamic and static linking targets of shipped native libraries."""
 
@@ -841,7 +881,12 @@ def evaluate_native_links(
                 f"{subject}: native library has no complete link inventory",
             )
         for soname in _require_list(library, "needed", subject):
-            allowlisted = classify_soname(str(soname))
+            platform = classify_platform_link(str(soname), target, leg, origin) if target else None
+            if platform is not None:
+                properties.append({"name": f"cwl:native:{platform['kind']}",
+                                   "value": f"{soname}={platform['basis']}"})
+                continue
+            allowlisted = classify_soname(str(soname)) if not target else None
             if allowlisted is not None:
                 properties.append(
                     {

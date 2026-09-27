@@ -11,8 +11,15 @@ from pathlib import PurePosixPath
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+try:
+    from scripts.ci.release_dependency_gate import classify_platform_link
+except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from release_dependency_gate import classify_platform_link
 
 
 LINK_BLOCK = re.compile(
@@ -32,6 +39,14 @@ NATIVE_MAGIC = (b"\x7fELF", b"MZ", b"\x00asm", b"!<arch>\n",
                 b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca")
 LLVM_READER_PATH = Path("/usr/bin/llvm-readobj-18")
 LLVM_READER_VERSION = "18.1.3"
+
+
+def _review_link(name: str, target: str, leg: str, member: str) -> dict[str, str]:
+    """Classify a dynamic link in a wheel that bundles only its own extension."""
+    review = classify_platform_link(name, target, leg, member)
+    if review is None:
+        raise ValueError(f"{leg}: unreviewed native link {name!r}")
+    return review
 
 
 def _reader() -> dict[str, str]:
@@ -140,11 +155,15 @@ def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) ->
             if native != {members[0].filename}:
                 raise ValueError(f"{leg}: unaccounted bundled native member")
             binary = archive.read(members[0])
+        links = _links(binary, target, reader["path"])
+        for block in links:
+            block["reviews"] = [_review_link(name, target, leg, members[0].filename)
+                                for name in block["needed"]]
         wheels.append({"leg": leg, "file": filename, "sha256": sha,
                        "member": members[0].filename,
                        "member_sha256": hashlib.sha256(binary).hexdigest(),
-                       "links": _links(binary, target, reader["path"])})
-    return {"schema": "cwl.release-native-links/1", "source_sha": source_sha,
+                       "links": links})
+    return {"schema": "cwl.release-native-links/2", "source_sha": source_sha,
             "analyzer": reader,
             "wheels": sorted(wheels, key=lambda row: row["leg"])}
 

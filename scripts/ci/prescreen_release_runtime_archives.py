@@ -144,7 +144,8 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
             failures, decision, source = gate.evaluate_dependency_license(evidence, key, None)
             if failures:
                 raise gate.GateError(failures[0].code, f"{leg}: {key}: {failures[0].detail}")
-            native_failures, native_properties = gate.evaluate_native_links(evidence, key)
+            native_failures, native_properties = gate.evaluate_native_links(
+                evidence, key, target=target, leg=leg)
             if native_failures:
                 raise gate.GateError(native_failures[0].code, f"{leg}: {key}: {native_failures[0].detail}")
             fixture_key = f"{key}/sha256/{source_sha}"
@@ -313,7 +314,8 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
             )
             if failures:
                 raise gate.GateError(failures[0].code, f"{key}: {failures[0].detail}")
-            native_failures, native_properties = gate.evaluate_native_links(evidence, key)
+            native_failures, native_properties = gate.evaluate_native_links(
+                evidence, key, target=leg.rsplit("-py", 1)[0], leg=leg)
             if native_failures:
                 raise gate.GateError(native_failures[0].code, f"{key}: {native_failures[0].detail}")
             fixture_key = f"{key}/sha256/{sha}"
