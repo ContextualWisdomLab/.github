@@ -43,28 +43,43 @@ def test_declares_workflow_call_with_four_inputs_and_recorded_defaults() -> None
 
 
 def test_step_order_is_harden_then_checkout_then_preflight_then_gated_steps() -> None:
-    """harden-runner -> checkout -> dependency-graph preflight -> conditional gate/note."""
+    """Trusted setup precedes preflight, review, evidence binding, and upload."""
     workflow = _workflow_text()
     order = [
         "Harden the runner",
         "actions/checkout@",
         "Check dependency graph availability",
         "Dependency review",
-        "Dependency graph unavailable note",
+        "Bind dependency-by-dependency security evidence",
+        "Upload exact-head release dependency evidence",
     ]
     positions = [workflow.index(marker) for marker in order]
     assert positions == sorted(positions), "steps are out of order"
 
 
-def test_dependency_review_and_note_steps_are_mutually_exclusive_on_availability() -> None:
-    """The gate and the fallback note must never both run."""
+def test_dependency_review_only_runs_after_successful_evidence_preflight() -> None:
+    """The review cannot run without a successful dependency evidence response."""
     workflow = _workflow_text()
-    assert (
-        "if: steps.dependency_graph.outputs.available == 'true'\n"
-        "        continue-on-error: ${{ inputs.continue_on_error }}"
-        in workflow
-    )
-    assert "if: steps.dependency_graph.outputs.available != 'true'" in workflow
+    assert "if: steps.dependency_graph.outputs.available == 'true'" in workflow
+    assert "release dependency evidence is unavailable, so the gate cannot pass" in workflow
+
+
+def test_caller_cannot_override_the_dependency_review_hard_gate() -> None:
+    """The legacy compatibility input never reaches continue-on-error."""
+    workflow = _workflow_text()
+    assert "Deprecated compatibility input" in workflow
+    assert "continue-on-error: ${{ inputs.continue_on_error }}" not in workflow
+
+
+def test_failure_path_still_binds_and_uploads_rejection_evidence() -> None:
+    """A rejected dependency-review action cannot suppress its evidence receipt."""
+    workflow = _workflow_text()
+    assert workflow.count(
+        "if: always() && steps.dependency_graph.outputs.available == 'true'"
+    ) == 2
+    assert "DEPENDENCY_REVIEW_OUTCOME: ${{ steps.dependency_review.outcome }}" in workflow
+    assert '--dependency-review-outcome "$DEPENDENCY_REVIEW_OUTCOME"' in workflow
+    assert "if-no-files-found: error" in workflow
 
 
 def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:
@@ -73,6 +88,25 @@ def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:
     assert "fail-on-severity: ${{ inputs.fail_on_severity }}" in workflow
     assert "allow-ghsas: ${{ inputs.allow_ghsas }}" in workflow
     assert "comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}" in workflow
+
+
+def test_forbidden_gnu_family_licenses_are_denied_by_the_blocking_action() -> None:
+    """Direct and transitive dependency changes must reject GPL-family licenses."""
+    workflow = _workflow_text()
+    deny_line = next(line for line in workflow.splitlines() if "deny-licenses:" in line)
+    for family in ("GPL-3.0-only", "LGPL-3.0-only", "AGPL-3.0-only"):
+        assert family in deny_line
+
+
+def test_exact_head_structured_evidence_is_mandatory_and_uploaded() -> None:
+    """A passing review must publish dependency rows bound to exact base/head SHAs."""
+    workflow = _workflow_text()
+    assert "ref: ${{ github.workflow_sha }}" in workflow
+    assert "scripts/ci/release_dependency_evidence.py" in workflow
+    assert "--base-sha \"$BASE_SHA\"" in workflow
+    assert "--head-sha \"$HEAD_SHA\"" in workflow
+    assert "if-no-files-found: error" in workflow
+    assert "Dependency-by-dependency evidence is missing or unsafe" in workflow
 
 
 def test_harden_runner_audits_egress() -> None:
@@ -112,11 +146,10 @@ def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
 
 
 def test_availability_check_distinguishes_unavailable_from_genuine_failure() -> None:
-    """403/404 means 'unavailable, skip gracefully'; any other status must hard-fail
-    the job instead of silently treating a real error the same as unavailability."""
+    """Unavailable and unexpected API responses both fail the release gate."""
     workflow = _workflow_text()
     assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' in workflow
-    assert "available=false" in workflow
+    assert "::error::Dependency graph compare returned HTTP" in workflow
     assert "::error::Dependency graph availability check failed with HTTP" in workflow
     assert "exit 1" in workflow
 

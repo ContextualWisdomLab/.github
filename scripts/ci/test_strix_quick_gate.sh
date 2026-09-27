@@ -13,6 +13,14 @@ REPO_ROOT="$(
 )"
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
+install_gate_fixture() {
+	local destination="$1"
+	cp "$GATE_SCRIPT" "$destination/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$destination/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$destination/strix_evidence_binding.py"
+	chmod +x "$destination/strix_quick_gate.sh"
+}
+
 FAILURES=0
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
 TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
@@ -492,6 +500,8 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 assert_strix_evidence_binding_contract() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
 	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" 'local binder="$SCRIPT_DIR/strix_evidence_binding.py"' "strix gate resolves its trusted evidence binder from the central script directory"
+	assert_file_not_contains "$GATE_SCRIPT" 'local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"' "strix gate never resolves the trusted binder from the consumer repository root"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
@@ -3294,9 +3304,7 @@ run_gate_case() {
 	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src"
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$GATE_SCRIPT" "$gate_under_test"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$gate_under_test"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'
@@ -3363,6 +3371,20 @@ fi
 printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
+
+emit_success_report() {
+	local status="$?"
+	if [ "$status" -eq 0 ] && [ "${FAKE_STRIX_EMIT_STRUCTURED_REPORT:-1}" = "1" ]; then
+		mkdir -p "$STRIX_REPORTS_DIR/fake-success"
+		cat >"$STRIX_REPORTS_DIR/fake-success/penetration_test_report.md" <<'REPORT'
+# Penetration Test Report
+
+Vulnerabilities: 0
+REPORT
+	fi
+	exit "$status"
+}
+trap emit_success_report EXIT
 
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
@@ -7024,9 +7046,7 @@ run_pull_request_target_head_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7086,6 +7106,12 @@ else
 		exit 68
 	fi
 fi
+mkdir -p "${STRIX_REPORTS_DIR:?}/fake-success"
+cat >"${STRIX_REPORTS_DIR:?}/fake-success/penetration_test_report.md" <<'REPORT'
+# Penetration Test Report
+
+Vulnerabilities: 0
+REPORT
 echo "scan ok with PR head content"
 EOF
 	chmod +x "$fake_strix"
@@ -7172,9 +7198,7 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7294,9 +7318,7 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7399,9 +7421,7 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7578,9 +7598,7 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7837,9 +7855,7 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8027,9 +8043,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$origin_repo_dir" "$repo_root_dir/scripts/ci"
 
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8142,9 +8156,7 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local real_git
 	real_git="$(command -v git)"
@@ -8266,9 +8278,7 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8359,9 +8369,7 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8442,9 +8450,7 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8524,9 +8530,7 @@ run_full_head_scope_skips_gitlink_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8638,9 +8642,7 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8730,9 +8732,7 @@ run_timeout_cleanup_case() {
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 	local fake_strix="$bin_dir/strix"
 	local child_pid_file="$tmp_dir/child.pid"
 	local output_log="$tmp_dir/output.log"
@@ -8812,9 +8812,7 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -8864,9 +8862,7 @@ run_total_timeout_case() {
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
 	local call_count_file="$tmp_dir/calls.log"
@@ -9191,9 +9187,7 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9246,9 +9240,7 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
 	printf '%s\n' 'print("two")' >"$repo_root_dir/src/two.py"
 
@@ -9307,9 +9299,7 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 	local outside_file="$outside_dir/${file_env}.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9377,9 +9367,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 	local llm_api_base_file="$explicit_input_root/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9431,9 +9419,7 @@ run_stale_report_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	mkdir -p "$stale_report_dir"
 	cat >"$stale_report_dir/vuln-0001.md" <<'EOF'
@@ -9486,9 +9472,7 @@ run_symlink_report_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	mkdir -p "$external_report_dir" "$repo_root_dir/strix_runs"
 	cat >"$external_report_dir/vuln-0001.md" <<'EOF'
@@ -9542,9 +9526,7 @@ run_unsafe_target_path_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9590,9 +9572,7 @@ run_absolute_outside_target_path_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	install_gate_fixture "$repo_root_dir/scripts/ci"
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
 	local output_log="$tmp_dir/output.log"
