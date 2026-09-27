@@ -132,7 +132,11 @@ def test_gate_jobs_run_on_ubuntu_24_04():
     """Every `changed-scope` job must use the non-starved pinned image."""
     for filename in GATE_WORKFLOWS:
         block = _top_level_job_block(_read(filename), "changed-scope")
-        assert "runs-on: ubuntu-24.04" in block, filename
+        if filename == "opencode-review.yml":
+            assert "group: CWL central control" in block, filename
+            assert "labels: [self-hosted, linux, x64]" in block, filename
+        else:
+            assert "runs-on: ubuntu-24.04" in block, filename
         assert "runs-on: ubuntu-latest" not in block, filename
 
 
