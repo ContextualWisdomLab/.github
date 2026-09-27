@@ -1,3 +1,19 @@
+### Exact native-link review is bound before release verdict sealing
+
+- Release wheel and build-interpreter native links now fail closed unless each
+  target is a reviewed operating-system, interpreter, self-install-name, or
+  named external runtime. The immutable report advances to
+  `cwl.release-native-links/2` and records the review basis beside every needed
+  library. Concurrent coverage work was preserved by an ordinary two-parent
+  merge, including its exact Maturin release-asset verifier. That integration
+  first reproduced a 99% coverage failure with 22 missing statements and 10
+  partial branches; behavior contracts now cover bounded downloads, archive
+  shapes, executable identity, native-link review, CLI dispatch, and prescreen
+  rejection paths. Current-tree evidence is 4,049 passed, 8 skipped, and 40
+  subtests passed; all 17,302 production statements and 7,058 branches are
+  covered. Ruff E9/F/I, compileall, and diff checks also pass. Hosted exact-head
+  Checks and independent review remain required before admission.
+
 ### Native release prescreen coverage remains fail-closed
 
 - Added behavior-level contracts for directory entries, cached analyzer reuse, oversized and unreadable native members, build-snapshot files omitted from package receipts, runtime wheels with unknown dynamic links, and malformed static-link evidence. This repairs the coverage regression introduced when runtime wheels and build-interpreter snapshots began using the pinned native-link analyzer. The exact-tree suite is 4,037 passed, 8 skipped, and 40 subtests passed; all 17,186 production statements and 7,000 branches are covered. Release admission remains Draft/HOLD pending fresh exact-head hosted Checks and qualifying independent review.

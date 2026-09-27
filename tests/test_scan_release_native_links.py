@@ -1,6 +1,5 @@
 """The native scanner must retain each architecture and fail on partial output."""
 
-from pathlib import Path
 import hashlib
 import json
 import runpy
@@ -8,9 +7,9 @@ import subprocess
 import sys
 import warnings
 import zipfile
+from pathlib import Path
 
 import pytest
-
 
 SCAN = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/ci/scan_release_native_links.py"))
 
@@ -143,6 +142,10 @@ def test_release_link_review_accepts_only_named_external_runtimes():
                   "x86_64-pc-windows-msvc-py3.14", member)["kind"] == "interpreter-runtime"
     assert review("api-ms-win-core-synch-l1-2-0.dll", "x86_64-pc-windows-msvc",
                   "x86_64-pc-windows-msvc-py3.14", member)["kind"] == "system-runtime"
+    assert review("VCRUNTIME140_1.dll", "x86_64-pc-windows-msvc",
+                  "x86_64-pc-windows-msvc-py3.14", member)["kind"] == "external-runtime"
+    with pytest.raises(ValueError, match="unreviewed native link"):
+        review("libc.so.6", "unsupported-target", "unsupported-py3.14", member)
     for target, name in (("x86_64-unknown-linux-gnu", "libmystery.so"),
                          ("universal2-apple-darwin", "@rpath/foreign.dylib"),
                          ("x86_64-pc-windows-msvc", "foreign.dll")):

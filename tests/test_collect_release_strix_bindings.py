@@ -14,11 +14,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.ci import collect_release_strix_bindings as collector
 from scripts.ci import release_dependency_gate as gate
 from scripts.ci.collect_release_strix_bindings import collect_bindings
-from scripts.ci import collect_release_strix_bindings as collector
 from tests.test_release_dependency_gate import REPOSITORY, SOURCE_SHA, build_capture
-
 
 CONTROL = "d" * 40
 RUN = 42

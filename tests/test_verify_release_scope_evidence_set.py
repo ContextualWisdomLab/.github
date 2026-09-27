@@ -610,6 +610,33 @@ def test_maturin_prescreen_refuses_missing_environment_and_denied_license(
         _maturin_tool(scope_row, artifact_folder)
 
 
+@pytest.mark.parametrize(("native_links", "message"), [
+    ([], "native links are missing"),
+    ([{"arch": "x86_64", "needed": ["foreign-runtime.so"]}], "maturin native links"),
+])
+def test_maturin_prescreen_refuses_missing_or_unreviewed_native_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native_links: list[dict[str, object]],
+    message: str,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = scope_rows[0]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    evidence = json.loads(Path(prescreen_module.__file__).with_name(
+        "release_maturin_tool_evidence.json"
+    ).read_text())
+    for asset in evidence["assets"].values():
+        asset["native_links"] = native_links
+    evidence_path = tmp_path / "release_maturin_tool_evidence.json"
+    evidence_path.write_text(json.dumps(evidence))
+    monkeypatch.setattr(
+        prescreen_module, "__file__", str(tmp_path / Path(prescreen_module.__file__).name)
+    )
+    with pytest.raises(gate.GateError, match=message):
+        _maturin_tool(scope_row, artifact_folder)
+
+
 def test_prescreen_refuses_malformed_scope_and_runtime_rows(tmp_path: Path) -> None:
     with pytest.raises(gate.GateError, match="verified scope evidence is incomplete"):
         prescreen({}, tmp_path)

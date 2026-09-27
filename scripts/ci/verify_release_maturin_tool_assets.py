@@ -7,11 +7,11 @@ import argparse
 import hashlib
 import io
 import json
-from pathlib import Path
 import sys
 import tarfile
-from urllib.request import Request, urlopen
 import zipfile
+from pathlib import Path
+from urllib.request import Request, urlopen
 
 try:
     from scripts.ci.release_dependency_gate import classify_platform_link

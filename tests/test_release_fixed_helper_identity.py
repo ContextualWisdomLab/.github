@@ -1,8 +1,8 @@
 """Execute the fixed-source guards with inert synthetic git responses."""
 import os
-from pathlib import Path
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 

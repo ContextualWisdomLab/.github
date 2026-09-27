@@ -6,14 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
-from pathlib import PurePosixPath
 import re
 import stat
 import subprocess
 import sys
 import tempfile
 import zipfile
+from pathlib import Path, PurePosixPath
 
 try:
     from scripts.ci.release_dependency_gate import classify_platform_link
