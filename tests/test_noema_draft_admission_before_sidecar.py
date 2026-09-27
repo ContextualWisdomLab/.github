@@ -28,6 +28,8 @@ REVIEWER_TOKEN = (
     " || steps.noema_oidc_token.outputs.token }}"
 )
 GATED_MODEL_STEPS = (
+    "Provision pinned Node.js for Noema document review",
+    "Set up lock-compatible sidecar Python",
     "Provision contextual-orchestrator review sidecar",
     "Provision local reviewed HWP document reader",
     "Prepare Noema model verdict",
@@ -70,7 +72,7 @@ def test_live_draft_step_reads_the_live_pull_request_with_the_reviewer_token() -
     assert REVIEWER_TOKEN in validate
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in step
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in validate
-    assert "jq -r '.draft == true'" in step
+    assert "jq -e -s" in step
     assert "set -e" not in step
     # Ruleset-launched runs never see ready_for_review, so neither this check
     # nor any trigger-level filter may trust the event's draft snapshot.
@@ -97,6 +99,7 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
     assert "needs.admit-current-head.outputs.admitted == 'true'" in redispatch
     assert "needs.noema-review.result == 'failure'" in redispatch
     assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in redispatch
+    assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in redispatch
     assert "if: always() && env.PR_NUMBER != ''" in workflow_step(
         workflow, "Upload contextual-orchestrator sidecar evidence"
     )
@@ -193,4 +196,13 @@ def test_ruleset_and_central_consumer_drafts_keep_existing_review_path(tmp_path:
         assert result.returncode == 0, result.stderr
         assert outputs == {"live_draft": "false"}
         assert "consumer must not enter" not in result.stderr
+        assert "skipped before sidecar provisioning" not in result.stdout
+
+
+def test_valid_draft_prefix_with_trailing_data_continues_review(tmp_path: Path) -> None:
+    """Only one completely parsed JSON object can authorize the Draft skip."""
+    for payload in ('{"draft":true} trailing-invalid', '{"draft":true}\n42', '{"draft":true}\n{"draft":true}'):
+        result, outputs = _run_draft_step(tmp_path, f"printf '%s' '{payload}'")
+        assert result.returncode == 0, result.stderr
+        assert outputs == {"live_draft": "false"}, payload
         assert "skipped before sidecar provisioning" not in result.stdout
