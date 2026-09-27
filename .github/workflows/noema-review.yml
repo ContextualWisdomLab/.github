@@ -368,12 +368,12 @@ jobs:
       id-token: write
       pull-requests: read
     outputs:
-      transport_capacity_unavailable: ${{ steps.noema_prepare.outputs.transport_capacity_unavailable }}
-      transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible }}
-      transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
-      transport_retry_next_attempt: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
-      provider_attempt_count: ${{ steps.noema_prepare.outputs.provider_attempt_count }}
-      transport_http_status: ${{ steps.noema_prepare.outputs.transport_http_status }}
+      transport_capacity_unavailable: ${{ steps.noema_prepare.outputs.transport_capacity_unavailable || steps.noema_sidecar_failure.outputs.transport_capacity_unavailable }}
+      transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible || steps.noema_sidecar_failure.outputs.transport_retry_eligible }}
+      transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds || steps.noema_sidecar_failure.outputs.transport_retry_delay_seconds }}
+      transport_retry_next_attempt: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt || steps.noema_sidecar_failure.outputs.transport_retry_next_attempt }}
+      provider_attempt_count: ${{ steps.noema_prepare.outputs.provider_attempt_count || steps.noema_sidecar_failure.outputs.provider_attempt_count }}
+      transport_http_status: ${{ steps.noema_prepare.outputs.transport_http_status || steps.noema_sidecar_failure.outputs.transport_http_status }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
@@ -775,6 +775,7 @@ jobs:
           update-environment: false
 
       - name: Provision contextual-orchestrator review sidecar
+        id: noema_sidecar
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
@@ -786,7 +787,19 @@ jobs:
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
           set -euo pipefail
+          test ! -L "$GITHUB_WORKSPACE/strix_runs"
+          rm -f "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
+      - name: Classify sidecar provider-capacity failure
+        id: noema_sidecar_failure
+        if: failure() && steps.noema_sidecar.outcome == 'failure'
+        env:
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ci/noema_preflight_capacity.py" \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --preflight-report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
 
       - name: Provision local reviewed HWP document reader
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
