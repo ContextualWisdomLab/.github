@@ -241,11 +241,12 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
 
 @pytest.mark.parametrize("mutation", [None, "changed-notice", "missing-notice", "symlink-notice",
                                       "wrong-upstream", "wrong-notice-digest", "captured-choice",
-                                      "wrong-archive", "no-source", "truncated-notice"])
+                                      "wrong-archive", "no-source", "truncated-notice", "missing-input-grant"])
 @pytest.mark.parametrize("package,version,repository,upstream_commit", [
     ("profiling", "1.0.18", "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9"),
     ("jni-sys-macros", "0.4.1", "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6"),
     ("gl_generator", "0.14.0", "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e"),
+    ("spirv", "0.4.0+sdk-1.4.341.0", "gfx-rs/rspirv", "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4"),
 ])
 def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, package, version, repository, upstream_commit):
     import os
@@ -257,31 +258,42 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     archive_sha = hashlib.sha256(raw).hexdigest()
     source = (tmp_path / "source").resolve()
     source.mkdir()
-    chosen = "Apache-2.0" if package == "gl_generator" else "MIT"
-    expression = "Apache-2.0" if package == "gl_generator" else "MIT OR Apache-2.0"
+    chosen = ("Apache-2.0 AND MIT-Khronos-old" if package == "spirv" else
+              "Apache-2.0" if package == "gl_generator" else "MIT")
+    expression = "Apache-2.0" if package in {"gl_generator", "spirv"} else "MIT OR Apache-2.0"
     names = ("LICENSE",) if package == "gl_generator" else ("LICENSE-MIT", "LICENSE-APACHE")
-    grant_content = b"\n\n".join(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode() for name in names)
-    content = ((ROOT / "gl_generator-0.14.0-complete-notice.txt").read_bytes()
-               if package == "gl_generator" else grant_content)
-    notice_path = f"python/fast_mlsirm/_licenses/{package}-{version}-{chosen}.txt"
+    if package == "spirv":
+        grant_content = TEXTS["spirv-upstream-APACHE.txt"].encode()
+        upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/LICENSE",
+                     "sha256": hashlib.sha256(grant_content).hexdigest()},
+                    {"url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/LICENSE",
+                     "sha256": hashlib.sha256((ROOT / "spirv-generator-LICENSE").read_bytes()).hexdigest()}]
+    else:
+        grant_content = b"\n\n".join(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode() for name in names)
+        upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
+                     "sha256": hashlib.sha256(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode()).hexdigest()}
+                    for name in names]
+    content = ((ROOT / f"{package}-{version}-complete-notice.txt").read_bytes()
+               if package in {"gl_generator", "spirv"} else grant_content)
+    notice_path = f"python/fast_mlsirm/_licenses/{package}-{version}.txt"
     notice = source / notice_path
     notice.parent.mkdir(parents=True)
     notice.write_bytes(content)
     choice = {"ecosystem": "cargo", "name": package, "version": version, "chosen": chosen,
               "rationale": "Preserve exact immutable upstream grants in release source.", "archive_sha256": archive_sha,
               "bundled_notice": {"path": notice_path, "sha256": hashlib.sha256(content).hexdigest()},
-              "upstream_licenses": [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
-                                     "sha256": hashlib.sha256(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode()).hexdigest()}
-                                    for name in names]}
+              "upstream_licenses": upstream}
     if mutation == "changed-notice":
         notice.write_bytes(content + b"Commercial use prohibited.")
     elif mutation == "truncated-notice":
-        notice.write_bytes(grant_content if package == "gl_generator" else content[:-1])
+        notice.write_bytes(grant_content if package in {"gl_generator", "spirv"} else content[:-1])
     elif mutation == "missing-notice":
         notice.unlink()
     elif mutation == "symlink-notice":
         notice.unlink()
         os.symlink("/missing", notice)
+    elif mutation == "missing-input-grant":
+        choice["upstream_licenses"].pop()
     elif mutation == "wrong-upstream":
         choice["upstream_licenses"][0]["url"] = "https://example.invalid/LICENSE-MIT"
     elif mutation == "wrong-notice-digest":
@@ -330,3 +342,22 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
         assert row["license_member_sha256"] == {}
         assert row["source_license_notice"]["source_sha"] == sha
         assert row["source_license_notice"]["upstream_licenses"] == choice["upstream_licenses"]
+
+
+@pytest.mark.parametrize("mutation", [None, "apache-only", "missing-input-grant", "changed-input-grant"])
+def test_spirv_generated_input_obligation_is_independent(mutation):
+    """A complete Apache grant cannot replace the generated-input grant."""
+    raw = (ROOT / "spirv-0.4.0+sdk-1.4.341.0.crate").read_bytes()
+    evidence = {**gate.archive_license_evidence(raw, "cargo"), "ecosystem": "cargo", "license": "Apache-2.0"}
+    evidence["license_texts"] = {"upstream/Apache": TEXTS["spirv-upstream-APACHE.txt"],
+                               "upstream/Khronos": TEXTS["spirv-Khronos-applicable-grant.txt"]}
+    selected = "Apache-2.0 AND MIT-Khronos-old"
+    if mutation == "apache-only":
+        selected = "Apache-2.0"
+    elif mutation == "missing-input-grant":
+        del evidence["license_texts"]["upstream/Khronos"]
+    elif mutation == "changed-input-grant":
+        evidence["license_texts"]["upstream/Khronos"] += "Commercial redistribution prohibited."
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, "cargo/spirv@0.4.0+sdk-1.4.341.0", {"chosen": selected, "rationale": "Retain both grants."})
+    assert (decision.allowed and not failures) == (mutation is None)

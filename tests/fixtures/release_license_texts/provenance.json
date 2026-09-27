@@ -1582,5 +1582,219 @@
         "gl-rs-ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE"
       ]
     }
+  },
+  {
+    "package": "spirv@0.4.0+sdk-1.4.341.0 generated-input grant",
+    "fixture": "spirv-Khronos-applicable-grant.txt",
+    "identifier": "MIT-Khronos-old",
+    "raw_sha256": "96edbe52ad48e33f07bf4a492a6a7a265a9ec89f044b8651d6115d4d1ff1a74b",
+    "normalized_sha256": "e4d81631c40aa04e87d3aea8b865656c1df7492065b8bb5e554e970bb554369b",
+    "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/LICENSE",
+    "upstream_file_sha256": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613",
+    "upstream_file_byte_range": [
+      0,
+      1361
+    ],
+    "scope": "Files: All files except for those called out below. No consumed JSON is in the XML, JsonCpp or documentation exceptions.",
+    "source_members": [
+      {
+        "member": "spirv-0.4.0+sdk-1.4.341.0/Cargo.toml.orig",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/spirv/Cargo.toml",
+        "sha256": "4d19e7aaeba0b0dd52eaa00bb592dfc6015813385fc47badcee396c353cc1d61",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "spirv-0.4.0+sdk-1.4.341.0/README.md",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/spirv/README.md",
+        "sha256": "af6ace1b0c00e63c3dd0af5754fb33512005f3709b7a621cc7ed184656ee4c14",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "spirv-0.4.0+sdk-1.4.341.0/autogen_spirv.rs",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/spirv/autogen_spirv.rs",
+        "sha256": "2260b34bd7b8a757be33f835ecc7431f7b791c39e9fa30a0acf47c03ae60b436",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "spirv-0.4.0+sdk-1.4.341.0/lib.rs",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/spirv/lib.rs",
+        "sha256": "54127a130c4ef2cdbf7882a1cd6ebde88ae09b755bd8a1c086e21101da9684e9",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "spirv-0.4.0+sdk-1.4.341.0/release.toml",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/spirv/release.toml",
+        "sha256": "a9c4eb6eaa1b3b8eb7ff742ec4963be32ec1ec7664c8a52218cc74898bad3ec4",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "generator_inputs": [
+      {
+        "path": "include/spirv/unified1/extinst.arm.motion-engine.100.grammar.json",
+        "sha256": "86fb7c418bc660338068ebe43409371e10cb78ecca83f9347c601b0b68ab8695",
+        "copyright": [
+          "SPDX-FileCopyrightText: 2022-2025 Arm Ltd.",
+          "SPDX-License-Identifier: MIT"
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.arm.motion-engine.100.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.debuginfo.grammar.json",
+        "sha256": "3f6b26f7e930ebf27524991c15366a278d7f0a73a8eb70b9e9503375c4a341b6",
+        "copyright": [
+          "Copyright: 2017-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS",
+          "STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND",
+          "HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ ",
+          ""
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.debuginfo.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.glsl.std.450.grammar.json",
+        "sha256": "5d72e48247569f9b77a17a849db624350abc9d26f7f72b153bbcf15c37238239",
+        "copyright": [
+          "Copyright (c) 2014-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS",
+          "STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND",
+          "HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ ",
+          ""
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.glsl.std.450.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.nonsemantic.clspvreflection.grammar.json",
+        "sha256": "425414766ed0b387f05e30a57b74cfcc6288d07b23d61b86befa118c1d73d4d8",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.nonsemantic.clspvreflection.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.nonsemantic.debugbreak.grammar.json",
+        "sha256": "1d30fb3a054592f8d749dff42ad4aa4f695bd5f0d4a9cadc70694a1d0cafe23b",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.nonsemantic.debugbreak.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.nonsemantic.debugprintf.grammar.json",
+        "sha256": "e23844cf66431dcd1d50d23b84cd45a07b16c4cdb0262ed9b32f7b9331131a89",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.nonsemantic.debugprintf.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.nonsemantic.shader.debuginfo.100.grammar.json",
+        "sha256": "a057349c3902dce992c6f70a685812e84b019a823efbbaf8d81c276e86a12de7",
+        "copyright": [
+          "Copyright: 2018-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS",
+          "STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND",
+          "HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ ",
+          ""
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.nonsemantic.shader.debuginfo.100.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.nonsemantic.vkspreflection.grammar.json",
+        "sha256": "5479df05d87a80d84031fe8837908fb66b02b8f07f5cdb43b06005534d749200",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.nonsemantic.vkspreflection.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.opencl.debuginfo.100.grammar.json",
+        "sha256": "a0e0d510c7206ae98fc76b42756009991d56d2caa84f151165002806cdc9b222",
+        "copyright": [
+          "Copyright: 2018-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS",
+          "STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND",
+          "HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ ",
+          ""
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.opencl.debuginfo.100.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.opencl.std.100.grammar.json",
+        "sha256": "44b752999f78f8161ee52a9d305b14576ad7ed0a81a10d28870b7cd0ba5788a4",
+        "copyright": [
+          "Copyright: 2014-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS",
+          "STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND",
+          "HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ ",
+          ""
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.opencl.std.100.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.spv-amd-gcn-shader.grammar.json",
+        "sha256": "ffb7b0f755f774c1fefd92ffc46a4790ac5bce3b1bc366676637186fd1ddfeb6",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.spv-amd-gcn-shader.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.spv-amd-shader-ballot.grammar.json",
+        "sha256": "823b90a85ba6a516def3db45c6b37ecdaba56263f9f7867c8c5432a0d2597395",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.spv-amd-shader-ballot.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.spv-amd-shader-explicit-vertex-parameter.grammar.json",
+        "sha256": "c022b2c0b337d20951b9076ac0b6ec1ea512b2964051fc3ade04cbb70146ac8b",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.spv-amd-shader-explicit-vertex-parameter.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.spv-amd-shader-trinary-minmax.grammar.json",
+        "sha256": "7702f8d593e435f4f294d7a98cd9672b13efaa433a34a037698a285adfd84158",
+        "copyright": [],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.spv-amd-shader-trinary-minmax.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/extinst.tosa.001000.1.grammar.json",
+        "sha256": "fb028a301e201afb61387b331a664b30790ffb2d2d2ecf81e09f2b63301e607c",
+        "copyright": [
+          "SPDX-FileCopyrightText: 2022-2025 Arm Ltd.",
+          "SPDX-License-Identifier: MIT"
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/extinst.tosa.001000.1.grammar.json"
+      },
+      {
+        "path": "include/spirv/unified1/spirv.core.grammar.json",
+        "sha256": "508e6677e27b0b58eac8395aa49a90ac1766a8d392c247a0aba7b03f4fdd85b9",
+        "copyright": [
+          "Copyright: 2014-2024 The Khronos Group Inc.",
+          "License: MIT",
+          "",
+          "MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS",
+          "KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS",
+          "SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT",
+          "https://www.khronos.org/registry/"
+        ],
+        "upstream_url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/spirv.core.grammar.json"
+      }
+    ],
+    "complete_notice_sha256": "fb183918865585d4d2443f1425d54374b6746b6c66f5c103a25ef0d569b8c90e",
+    "spdx_basis": "https://spdx.org/licenses/MIT-Khronos-old.html",
+    "spdx_comparison": "Full permission, retention, standards disclaimer and warranty clauses read. Copyright and layout differ; this fixture is recognized only by its entire own digest. Original Arm MIT markers are retained verbatim, not relabeled as Khronos markers.",
+    "limitation": "Source correspondence and generator input scope, not regeneration or Strix acceptance. Original crate contains no complete grant. Separate immutable Git notice proof is mandatory.",
+    "generator_sources": [
+      {
+        "path": "autogen/src/main.rs",
+        "sha256": "37e17f18e10889bd3fb31b1156d5fec5250cdc316ad0031d737124edefd9f33b",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/autogen/src/main.rs"
+      },
+      {
+        "path": "autogen/src/header.rs",
+        "sha256": "a852973aa9ae498437e2280d32a302fc3e4b1d8647b1b5b6a3deb72fabff1828",
+        "upstream_url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/autogen/src/header.rs"
+      }
+    ]
   }
 ]

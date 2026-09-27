@@ -1084,13 +1084,23 @@ def evaluate_dependency_license(
     if libm_scope:
         expression = "MIT AND BSD-2-Clause AND SunPro"
         source = "Cargo declaration plus exact archived file-specific grants"
+    spirv_scope = (evidence.get("ecosystem") == "cargo"
+                   and subject == "cargo/spirv@0.4.0+sdk-1.4.341.0"
+                   and evidence.get("source_sha256") == "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
+                   and expression == "Apache-2.0")
+    if spirv_scope:
+        # Exact upstream generator consumes core and all 15 extension grammars.
+        # Khronos LICENSE explicitly covers every JSON; retain original input
+        # notices (including Arm's MIT markers) without relabeling those markers.
+        expression = "Apache-2.0 AND MIT-Khronos-old"
+        source = "Cargo declaration plus exact generated-input grant scope"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
         rationale=(selection or {}).get("rationale"),
     )
     failures: list[Failure] = []
-    if ((libm_scope or source == "Cargo declaration plus exact archived Unicode data grant")
+    if ((libm_scope or spirv_scope or source == "Cargo declaration plus exact archived Unicode data grant")
             and decision.allowed and (selection or {}).get("chosen") != decision.selected):
         failures.append(Failure(LICENSE_SELECTION_INVALID, subject,
                                 "selection must explicitly retain every independent third-party obligation"))
@@ -1987,6 +1997,13 @@ _REVIEWED_SOURCE_NOTICES = {
         "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
         "305ae3699231206e6368f716edf58b71162813708f7e5f7316ecb7b821ffcf31", {"Apache-2.0"},
         (("LICENSE", 11358, "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"),)),
+    "cargo/spirv@0.4.0+sdk-1.4.341.0": (
+        "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f",
+        "gfx-rs/rspirv", "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+        "fb183918865585d4d2443f1425d54374b6746b6c66f5c103a25ef0d569b8c90e", {"Apache-2.0 AND MIT-Khronos-old"},
+        (("LICENSE", 11358, "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"),
+         ("https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/LICENSE", 23503,
+          "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613"))),
 }
 
 
@@ -2028,7 +2045,8 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
     if len(matches) != 1:
         raise GateError(LICENSE_TEXT_MISSING, f"source lacks one explicit notice selection: {subject}")
     choice = matches[0]
-    upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
+    upstream = [{"url": (name if name.startswith("https://") else
+                         f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}"),
                  "sha256": sha} for name, _, sha in grants]
     notice = choice.get("bundled_notice", {})
     path = notice.get("path") if isinstance(notice, Mapping) else None
@@ -2056,7 +2074,14 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
             raise GateError(SOURCE_HASH_MISMATCH, "reviewed source grant bytes differ from immutable upstream")
         parts.append(part)
         offset += size
-    return ({row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)},
+    texts = {row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)}
+    if subject == "cargo/spirv@0.4.0+sdk-1.4.341.0":
+        # This exact multi-scope file grants all JSONs in its first section.
+        # Later sections are explicitly scoped to XML, JsonCpp and docs, none of
+        # which enter spirv's generator. The complete file remains in the notice
+        # and upstream proof; only its byte-bound applicable grant is evaluated.
+        texts[upstream[1]["url"]] = parts[1][:1361].decode("utf-8")
+    return (texts,
             {"source_sha": source_sha, "path": path, "sha256": digest,
              "archive_sha256": evidence["source_sha256"], "upstream_commit": upstream_commit,
              "upstream_licenses": upstream})
