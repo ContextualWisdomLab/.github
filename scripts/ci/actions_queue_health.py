@@ -153,7 +153,8 @@ def collect_snapshot(
                     workflow_runs = _list_payload(
                         github_json(
                             f"repos/{repository_name}/actions/runs?status={workflow_status}"
-                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}"
+                            f"&created={quote('<=' + snapshot_timestamp, safe='')}",
                             paginate=True,
                             max_pages=ACTIVE_RUN_MAX_API_PAGES,
                             runner=runner,

@@ -126,3 +126,10 @@ https://www.rfc-editor.org/rfc/rfc9110
 
 OWASP Foundation. (n.d.). *Path traversal*. Retrieved August 20, 2026, from
 https://owasp.org/www-community/attacks/Path_Traversal
+
+Active-run pagination fixes its upper creation bound to the report's
+`generated_at` timestamp with GitHub's native `created<=timestamp` filter.
+Runs created later belong to the next collection; they cannot shift the
+current pages. Both opposite-order sweeps use the same bound. Status changes,
+duplicate IDs, page overflow, and PR identity changes still reject incomplete
+evidence. Terminal diagnostics retain their existing head-specific queries.

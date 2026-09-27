@@ -4,6 +4,7 @@ import importlib.util
 from datetime import datetime, timezone
 import io
 import json
+import re
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 
@@ -16,6 +17,11 @@ SPEC = importlib.util.spec_from_file_location("actions_queue_health", MODULE_PAT
 assert SPEC and SPEC.loader
 queue_health = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(queue_health)
+
+
+def api_fixture_path(path: str) -> str:
+    """Ignore only the independently tested created filter in endpoint fixtures."""
+    return re.sub(r"&created=[^&]*", "", path)
 
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
@@ -527,7 +533,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = responses[args[-1]]
+        payload = responses[api_fixture_path(args[-1])]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -550,7 +556,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def bad_metadata_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return malformed repository metadata for the isolation case."""
-        payload = bad_responses[args[-1]]
+        payload = bad_responses[api_fixture_path(args[-1])]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -566,7 +572,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def invalid_run_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return an invalid workflow-run identity for the isolation case."""
-        payload = invalid_run_responses[args[-1]]
+        payload = invalid_run_responses[api_fixture_path(args[-1])]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -585,8 +591,8 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one incomplete pull response followed by a valid response."""
         nonlocal retry_calls
-        requested_paths.append(args[-1])
-        payload = responses[args[-1]]
+        requested_paths.append(api_fixture_path(args[-1]))
+        payload = responses[api_fixture_path(args[-1])]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [bad_pull] if retry_calls == 1 else payload
@@ -614,7 +620,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         payload = (
             [bad_pull]
             if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
-            else responses[args[-1]]
+            else responses[api_fixture_path(args[-1])]
         )
         if "--paginate" in args:
             payload = [payload]
@@ -633,7 +639,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         payload = (
             [bad_number]
             if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
-            else responses[args[-1]]
+            else responses[api_fixture_path(args[-1])]
         )
         if "--paginate" in args:
             payload = [payload]
@@ -672,7 +678,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one empty-identity pull response followed by a complete one."""
         nonlocal retry_calls
-        payload = responses[args[-1]]
+        payload = responses[api_fixture_path(args[-1])]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [empty_identity_pull] if retry_calls == 1 else payload
@@ -691,7 +697,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         payload = (
             [empty_identity_pull]
             if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
-            else responses[args[-1]]
+            else responses[api_fixture_path(args[-1])]
         )
         if "--paginate" in args:
             payload = [payload]
@@ -736,7 +742,7 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = responses[args[-1]]
+        payload = responses[api_fixture_path(args[-1])]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -752,7 +758,7 @@ def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evid
     """Continue healthy collection while recording one repository's failure."""
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return a rate-limit failure for one repository and valid data for another."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/bad/repo":
             return CompletedProcess(args, 1, "", "rate limit")
         if path == "repos/good/repo":
@@ -807,7 +813,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return empty bounded run pages and record the requested endpoints."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         requested_paths.append(path)
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
@@ -862,7 +868,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
     def changing_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Expose a queue transition between the two bounded status sweeps."""
         nonlocal queued_reads
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":

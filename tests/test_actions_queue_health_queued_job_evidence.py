@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 import importlib.util
 import json
+
+from tests.test_actions_queue_health import api_fixture_path
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -79,7 +81,7 @@ def test_queued_current_head_fetches_job_evidence_and_uses_job_queue_start() -> 
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic REST payloads and retain the exact evidence reads."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         requested_paths.append(path)
         if path not in responses:
             raise AssertionError(f"unexpected endpoint: {path}")

@@ -8,6 +8,8 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from tests.test_actions_queue_health import api_fixture_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
@@ -54,7 +56,7 @@ def _runner_with_pull_transition(final_pulls: list[dict]):
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Serve metadata, pull identities, and empty active-run partitions."""
         nonlocal pull_reads
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":

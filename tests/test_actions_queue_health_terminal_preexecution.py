@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 import importlib.util
 import json
+
+from tests.test_actions_queue_health import api_fixture_path
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -76,7 +78,7 @@ def test_terminal_preexecution_failure_survives_collection_and_is_not_product_fa
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic GitHub REST payloads for the regression specimen."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path not in responses:
             raise AssertionError(f"unexpected endpoint: {path}")
         return CompletedProcess(args, 0, json.dumps(responses[path]), "")

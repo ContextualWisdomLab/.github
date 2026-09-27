@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+
+from tests.test_actions_queue_health import api_fixture_path
 from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -82,7 +84,7 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment(monk
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic GitHub REST fixtures for the collector."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
@@ -195,7 +197,7 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Model GitHub target runs whose run-level SHA is the base commit."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
@@ -285,7 +287,7 @@ def test_collect_snapshot_rejects_head_change_after_target_evidence_read() -> No
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Advance the PR head only after terminal/job evidence has been read."""
         nonlocal pull_read_count
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
