@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
 SPEC = importlib.util.spec_from_file_location("actions_queue_health", MODULE_PATH)

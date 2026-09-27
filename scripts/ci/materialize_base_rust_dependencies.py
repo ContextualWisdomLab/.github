@@ -260,9 +260,11 @@ def materialize(
         primary_root, *additional_roots = vendor_roots
 
         def _manifest_for(root: str, base: pathlib.Path) -> pathlib.Path:
+            """Return the reconstructed manifest path for one validated root."""
             return base / ("Cargo.toml" if root == "." else f"{root}/Cargo.toml")
 
         def _lock_for(root: str) -> str:
+            """Return the repository-relative lock path for one validated root."""
             return "Cargo.lock" if root == "." else f"{root}/Cargo.lock"
 
         with tempfile.TemporaryDirectory() as work_dir:

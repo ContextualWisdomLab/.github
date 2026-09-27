@@ -1,11 +1,10 @@
 """Regression contracts for terminal failures that never obtained a runner."""
 
-from datetime import datetime, timezone
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
