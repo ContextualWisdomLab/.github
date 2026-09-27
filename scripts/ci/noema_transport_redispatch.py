@@ -68,5 +68,3 @@ def append_github_output(values: dict[str, str]) -> None:
             if any(ch in value for ch in ("\n", "\r", "\0")):
                 continue
             handle.write(f"{key}={value}\n")
-
-
