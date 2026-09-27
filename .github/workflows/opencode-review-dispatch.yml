@@ -454,6 +454,15 @@ jobs:
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
+          # Persistent runners retain old files and Git configuration between jobs.
+          if [ -z "${GITHUB_WORKSPACE:-}" ] || [ -z "${RUNNER_WORKSPACE:-}" ] ||
+            [ -L "$GITHUB_WORKSPACE" ] || [ "$RUNNER_WORKSPACE" = / ] ||
+            [ "$(realpath "$GITHUB_WORKSPACE")" != "$(pwd -P)" ] ||
+            [ "$(dirname "$(realpath "$GITHUB_WORKSPACE")")" != "$(realpath "$RUNNER_WORKSPACE")" ]; then
+            echo "::error::Coverage workspace is outside the current runner job directory."
+            exit 1
+          fi
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
           git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
