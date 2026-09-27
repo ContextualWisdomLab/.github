@@ -144,6 +144,8 @@ STRIX_BINDING_UNBOUND = "STRIX_BINDING_UNBOUND"
 STRIX_TEXTUAL_PASS_REJECTED = "STRIX_TEXTUAL_PASS_REJECTED"
 STRIX_FINDINGS_OPEN = "STRIX_FINDINGS_OPEN"
 STRIX_MATRIX_LIMIT = 256
+# ponytail: two native matrices cover 512 fixtures; add another only if a real full set exceeds this.
+STRIX_PLAN_LIMIT = 2 * STRIX_MATRIX_LIMIT
 STRIX_MATRIX_OUTPUT_MAX_BYTES = 512 * 1024
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -2028,6 +2030,19 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
     return report
 
 
+
+def _strix_matrix_outputs(planned: list[dict[str, Any]]) -> dict[str, str]:
+    """Partition the full plan while bounding GitHub's combined UTF-16 job output."""
+    outputs = {
+        "matrix_json": json.dumps({"include": planned[:STRIX_MATRIX_LIMIT]}, separators=(",", ":")),
+        "matrix_overflow_json": json.dumps({"include": planned[STRIX_MATRIX_LIMIT:]}, separators=(",", ":")),
+        "has_overflow": "true" if len(planned) > STRIX_MATRIX_LIMIT else "false",
+    }
+    if sum(len((key + value).encode("utf-16-le")) for key, value in outputs.items()) > 2 * STRIX_MATRIX_OUTPUT_MAX_BYTES:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix exceeds the bounded job output")
+    return outputs
+
+
 def strix_fanout_plan(
     capture_root: Path,
     license_report: Path,
@@ -2054,8 +2069,8 @@ def strix_fanout_plan(
             or type(run_attempt) is not int or run_attempt <= 0):
         raise GateError(CAPTURE_INCOMPLETE, "fanout execution identity is invalid")
     rows = report.get("dependencies")
-    if not isinstance(rows, list) or not 1 <= len(rows) <= STRIX_MATRIX_LIMIT:
-        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix is empty or exceeds 256 jobs")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= STRIX_PLAN_LIMIT:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency plan is empty or exceeds 512 jobs")
     fixtures = capture / "strix" / "fixtures"
     if fixtures.is_symlink() or not fixtures.is_dir():
         raise GateError(CAPTURE_INCOMPLETE, "fixture directory is unavailable")
@@ -2128,12 +2143,13 @@ def strix_fanout_plan(
                             origin: {"package_key": row["package_key"],
                                      "source_sha256": source_hash}})
             keys.add(key)
-    if (len(planned) > STRIX_MATRIX_LIMIT or len({item["slug"] for item in planned}) != len(planned)
+    if len(planned) > STRIX_PLAN_LIMIT:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency plan exceeds 512 jobs")
+    if (len({item["slug"] for item in planned}) != len(planned)
             or {entry.name for entry in fixtures.iterdir()} != base_members
             or any(entry.is_symlink() or not entry.is_file() for entry in fixtures.iterdir())):
         raise GateError(SCOPE_SET_MISMATCH, "fixture directory differs from the exact licence set")
-    if len(json.dumps({"include": planned}, separators=(",", ":")).encode()) > STRIX_MATRIX_OUTPUT_MAX_BYTES:
-        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix exceeds the bounded job output")
+    _strix_matrix_outputs(planned)
     result = {
         "schema": "cwl.release-strix-fanout-plan/1",
         "source_repository": repository,
@@ -2686,9 +2702,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if path.exists() or path.is_symlink():
                 raise GateError(CAPTURE_INCOMPLETE, "fanout plan output already exists")
             path.write_text(json.dumps(plan, sort_keys=True) + "\n", encoding="utf-8")
-            matrix = {"include": plan["dependencies"]}
-            write_github_output({"matrix_json": json.dumps(matrix, separators=(",", ":"))}, destination)
-            print(json.dumps(matrix, sort_keys=True))
+            write_github_output(_strix_matrix_outputs(plan["dependencies"]), destination)
+            print(json.dumps(plan, sort_keys=True))
             return 0
         if args.command in {"gate", "prescreen"}:
             stage = FULL_STAGE if args.command == "gate" else LICENSE_STAGE

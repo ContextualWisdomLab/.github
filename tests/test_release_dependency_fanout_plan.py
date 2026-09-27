@@ -124,7 +124,10 @@ def test_fanout_cli_emits_one_bounded_matrix_output(tmp_path: Path, monkeypatch:
         "--control-sha", CONTROL, "--run-id", "42", "--run-attempt", "2",
         "--output", str(plan_path),
     ]) == 0
-    matrix = json.loads(output.read_text().removeprefix("matrix_json="))
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    matrix = json.loads(outputs["matrix_json"])
+    assert json.loads(outputs["matrix_overflow_json"]) == {"include": []}
+    assert outputs["has_overflow"] == "false"
     assert matrix["include"] == json.loads(plan_path.read_text())["dependencies"]
     assert len(matrix["include"]) <= gate.STRIX_MATRIX_LIMIT
 
@@ -134,3 +137,46 @@ def test_fanout_refuses_matrix_output_over_limit(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(gate, "STRIX_MATRIX_OUTPUT_MAX_BYTES", 1)
     with pytest.raises(gate.GateError, match="bounded job output"):
         gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2)
+
+
+@pytest.mark.parametrize("count", [256, 257, 512, 513])
+def test_complete_plan_is_partitioned_without_loss_or_duplicate(tmp_path, monkeypatch, count):
+    capture, report_path = _allowed(tmp_path)
+    report = json.loads(report_path.read_text())
+    fixtures = capture / "strix/fixtures"
+    template = json.loads(next(fixtures.glob("*.json")).read_text())
+    for file in fixtures.iterdir():
+        file.unlink()
+    rows = []
+    for index in range(count):
+        name = f"fixture-{index}"
+        key = f"pypi/{name}@1"
+        fixture = copy.deepcopy(template)
+        fixture["dependency"].update(ecosystem="pypi", name=name, version="1")
+        fixture["id"] = key
+        digest = gate.fixture_digest(fixture)
+        slug = gate._slug_for_key(key)
+        (fixtures / f"{slug}.json").write_text(json.dumps(fixture))
+        (fixtures / f"{slug}.sha256").write_text(digest + "\n")
+        rows.append({"key": key, "fixture_sha256": digest})
+    report["dependencies"] = rows
+    report_path.write_text(json.dumps(report))
+    output = tmp_path / "job-output.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    plan_path = tmp_path / "plan.json"
+    status = gate.main(["fanout-plan", "--capture", str(capture), "--license-report", str(report_path),
+                        "--control-sha", CONTROL, "--run-id", "42", "--run-attempt", "2",
+                        "--output", str(plan_path)])
+    if count > gate.STRIX_PLAN_LIMIT:
+        assert status != 0 and not plan_path.exists() and not output.exists()
+        return
+    assert status == 0
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    first, second = (json.loads(outputs[key])["include"]
+                     for key in ("matrix_json", "matrix_overflow_json"))
+    plan = json.loads(plan_path.read_text())["dependencies"]
+    assert first + second == plan
+    assert {row["key"] for row in plan} == {row["key"] for row in rows}
+    assert len(first) <= 256 and len(second) <= 256
+    assert len({row["artifact_name"] for row in first + second}) == count
+    assert outputs["has_overflow"] == ("true" if second else "false")
