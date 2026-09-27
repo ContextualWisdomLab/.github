@@ -3,27 +3,89 @@
     "aarch64-unknown-linux-gnu": {
       "asset_filename": "maturin-aarch64-unknown-linux-musl.tar.gz",
       "asset_sha256": "cd287a2c9dc69ab559670d245bfc9d3f5b0c9f184aa98ad0d8f826abc90c78dd",
-      "binary_sha256": "f48ead340837d0a36f7ec429b25c918121a294e40e8061740796297844238c1c"
+      "binary_sha256": "f48ead340837d0a36f7ec429b25c918121a294e40e8061740796297844238c1c",
+      "native_links": [
+        {
+          "arch": "aarch64",
+          "needed": []
+        }
+      ]
     },
     "universal2-apple-darwin/ARM64": {
       "asset_filename": "maturin-aarch64-apple-darwin.tar.gz",
       "asset_sha256": "d7a9ce82389e75aeaef8fdda43d35dbc956fac6a4b143a4c7b447b6ffadc7eaf",
-      "binary_sha256": "55b014193adf178c96c2b9d8c01f3f32dbf52d570338eb2d7a025444ad611532"
+      "binary_sha256": "55b014193adf178c96c2b9d8c01f3f32dbf52d570338eb2d7a025444ad611532",
+      "native_links": [
+        {
+          "arch": "aarch64",
+          "needed": [
+            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+            "/usr/lib/libSystem.B.dylib",
+            "/usr/lib/libiconv.2.dylib"
+          ]
+        }
+      ]
     },
     "universal2-apple-darwin/X64": {
       "asset_filename": "maturin-x86_64-apple-darwin.tar.gz",
       "asset_sha256": "d72809b92806a53bdc22074aeedc83af66f8bdb391e2c60bc72547c40ec10629",
-      "binary_sha256": "37a8e94a0552f29c3f13468d24fee81461a39d16b61357a30dae54c18379592d"
+      "binary_sha256": "37a8e94a0552f29c3f13468d24fee81461a39d16b61357a30dae54c18379592d",
+      "native_links": [
+        {
+          "arch": "x86_64",
+          "needed": [
+            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+            "/usr/lib/libSystem.B.dylib",
+            "/usr/lib/libiconv.2.dylib"
+          ]
+        }
+      ]
     },
     "x86_64-pc-windows-msvc": {
       "asset_filename": "maturin-x86_64-pc-windows-msvc.zip",
       "asset_sha256": "c645dc55f848205210552e77f744685c90c35ae81fd03e47a9887ebdc8ae8299",
-      "binary_sha256": "787779fa7f453d3444ac732689ad2bb8f1399b4d4e2af1ad9e00f84bb6460f07"
+      "binary_sha256": "787779fa7f453d3444ac732689ad2bb8f1399b4d4e2af1ad9e00f84bb6460f07",
+      "native_links": [
+        {
+          "arch": "x86_64",
+          "needed": [
+            "VCRUNTIME140.dll",
+            "advapi32.dll",
+            "api-ms-win-core-synch-l1-2-0.dll",
+            "api-ms-win-crt-heap-l1-1-0.dll",
+            "api-ms-win-crt-locale-l1-1-0.dll",
+            "api-ms-win-crt-math-l1-1-0.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll",
+            "api-ms-win-crt-stdio-l1-1-0.dll",
+            "api-ms-win-crt-string-l1-1-0.dll",
+            "bcrypt.dll",
+            "bcryptprimitives.dll",
+            "combase.dll",
+            "crypt32.dll",
+            "kernel32.dll",
+            "ntdll.dll",
+            "ole32.dll",
+            "oleaut32.dll",
+            "shell32.dll",
+            "userenv.dll",
+            "version.dll",
+            "ws2_32.dll"
+          ]
+        }
+      ]
     },
     "x86_64-unknown-linux-gnu": {
       "asset_filename": "maturin-x86_64-unknown-linux-musl.tar.gz",
       "asset_sha256": "5a7d5226e83598b0c85881a0a03be16393ee2c0924b6f9d752951795825ac806",
-      "binary_sha256": "7770f6d9cbe0497f69b9b60f001a9a92784767651658e778b9664e6ef9b8a29a"
+      "binary_sha256": "7770f6d9cbe0497f69b9b60f001a9a92784767651658e778b9664e6ef9b8a29a",
+      "native_links": [
+        {
+          "arch": "x86_64",
+          "needed": []
+        }
+      ]
     }
   },
   "license_choice": "Apache-2.0",

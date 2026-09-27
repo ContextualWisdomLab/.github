@@ -211,6 +211,11 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
             or not isinstance(asset.get("asset_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", asset["asset_sha256"])):
         raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: maturin executable differs from reviewed asset")
+    link_rows = asset.get("native_links")
+    if (not isinstance(link_rows, list) or len(link_rows) != 1
+            or not isinstance(link_rows[0], Mapping)
+            or not isinstance(link_rows[0].get("needed"), list)):
+        raise gate.GateError(gate.NATIVE_LINK_UNKNOWN, f"{leg}: maturin native links are missing")
     sha = asset["binary_sha256"]
     texts = data["license_texts"]
     evidence = {"source_sha256": sha, "license_expression": data["license_expression"],
@@ -219,7 +224,8 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
                                           for name, text in texts.items()},
                 "archive_members": [{"type": "file", "name": "maturin", "linkname": ""}],
                 "install_hook_sources": {}, "parsed_inputs": [],
-                "native_libraries": [{"path": "maturin"}], "known_vulnerabilities": []}
+                "native_libraries": [{"path": "maturin", "needed": link_rows[0]["needed"],
+                                      "static_archives": []}], "known_vulnerabilities": []}
     package_key = "github-release/maturin@1.15.0"
     failures, decision, source = gate.evaluate_dependency_license(
         evidence, package_key,
@@ -227,6 +233,11 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
     )
     if failures:
         raise gate.GateError(failures[0].code, f"{leg}: maturin licence: {failures[0].detail}")
+    native_failures, native_properties = gate.evaluate_native_links(
+        evidence, package_key, target=target, leg=leg)
+    if native_failures:
+        raise gate.GateError(native_failures[0].code,
+                             f"{leg}: maturin native links: {native_failures[0].detail}")
     fixture_key = f"{package_key}/sha256/{sha}"
     fixture = gate.build_fixture(gate.Dependency("github-release", "maturin", "1.15.0"), evidence)
     fixture["id"] = fixture_key
@@ -234,6 +245,7 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
             "version": "1.15.0", "source_sha256": sha,
             "license": decision.selected, "license_source": source,
             "license_member_sha256": evidence["license_member_sha256"],
+            "native_properties": native_properties,
             "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
             "source_tag_commit": data["tag_commit"],
             "source_archive_sha256": data["source_archive_sha256"],
