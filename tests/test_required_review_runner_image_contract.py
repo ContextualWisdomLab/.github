@@ -36,6 +36,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
             self.assertIn("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main'", block)
             self.assertIn("github.repository == 'ContextualWisdomLab/.github'", block)
             self.assertIn("github.repository == 'ContextualWisdomLab/fast-mlsirm'", block)
+            self.assertIn("github.repository == 'ContextualWisdomLab/naruon'", block)
             self.assertIn("fromJSON('[\"ubuntu-24.04\"]')", block)
             self.assertNotIn("actions/checkout", block)
         scan = workflow.split("\n  strix:\n", 1)[1].split("\n  publish-manual-pr-evidence-status:\n", 1)[0]

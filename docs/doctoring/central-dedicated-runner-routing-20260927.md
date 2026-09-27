@@ -131,3 +131,31 @@ The routing test failed on the unmodified workflow. The affected runner,
 changed-scope and dependency-hash tests passed (21 tests); actionlint and
 diff whitespace checks passed. This is local source proof, not completed
 consumer gate evidence.
+
+## Naruon Strix metadata admission follow-up
+
+At 2026-09-27 12:59 UTC, current Naruon #1789 head
+`8b7e3d03236073191e4945c03eed18d02471c336` had Strix run `36320590274`
+queued with admission, changed-scope and cleanup jobs reporting `runner_id=0`
+and `ubuntu-24.04`. Group 6 had online idle `cwlab-s1-01` and `cwlab-s1-05`.
+Naruon #1800 Semgrep had obtained a hosted runner and succeeded, so this does
+not establish an organization-wide hosted outage or its underlying capacity cause.
+
+The deployed Strix metadata expression admitted only `.github` and `fast-mlsirm`
+to control runners. Add Naruon to that same bounded caller list, retaining exact
+central `strix.yml@refs/heads/main`, group 6 and `cwlab-control` guards. All four
+metadata jobs use API calls without checking out PR code; the model scan stays
+on its existing hosted image. Reuse the existing allocation rather than changing
+model timing, providers or security gates.
+
+The live group 6 response now reports visibility `all`, restricted workflows
+including central Strix at `refs/heads/main`, and public repositories allowed.
+This updates the earlier deployment snapshot above; this change neither edits
+runner-group grants nor assumes arbitrary consumer workflows can access them.
+Existing queued runs retain their original workflow revision. Source tests prove
+selection intent only; post-merge native assignment and end-to-end gate evidence
+are still required before claiming queue recovery.
+
+The added Naruon routing assertion fails against the unchanged workflow and
+passes with this delta. Focused runner and scope contracts pass in both local
+and `GITHUB_ACTIONS=true` modes (13 each); actionlint and whitespace checks pass.
