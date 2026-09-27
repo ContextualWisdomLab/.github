@@ -12,21 +12,38 @@ import stat
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Mapping
 
 try:
     from scripts.ci.verify_release_distribution_set import (
-        DIGEST_RE, MAX_ARCHIVE_BYTES, MAX_CONTROL_BYTES, NAME_RE, RECORD_MEMBERS,
-        DistributionSetError, _archive, _artifact, _json_bytes, _members, _timestamp,
+        DIGEST_RE,
+        MAX_ARCHIVE_BYTES,
+        MAX_CONTROL_BYTES,
+        NAME_RE,
+        RECORD_MEMBERS,
+        DistributionSetError,
+        _archive,
+        _artifact,
+        _json_bytes,
+        _members,
+        _timestamp,
         fetch_artifact,
     )
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from verify_release_distribution_set import (
-        DIGEST_RE, MAX_ARCHIVE_BYTES, MAX_CONTROL_BYTES, NAME_RE, RECORD_MEMBERS,
-        DistributionSetError, _archive, _artifact, _json_bytes, _members, _timestamp,
+        DIGEST_RE,
+        MAX_ARCHIVE_BYTES,
+        MAX_CONTROL_BYTES,
+        NAME_RE,
+        RECORD_MEMBERS,
+        DistributionSetError,
+        _archive,
+        _artifact,
+        _json_bytes,
+        _members,
+        _timestamp,
         fetch_artifact,
     )
 
@@ -229,6 +246,89 @@ def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Map
     return [dict(row) for row in archives]
 
 
+def verify_macos_x86_runtime_set(
+    artifacts: Iterable[Any], attempt: Any, *, repository: str, source_sha: str,
+    control_sha: str, run_id: int, run_attempt: int,
+    distributions: list[dict[str, Any]],
+    fetch: Callable[[str, int, BinaryIO], None], output_dir: Path,
+) -> list[dict[str, Any]]:
+    """Bind Intel runtime receipts to the same run and exact universal2 wheels."""
+    if (not isinstance(attempt, Mapping) or attempt.get("id") != run_id
+            or attempt.get("run_attempt") != run_attempt
+            or attempt.get("head_sha") != control_sha):
+        raise DistributionSetError("Intel runtime workflow attempt differs")
+    started = _timestamp(attempt.get("run_started_at"))
+    all_artifacts = list(artifacts)
+    listed = {item.get("name"): item for item in all_artifacts if isinstance(item, Mapping)}
+    if len(listed) != len(all_artifacts):
+        raise DistributionSetError("duplicate Intel runtime artifact metadata")
+    legs = {f"universal2-apple-darwin-py{version}" for version in ("3.12", "3.13", "3.14")}
+    by_leg = {row["leg"]: row for row in distributions}
+    if not legs <= by_leg.keys():
+        raise DistributionSetError("Intel runtime has no selected universal2 distributions")
+    expected_names = {f"repro-macos-x86-{leg}" for leg in legs}
+    if {name for name in listed if isinstance(name, str) and name.startswith("repro-macos-x86-")} != expected_names:
+        raise DistributionSetError("Intel runtime artifact set is incomplete")
+    if not output_dir.is_dir():
+        raise DistributionSetError("primary scope evidence is not materialized")
+    selected = []
+    used_ids = {row["artifact_id"] for row in distributions}
+    for leg in sorted(legs):
+        name = f"repro-macos-x86-{leg}"
+        item = listed[name]
+        artifact_id, digest = item.get("id"), item.get("digest")
+        if (type(artifact_id) is not int or artifact_id in used_ids
+                or not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None):
+            raise DistributionSetError(f"{leg}: Intel runtime artifact identity is malformed")
+        _artifact(listed, name, artifact_id, digest, run_id, control_sha, started)
+        used_ids.add(artifact_id)
+        with tempfile.TemporaryDirectory(prefix=".macos-x86-", dir=output_dir) as temporary:
+            folder = Path(temporary)
+            with _archive(repository, artifact_id, digest, fetch) as archive:
+                controls = {f"{leg}.tsv", f"{leg}.runtime.json",
+                            f"{leg}.runtime-requirements.txt"}
+                names = {entry.filename for entry in archive.infolist()}
+                if (not controls < names
+                        or any(re.fullmatch(r"[A-Za-z0-9_.+-]+\.whl", member) is None
+                               for member in names - controls)):
+                    raise DistributionSetError(f"{leg}: Intel runtime artifact members differ")
+                entries = _members(archive, names)
+                if sum(entry.file_size for entry in entries.values()) > MAX_ARCHIVE_BYTES:
+                    raise DistributionSetError(f"{leg}: Intel runtime artifact exceeds size limit")
+                members = {}
+                for member, entry in entries.items():
+                    with archive.open(entry) as source, (folder / member).open("xb") as target:
+                        digest_state = hashlib.sha256()
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            digest_state.update(block)
+                            target.write(block)
+                    members[member] = digest_state.hexdigest()
+            row = by_leg[leg]
+            lines = (folder / f"{leg}.tsv").read_text(encoding="utf-8").splitlines()
+            fields = lines[0].split("\t") if len(lines) == 1 else []
+            runtime = _json_bytes((folder / f"{leg}.runtime.json").read_bytes())
+            if (len(fields) != 7 or fields[:6] != [
+                    leg, "true", "clean-target-repeat-same-env", row["sha256"],
+                    row["sha256"], row["file"]]
+                    or not isinstance(runtime, Mapping)
+                    or runtime.get("source_sha") != source_sha or runtime.get("leg") != leg
+                    or runtime.get("file") != row["file"] or runtime.get("sha256") != row["sha256"]
+                    or runtime.get("build_env") != fields[6]
+                    or runtime.get("implementation") != "cpython"
+                    or runtime.get("sys_platform") != "darwin"
+                    or runtime.get("machine") != "x86_64"
+                    or runtime.get("python_version") != leg.rsplit("-py", 1)[1]
+                    or runtime.get("uv_version") != "uv 0.12.5"
+                    or runtime.get("requirements_sha256") != members[f"{leg}.runtime-requirements.txt"]):
+                raise DistributionSetError(f"{leg}: Intel runtime receipt differs from selected wheel")
+            archives = _runtime_archives(folder, leg, source_sha, row, members)
+            folder.rename(output_dir / name)
+        selected.append({"leg": leg, "arch": "x86_64", "artifact_id": artifact_id,
+                         "artifact_name": name, "artifact_digest": digest,
+                         "members": members, "archives": archives})
+    return selected
+
+
 def verify_scope_evidence_set(
     artifacts: Iterable[Any], attempt: Any, *, repository: str, source_sha: str,
     control_sha: str, run_id: int, run_attempt: int, record_artifact_id: int,
@@ -392,7 +492,15 @@ def main() -> None:
         distributions=verified["verified_distributions"],
         fetch=fetch_artifact, output_dir=Path(args.output),
     )
-    print(json.dumps({"verified_scope_evidence": result}, sort_keys=True))
+    variants = verify_macos_x86_runtime_set(
+        artifacts, attempt, repository=args.repository, source_sha=args.source_sha,
+        control_sha=args.control_sha, run_id=int(args.run_id),
+        run_attempt=int(args.run_attempt),
+        distributions=verified["verified_distributions"],
+        fetch=fetch_artifact, output_dir=Path(args.output),
+    )
+    print(json.dumps({"verified_scope_evidence": result,
+                      "verified_runtime_variants": variants}, sort_keys=True))
 
 
 if __name__ == "__main__":

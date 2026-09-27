@@ -16,8 +16,8 @@ try:
     from scripts.ci.scan_release_native_links import _reader, scan
     from scripts.ci.verify_release_distribution_set import (
         DIGEST_RE,
-        DistributionSetError,
         MAX_CONTROL_BYTES,
+        DistributionSetError,
         _archive,
         _artifact,
         _digest,
@@ -33,8 +33,8 @@ except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     from scan_release_native_links import _reader, scan
     from verify_release_distribution_set import (
         DIGEST_RE,
-        DistributionSetError,
         MAX_CONTROL_BYTES,
+        DistributionSetError,
         _archive,
         _artifact,
         _digest,
@@ -196,11 +196,15 @@ def collect_bindings(
             (staging / member_name).write_bytes(raw)
         staging.rename(bindings)
     scope_identities: list[dict[str, Any]] | None = None
+    variant_identities: list[dict[str, Any]] | None = None
     if verified_scope_path is not None:
         scope = gate.load_json(verified_scope_path)
         rows = scope.get("verified_scope_evidence") if isinstance(scope, Mapping) else None
+        variants = scope.get("verified_runtime_variants") if isinstance(scope, Mapping) else None
         if (not isinstance(rows, list) or len(rows) != 13
-                or not all(isinstance(row, Mapping) for row in rows)):
+                or not all(isinstance(row, Mapping) for row in rows)
+                or not isinstance(variants, list) or len(variants) != 3
+                or not all(isinstance(row, Mapping) for row in variants)):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope set is incomplete")
         scope_identities = [{key: row.get(key) for key in
                              ("leg", "artifact_id", "artifact_name", "artifact_digest")}
@@ -218,6 +222,28 @@ def collect_bindings(
         used_ids = seen_ids | {row.get("artifact_id") for row in verified_distributions}
         if any(row["artifact_id"] in used_ids for row in scope_identities):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
+        for row in scope_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
+        variant_identities = [{key: row.get(key) for key in
+                               ("leg", "arch", "artifact_id", "artifact_name", "artifact_digest")}
+                              for row in variants]
+        if (any(not isinstance(row["leg"], str) or row["arch"] != "x86_64"
+                or row["artifact_name"] != f"repro-macos-x86-{row['leg']}"
+                or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
+                or not isinstance(row["artifact_digest"], str)
+                or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
+                for row in variant_identities)
+                or len({row["leg"] for row in variant_identities}) != 3
+                or len({row["artifact_id"] for row in variant_identities}) != 3
+                or {row["leg"] for row in variant_identities}
+                != {f"universal2-apple-darwin-py{version}" for version in ("3.12", "3.13", "3.14")}
+                or any(row["artifact_id"] in used_ids | {item["artifact_id"] for item in scope_identities}
+                       for row in variant_identities)):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "Intel runtime identities are malformed")
+        for row in variant_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
         for row in scope_identities:
             _artifact(listed, row["artifact_name"], row["artifact_id"],
                       row["artifact_digest"], run_id, control_sha, started)
@@ -300,6 +326,7 @@ def collect_bindings(
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
     if scope_identities is not None:
         verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])
+        verdict["runtime_variants"] = sorted(variant_identities, key=lambda row: row["leg"])
     if native_report_sha256 is not None:
         verdict["native_links_sha256"] = native_report_sha256
         verdict["native_link_analyzer"] = native_link_analyzer

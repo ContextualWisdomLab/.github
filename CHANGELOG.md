@@ -1,3 +1,15 @@
+### Intel macOS runtime archives enter the exact release dependency gate
+
+- Require three same-run Intel macOS install receipts for the universal2 wheels.
+  The central verifier checks each artifact ZIP digest, source and distribution
+  identity, x86_64 interpreter, and dependency archive bytes before licence
+  prescreen. Distinct x86_64 dependency wheels join the Strix fixture matrix;
+  the final verdict seals the three artifact IDs and digests. The thirteen
+  publishable distribution identities remain unchanged. Local focused tests
+  are 77 passed, the full suite is 4,063 passed and 4 skipped, and the three
+  changed production modules have 100% statement and branch coverage. Release
+  admission remains HOLD pending the fast-mlsirm consumer and hosted checks.
+
 ### Exact native-link review is bound before release verdict sealing
 
 - Release wheel and build-interpreter native links now fail closed unless each

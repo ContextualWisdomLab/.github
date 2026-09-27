@@ -244,6 +244,7 @@ def _with_archive_variant(case: dict) -> dict:
 
 def _with_scope_set(case: dict) -> dict:
     rows = []
+    variants = []
     for index in range(13):
         leg = "sdist" if index == 12 else f"target{index}-py3.12"
         name = f"repro-digest-{leg}"
@@ -254,8 +255,18 @@ def _with_scope_set(case: dict) -> dict:
         case["metadata"].append({"id": artifact_id, "name": name, "digest": digest,
                                  "created_at": CREATED, "expired": False,
                                  "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    for offset, version in enumerate(("3.12", "3.13", "3.14"), 120):
+        leg = f"universal2-apple-darwin-py{version}"
+        name = f"repro-macos-x86-{leg}"
+        digest = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+        variants.append({"leg": leg, "arch": "x86_64", "artifact_id": offset,
+                         "artifact_name": name, "artifact_digest": digest})
+        case["metadata"].append({"id": offset, "name": name, "digest": digest,
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
     path = case["capture"] / "verified-scope.json"
-    path.write_text(json.dumps({"verified_scope_evidence": rows}))
+    path.write_text(json.dumps({"verified_scope_evidence": rows,
+                                "verified_runtime_variants": variants}))
     case["verified_scope"] = path
     return case
 
@@ -280,6 +291,8 @@ def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> Non
     assert _collect(case).passed
     scope = json.loads(case["verified_scope"].read_text())["verified_scope_evidence"]
     assert json.loads(case["verdict"].read_text())["scope_evidence"] == sorted(scope, key=lambda row: row["leg"])
+    variants = json.loads(case["verified_scope"].read_text())["verified_runtime_variants"]
+    assert json.loads(case["verdict"].read_text())["runtime_variants"] == sorted(variants, key=lambda row: row["leg"])
 
     case = _with_scope_set(_case(tmp_path / "foreign"))
     case["metadata"][-1]["workflow_run"]["id"] = 1
@@ -287,6 +300,13 @@ def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> Non
         _collect(case)
     assert not case["report"].exists()
     assert not case["verdict"].exists()
+
+    case = _with_scope_set(_case(tmp_path / "wrong-intel"))
+    payload = json.loads(case["verified_scope"].read_text())
+    payload["verified_runtime_variants"][0]["arch"] = "arm64"
+    case["verified_scope"].write_text(json.dumps(payload))
+    with pytest.raises(gate.GateError, match="Intel runtime identities"):
+        _collect(case)
 
     case = _with_scope_set(_case(tmp_path / "duplicate-id"))
     payload = json.loads(case["verified_scope"].read_text())

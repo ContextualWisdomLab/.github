@@ -254,36 +254,46 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
 
 def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
     """Rebind every wheel byte and apply the existing licence decision path."""
+    variants = scope.get("verified_runtime_variants") if isinstance(scope, Mapping) else None
     if (not isinstance(scope, Mapping)
             or not isinstance(scope.get("verified_scope_evidence"), list)
-            or len(scope["verified_scope_evidence"]) != 13):
+            or len(scope["verified_scope_evidence"]) != 13
+            or not isinstance(variants, list) or len(variants) != 3):
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope evidence is incomplete")
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     build_rows: dict[str, dict[str, Any]] = {}
     tool_rows: dict[str, dict[str, Any]] = {}
     seen_legs: set[str] = set()
-    for item in scope["verified_scope_evidence"]:
+    seen_variants: set[str] = set()
+    for index, item in enumerate([*scope["verified_scope_evidence"], *variants]):
+        variant = index >= 13
         if (not isinstance(item, Mapping) or not isinstance(item.get("leg"), str)
                 or not re.fullmatch(r"[A-Za-z0-9_.+-]+", item["leg"])
                 or item["leg"] in {".", ".."}
-                or item["leg"] in seen_legs
-                or item.get("artifact_name") != f"repro-digest-{item['leg']}"
+                or (item["leg"] in (seen_variants if variant else seen_legs))
+                or item.get("artifact_name") != (
+                    f"repro-macos-x86-{item['leg']}" if variant else f"repro-digest-{item['leg']}")
+                or variant and (item.get("arch") != "x86_64"
+                                or not item["leg"].startswith("universal2-apple-darwin-py"))
                 or not isinstance(item.get("archives"), list)):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
         leg = item["leg"]
-        seen_legs.add(leg)
-        for package in _build_packages(item, root / item["artifact_name"]):
-            if package["key"] in build_rows:
-                build_rows[package["key"]]["legs"].append(leg)
-                build_rows[package["key"]]["snapshots"][leg] = package["snapshots"][leg]
-            else:
-                build_rows[package["key"]] = package
-        tool = _maturin_tool(item, root / item["artifact_name"])
-        if tool["key"] in tool_rows:
-            tool_rows[tool["key"]]["legs"].append(leg)
-            tool_rows[tool["key"]]["build_envs"][leg] = tool["build_envs"][leg]
+        if variant:
+            seen_variants.add(leg)
         else:
-            tool_rows[tool["key"]] = tool
+            seen_legs.add(leg)
+            for package in _build_packages(item, root / item["artifact_name"]):
+                if package["key"] in build_rows:
+                    build_rows[package["key"]]["legs"].append(leg)
+                    build_rows[package["key"]]["snapshots"][leg] = package["snapshots"][leg]
+                else:
+                    build_rows[package["key"]] = package
+            tool = _maturin_tool(item, root / item["artifact_name"])
+            if tool["key"] in tool_rows:
+                tool_rows[tool["key"]]["legs"].append(leg)
+                tool_rows[tool["key"]]["build_envs"][leg] = tool["build_envs"][leg]
+            else:
+                tool_rows[tool["key"]] = tool
         if (leg == "sdist" and item["archives"]
                 or leg != "sdist" and not item["archives"]):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: runtime archive set is incomplete")
@@ -306,7 +316,8 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
             key = f"pypi/{archive['name']}@{archive['version']}"
             identity = (key, sha)
             if identity in rows:
-                rows[identity]["legs"].append(leg)
+                if leg not in rows[identity]["legs"]:
+                    rows[identity]["legs"].append(leg)
                 continue
             declared = gate.distribution_declared_metadata(path, archive["name"], archive["version"])
             bound = gate.archive_license_evidence(raw, "pypi")
@@ -339,7 +350,10 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                               "native_properties": native_properties,
                               "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
                               "legs": [leg]}
-    if len(seen_legs) != 13 or "sdist" not in seen_legs or not rows:
+    if (len(seen_legs) != 13 or "sdist" not in seen_legs
+            or seen_variants != {f"universal2-apple-darwin-py{version}"
+                                 for version in ("3.12", "3.13", "3.14")}
+            or not rows):
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
     return {"archives": sorted(rows.values(), key=lambda row: (row["key"], row["source_sha256"])),
             "build_packages": sorted(build_rows.values(), key=lambda row: row["key"]),

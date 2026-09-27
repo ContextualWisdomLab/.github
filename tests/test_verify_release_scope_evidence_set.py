@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import runpy
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -20,7 +21,10 @@ from scripts.ci.prescreen_release_runtime_archives import (
     prescreen,
 )
 from scripts.ci.verify_release_distribution_set import DistributionSetError
-from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
+from scripts.ci.verify_release_scope_evidence_set import (
+    verify_macos_x86_runtime_set,
+    verify_scope_evidence_set,
+)
 
 SOURCE = "a" * 40
 CONTROL = "b" * 40
@@ -255,6 +259,157 @@ def _prescreen_case(tmp_path: Path) -> tuple[Path, list[dict]]:
     return scope_root, _verify(scope_case, scope_root)
 
 
+def _scope_with_variants(rows: list[dict], root: Path) -> dict:
+    variants = []
+    for row in rows:
+        if not row["leg"].startswith("universal2-apple-darwin-"):
+            continue
+        name = f"repro-macos-x86-{row['leg']}"
+        if not (root / name).exists():
+            shutil.copytree(root / row["artifact_name"], root / name)
+        variants.append({**row, "arch": "x86_64", "artifact_name": name})
+    return {"verified_scope_evidence": rows, "verified_runtime_variants": variants}
+
+
+def _add_intel_artifacts(case: dict) -> None:
+    legs = [row["leg"] for row in case["distributions"]
+            if row["leg"].startswith("universal2-apple-darwin-")]
+    for offset, leg in enumerate(legs, 100):
+        row = next(item for item in case["distributions"] if item["leg"] == leg)
+        wheel = _zip({f"package_x86_{offset}-1.dist-info/METADATA":
+                      f"Name: package-x86-{offset}\nVersion: 1\nLicense-Expression: MIT\nLicense-File: LICENSE\n".encode(),
+                      f"package_x86_{offset}-1.dist-info/licenses/LICENSE": MIT_TEXT.encode()})
+        wheel_name = f"package_x86_{offset}-1-py3-none-macosx_11_0_x86_64.whl"
+        requirements = b"package-x86==1\n"
+        runtime = {"source_sha": SOURCE, "leg": leg, "file": row["file"],
+                   "sha256": row["sha256"], "build_env": "runner:macos/15/macOS/ARM64",
+                   "uv_version": "uv 0.12.5", "python_version": leg.rsplit("-py", 1)[1],
+                   "implementation": "cpython", "sys_platform": "darwin", "machine": "x86_64",
+                   "requirements_sha256": hashlib.sha256(requirements).hexdigest(),
+                   "uv_lock_sha256": "a" * 64,
+                   "locked_dependencies": [{"name": f"package-x86-{offset}", "version": "1"}],
+                   "archives": [{"file": wheel_name, "size": len(wheel),
+                                 "sha256": hashlib.sha256(wheel).hexdigest(),
+                                 "name": f"package-x86-{offset}", "version": "1"}]}
+        members = {f"{leg}.tsv": ("\t".join([leg, "true", "clean-target-repeat-same-env",
+                    row["sha256"], row["sha256"], row["file"], runtime["build_env"]]) + "\n").encode(),
+                   f"{leg}.runtime.json": json.dumps(runtime | {"source_sha": SOURCE}).encode(),
+                   f"{leg}.runtime-requirements.txt": requirements,
+                   wheel_name: wheel}
+        archive = _zip(members)
+        case["archives"][offset] = archive
+        case["artifacts"].append({"id": offset, "name": f"repro-macos-x86-{leg}",
+                                  "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                                  "created_at": "2026-09-26T12:01:00Z", "expired": False,
+                                  "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+
+
+def _verify_intel(case: dict, output: Path) -> list[dict]:
+    output.mkdir()
+
+    def fetch(repository: str, artifact_id: int, target) -> None:
+        assert repository == "owner/repo"
+        target.write(case["archives"][artifact_id])
+
+    return verify_macos_x86_runtime_set(
+        case["artifacts"], case["attempt"], repository="owner/repo",
+        source_sha=SOURCE, control_sha=CONTROL, run_id=RUN, run_attempt=ATTEMPT,
+        distributions=case["distributions"], fetch=fetch, output_dir=output)
+
+
+def test_intel_runtime_artifacts_bind_same_run_wheels_and_archive_bytes(tmp_path: Path) -> None:
+    case = _case()
+    _add_intel_artifacts(case)
+    selected = _verify_intel(case, tmp_path / "ok")
+    assert len(selected) == 3
+    assert {row["arch"] for row in selected} == {"x86_64"}
+    assert all(len(row["archives"]) == 1 for row in selected)
+    case["artifacts"][-1]["workflow_run"]["id"] = 1
+    with pytest.raises(DistributionSetError, match="foreign"):
+        _verify_intel(case, tmp_path / "foreign")
+    case["artifacts"][-1]["workflow_run"]["id"] = RUN
+    case["archives"][102] += b"changed"
+    with pytest.raises(DistributionSetError, match="digest mismatch"):
+        _verify_intel(case, tmp_path / "changed")
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ("attempt", "workflow attempt differs"),
+    ("duplicate-metadata", "duplicate Intel runtime artifact metadata"),
+    ("missing-wheel", "no selected universal2 distributions"),
+    ("missing-artifact", "artifact set is incomplete"),
+    ("duplicate-id", "artifact identity is malformed"),
+    ("missing-member", "artifact members differ"),
+    ("wrong-receipt", "receipt differs from selected wheel"),
+])
+def test_intel_runtime_refuses_incomplete_or_forged_evidence(
+        tmp_path: Path, change: str, reason: str) -> None:
+    case = _case()
+    _add_intel_artifacts(case)
+    if change == "attempt":
+        case["attempt"]["run_attempt"] += 1
+    elif change == "duplicate-metadata":
+        case["artifacts"].append(dict(case["artifacts"][-1]))
+    elif change == "missing-wheel":
+        case["distributions"] = [row for row in case["distributions"]
+                                 if row["leg"] != "universal2-apple-darwin-py3.12"]
+    elif change == "missing-artifact":
+        case["artifacts"].pop()
+    elif change == "duplicate-id":
+        case["artifacts"][-1]["id"] = case["distributions"][0]["artifact_id"]
+    else:
+        with zipfile.ZipFile(io.BytesIO(case["archives"][100])) as archive:
+            members = {name: archive.read(name) for name in archive.namelist()}
+        leg = "universal2-apple-darwin-py3.12"
+        if change == "missing-member":
+            members.pop(f"{leg}.runtime-requirements.txt")
+        else:
+            runtime = json.loads(members[f"{leg}.runtime.json"])
+            runtime["machine"] = "arm64"
+            members[f"{leg}.runtime.json"] = json.dumps(runtime).encode()
+        case["archives"][100] = _zip(members)
+        item = next(item for item in case["artifacts"] if item["id"] == 100)
+        item["digest"] = "sha256:" + hashlib.sha256(case["archives"][100]).hexdigest()
+    with pytest.raises(DistributionSetError, match=reason):
+        _verify_intel(case, tmp_path / change)
+
+
+def test_intel_runtime_refuses_missing_destination_and_oversized_members(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case()
+    _add_intel_artifacts(case)
+    def fetch(_repository: str, artifact_id: int, target) -> None:
+        target.write(case["archives"][artifact_id])
+    arguments = dict(repository="owner/repo", source_sha=SOURCE, control_sha=CONTROL,
+                     run_id=RUN, run_attempt=ATTEMPT, distributions=case["distributions"], fetch=fetch)
+    with pytest.raises(DistributionSetError, match="not materialized"):
+        verify_macos_x86_runtime_set(case["artifacts"], case["attempt"],
+                                     output_dir=tmp_path / "missing", **arguments)
+    monkeypatch.setattr(scope_module, "MAX_ARCHIVE_BYTES", 1)
+    with pytest.raises(DistributionSetError, match="exceeds size limit"):
+        _verify_intel(case, tmp_path / "large")
+
+
+def test_intel_dependency_wheels_enter_license_prescreen(tmp_path: Path) -> None:
+    case = _case()
+    _add_intel_artifacts(case)
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+
+    def fetch(_repository: str, artifact_id: int, target) -> None:
+        target.write(case["archives"][artifact_id])
+
+    variants = verify_macos_x86_runtime_set(
+        case["artifacts"], case["attempt"], repository="owner/repo",
+        source_sha=SOURCE, control_sha=CONTROL, run_id=RUN, run_attempt=ATTEMPT,
+        distributions=case["distributions"], fetch=fetch, output_dir=root)
+    report = prescreen({"verified_scope_evidence": selected,
+                        "verified_runtime_variants": variants}, root)
+    assert len(report["archives"]) == 15
+    assert {row["name"] for row in report["archives"] if row["name"].startswith("package-x86-")} == {
+        "package-x86-100", "package-x86-101", "package-x86-102"}
+
+
 def _rewrite_build_snapshot(
     scope_row: dict,
     scope_root: Path,
@@ -324,7 +479,7 @@ def test_runtime_archive_refuses_unknown_native_link(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(gate, "evaluate_native_links", evaluate)
     with pytest.raises(gate.GateError, match="NATIVE_LINK_UNKNOWN"):
-        prescreen({"verified_scope_evidence": rows}, root)
+        prescreen(_scope_with_variants(rows, root), root)
 
 
 def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -> None:
@@ -341,7 +496,7 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     case = _case()
     scope_root = tmp_path / "scope"
     selected = _verify(case, scope_root)
-    scope = {"verified_scope_evidence": selected}
+    scope = _scope_with_variants(selected, scope_root)
     reviews = prescreen(scope, scope_root)
     assert len(reviews["archives"]) == 12
     assert len(reviews["build_packages"]) == 1
@@ -373,7 +528,7 @@ def test_maturin_prescreen_refuses_changed_or_foreign_executable(tmp_path: Path)
     case = _case()
     root = tmp_path / "scope"
     selected = _verify(case, root)
-    scope = {"verified_scope_evidence": selected}
+    scope = _scope_with_variants(selected, root)
     row = selected[0]
     leg = row["leg"]
     receipt_path = root / row["artifact_name"] / f"{leg}.build-first.json"
@@ -421,7 +576,7 @@ def test_maturin_prescreen_refuses_invalid_source_provenance(
         prescreen_module, "__file__", str(tmp_path / Path(prescreen_module.__file__).name)
     )
     with pytest.raises(gate.GateError, match="provenance is malformed"):
-        prescreen({"verified_scope_evidence": selected}, root)
+        prescreen(_scope_with_variants(selected, root), root)
 
 
 @pytest.mark.parametrize("metadata,reason", [
@@ -653,7 +808,7 @@ def test_prescreen_refuses_malformed_scope_and_runtime_rows(tmp_path: Path) -> N
             scope_rows[0]["archives"][0]["size"] = 0
             expected_message = "archive identity is malformed"
         with pytest.raises(gate.GateError, match=expected_message):
-            prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+            prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
 def test_prescreen_coalesces_duplicate_archive_identity(tmp_path: Path) -> None:
@@ -664,7 +819,7 @@ def test_prescreen_coalesces_duplicate_archive_identity(tmp_path: Path) -> None:
     first_path = scope_root / first_row["artifact_name"] / first_archive["file"]
     (second_folder / first_archive["file"]).write_bytes(first_path.read_bytes())
     second_row["archives"] = [dict(first_archive)]
-    result = prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+    result = prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
     duplicate_row = next(item for item in result["archives"]
                          if item["source_sha256"] == first_archive["sha256"])
     assert duplicate_row["legs"] == [first_row["leg"], second_row["leg"]]
@@ -682,7 +837,7 @@ def test_prescreen_refuses_rebound_license_evidence(
 
     monkeypatch.setattr(gate, "archive_license_evidence", changed_license_evidence)
     with pytest.raises(gate.GateError, match="licence evidence changed"):
-        prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+        prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
 def test_prescreen_refuses_complete_rows_without_sdist(
@@ -704,7 +859,7 @@ def test_prescreen_refuses_complete_rows_without_sdist(
         "legs": [item["leg"]], "build_envs": {item["leg"]: "fixture"},
     })
     with pytest.raises(gate.GateError, match="runtime archive coverage is incomplete"):
-        prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+        prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
 def test_prescreen_cli_writes_once_and_refuses_existing_output(
@@ -713,7 +868,7 @@ def test_prescreen_cli_writes_once_and_refuses_existing_output(
     scope_root, scope_rows = _prescreen_case(tmp_path)
     scope_path = tmp_path / "scope.json"
     output_path = tmp_path / "licenses.json"
-    scope_path.write_text(json.dumps({"verified_scope_evidence": scope_rows}))
+    scope_path.write_text(json.dumps(_scope_with_variants(scope_rows, scope_root)))
     monkeypatch.setattr("sys.argv", ["prescreen_release_runtime_archives.py",
                                     "--verified-scope", str(scope_path),
                                     "--scope-root", str(scope_root),
@@ -1167,6 +1322,7 @@ def test_scope_archive_refuses_unsafe_and_oversized_members(
 def test_scope_module_entrypoint_verifies_and_emits_selected_rows(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     case = _case()
+    _add_intel_artifacts(case)
     metadata = tmp_path / "metadata.jsonl"
     metadata.write_text("".join(json.dumps(item) + "\n" for item in case["artifacts"]))
     attempt = tmp_path / "attempt.json"
@@ -1203,7 +1359,9 @@ def test_scope_module_entrypoint_verifies_and_emits_selected_rows(
 
     runpy.run_path(str(script), run_name="__main__")
 
-    assert len(json.loads(capsys.readouterr().out)["verified_scope_evidence"]) == 13
+    output = json.loads(capsys.readouterr().out)
+    assert len(output["verified_scope_evidence"]) == 13
+    assert len(output["verified_runtime_variants"]) == 3
 
 
 def test_scope_main_refuses_malformed_distribution_report(

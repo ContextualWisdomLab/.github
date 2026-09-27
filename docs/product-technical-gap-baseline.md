@@ -3583,3 +3583,16 @@ production statements and 7,058 branches covered. Ruff E9/F/I, compileall, and
 diff checks pass after import-order repair. Status is Proposed/Draft and
 release admission remains HOLD because hosted exact-head Checks and a
 qualifying independent approval are not yet complete.
+
+The Intel macOS continuation closes one part of the universal2 runtime Gap.
+Three additional same-run artifacts contain x86_64 install receipts and exact
+dependency wheel archives. The central verifier authenticates each ZIP,
+source SHA, selected distribution row, x86_64 interpreter, and archive member;
+the licence prescreen includes distinct x86_64 archive bytes in the Strix
+fixture matrix, and the final verdict seals their artifact IDs and digests.
+The thirteen publishable distributions remain the only release outputs.
+The changed verifier, prescreen, and verdict collector have 100% statement
+and branch coverage in the focused suite; the full local suite is 4,063 passed,
+4 skipped, and 40 subtests passed. The fast-mlsirm admission consumer has not
+yet accepted this verdict shape, and hosted exact-head checks are still
+required. Release remains HOLD.
