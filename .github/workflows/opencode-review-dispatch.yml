@@ -53,7 +53,9 @@ jobs:
     # inside a 13h57m run, ~97.5% of which was queue wait between exactly
     # these job boundaries).
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -394,7 +396,9 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -2347,7 +2351,9 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -3997,7 +4003,7 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
                   "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {

@@ -21,6 +21,31 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
+    """Central-only workflows cannot fall back into the general Ubuntu pool."""
+    for name, group, jobs in (
+        ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("agent-mention-router.yml", "CWL central control", 2),
+        ("hourly-review-repair.yml", "CWL central control", 1),
+    ):
+        text = workflow_text(name)
+        assert text.count(f"    runs-on:\n      group: {group}\n      labels: [self-hosted, linux, x64]") == jobs
+        assert "runs-on: ubuntu-24.04" not in text
+
+
+def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
+    """Reusable trusted schedulers share control capacity without PR execution."""
+    text = workflow_text("pr-review-merge-scheduler.yml")
+    selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
+    assert selector.strip() == "runs-on:"
+    assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
+    assert "fromJSON" not in selector
+    assert 'trusted_repository != "ContextualWisdomLab/.github"' in text
+    assert 'tarball/${TRUSTED_SOURCE_REF}' in text
+    assert 'Trusted scheduler source ref must resolve to the immutable workflow commit SHA' in text
+
+
 # The workflow-level block is the one whose key starts at column zero; job-level
 # blocks are indented under ``jobs:``. Anchoring there instead of slicing the text
 # before ``permissions:`` makes the search independent of key order, which two
