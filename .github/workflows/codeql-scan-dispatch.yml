@@ -44,7 +44,9 @@ permissions:
 jobs:
   validate-dispatch:
     name: validate-dispatch
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:
       contents: read
@@ -430,7 +432,9 @@ jobs:
   scan:
     name: CodeQL dispatch scan (${{ matrix.language }})
     needs: validate-dispatch
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 30
     permissions:
       actions: read
@@ -772,7 +776,9 @@ jobs:
       && needs.validate-dispatch.result == 'success'
       && needs.scan.result != 'cancelled'
       && needs.scan.result != 'skipped'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:
       actions: write

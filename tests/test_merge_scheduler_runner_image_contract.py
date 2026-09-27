@@ -24,11 +24,13 @@ class MergeSchedulerRunnerImageContract(unittest.TestCase):
     """Keep queue-draining control jobs off the starved floating image."""
 
     def test_queue_draining_jobs_use_explicit_supported_image(self) -> None:
-        """Require the scheduler control plane to use explicit Ubuntu 24.04."""
+        """Require central isolation and explicit Ubuntu 24.04 for consumers."""
         workflow = WORKFLOW.read_text(encoding='utf-8')
         for job_name in ('scan-pr-queue',):
             block = job_block(workflow, job_name)
-            self.assertIn('runs-on: ubuntu-24.04', block, job_name)
+            self.assertIn("github.repository == 'ContextualWisdomLab/.github'", block, job_name)
+            self.assertIn("cwlab-control", block, job_name)
+            self.assertIn("|| fromJSON('[\"ubuntu-24.04\"]')", block, job_name)
             self.assertNotIn('runs-on: ubuntu-latest', block, job_name)
         self.assertNotIn('runs-on: ubuntu-latest', workflow)
 
