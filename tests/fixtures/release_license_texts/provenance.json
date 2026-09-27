@@ -545,5 +545,65 @@
     "normalized_sha256": "502292ebd8d883e73d2b433a3bb4531fe5c7d917959377f1cb6e75bf4cbd89ad",
     "identifier": "MIT",
     "fixture": "xml-rs-0.8.29-LICENSE.txt"
+  },
+  {
+    "package": "cfg_aliases@0.2.2",
+    "ecosystem": "cargo",
+    "artifact_filename": "cfg_aliases-0.2.2.crate",
+    "artifact_sha256": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527",
+    "artifact_url": "https://static.crates.io/crates/cfg_aliases/cfg_aliases-0.2.2.crate",
+    "member": "cfg_aliases-0.2.2/LICENSE",
+    "raw_sha256": "31b94860253d8ec7b4529f51901044d3b459d6292d996504a36b1bae3a36a812",
+    "normalized_sha256": "ceb65ec3e793eb098d672594a12fde934db8508b7de6238d7f23a8567625eaac",
+    "identifier": "MIT",
+    "fixture": "cfg_aliases-0.2.2-LICENSE.txt"
+  },
+  {
+    "package": "cfg_aliases@0.2.2",
+    "ecosystem": "cargo",
+    "artifact_filename": "cfg_aliases-0.2.2.crate",
+    "artifact_sha256": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527",
+    "artifact_url": "https://static.crates.io/crates/cfg_aliases/cfg_aliases-0.2.2.crate",
+    "member": "cfg_aliases-0.2.2/NOTICES.md",
+    "raw_sha256": "1e2b7ade3fb228130408b9990cae6a7618eb314c75aa0b164bfe485d9d9756ee",
+    "normalized_sha256": "735a807c9c2f9f55df2933076fb5fc95398ee14337b48ac9c510e6cbaa5e623a",
+    "identifier": "MIT",
+    "fixture": "cfg_aliases-0.2.2-NOTICES.md.txt"
+  },
+  {
+    "package": "ordered-float@5.5.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "ordered-float-5.5.0.crate",
+    "artifact_sha256": "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0",
+    "artifact_url": "https://static.crates.io/crates/ordered-float/ordered-float-5.5.0.crate",
+    "member": "ordered-float-5.5.0/LICENSE-MIT",
+    "raw_sha256": "f7715d38a3fa1b4ac97c5729740752505a39cb92ee83ab5b102aeb5eaa7cdea4",
+    "normalized_sha256": "e0d942dfe6038ddff3ec62d78064580c23119971b55a8854bba4b612757fffc0",
+    "identifier": "MIT",
+    "fixture": "ordered-float-5.5.0-LICENSE-MIT.txt"
+  },
+  {
+    "package": "glutin_wgl_sys@0.6.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "glutin_wgl_sys-0.6.1.crate",
+    "artifact_sha256": "2c4ee00b289aba7a9e5306d57c2d05499b2e5dc427f84ac708bd2c090212cf3e",
+    "artifact_url": "https://static.crates.io/crates/glutin_wgl_sys/glutin_wgl_sys-0.6.1.crate",
+    "member": "glutin_wgl_sys-0.6.1/LICENSE",
+    "raw_sha256": "a4445427440043e8ce6fadf7a43fb906cb0d7f6c573a560a9f142cf9f9bf8ff4",
+    "normalized_sha256": "372f45e927bea5f3620bbd5ff3fa9e88b5460843fc5ba5a1e15a7c695ef998d4",
+    "identifier": "Apache-2.0",
+    "fixture": "glutin_wgl_sys-0.6.1-LICENSE.txt"
+  },
+  {
+    "package": "target-lexicon@0.13.5",
+    "ecosystem": "cargo",
+    "artifact_filename": "target-lexicon-0.13.5.crate",
+    "artifact_sha256": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca",
+    "artifact_url": "https://static.crates.io/crates/target-lexicon/target-lexicon-0.13.5.crate",
+    "member": "target-lexicon-0.13.5/LICENSE",
+    "raw_sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "normalized_sha256": "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c",
+    "identifier": "Apache-2.0",
+    "fixture": "target-lexicon-0.13.5-LICENSE.txt"
   }
 ]
