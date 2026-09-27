@@ -74,11 +74,10 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_codeql_pr_routes_only_explicit_repositories_to_existing_trusted_group() -> None:
-    """Central and gateway callers reuse workers; every other caller keeps hosted access."""
+def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_hosted() -> None:
+    """Separate short metadata work from model work without granting PR runner access."""
     workflow = Path(".github/workflows/codeql-pr.yml").read_text()
-    assert workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')") == 3
-    assert workflow.count('"group":"CWL MCP remediation"') == 3
-    assert workflow.count("github.repository == 'ContextualWisdomLab/.github'") == 3
-    assert workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'") == 3
-    assert workflow.count("fromJSON('[\"ubuntu-24.04\"]')") == 3
+    assert workflow.count('"group":"CWL central control"') == 3
+    assert workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'") == 3
+    assert workflow.count("|| '\"ubuntu-24.04\"'") == 3
+    assert '"group":"CWL MCP remediation"' not in workflow

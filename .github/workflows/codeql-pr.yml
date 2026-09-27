@@ -11,6 +11,9 @@
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
+# Only the trusted main workflow uses the control group. PR-authored workflow
+# revisions retain hosted execution; organization group restrictions also enforce
+# the exact main path. Heavy scans stay on the dedicated CodeQL runner.
 name: CodeQL PR
 
 on:
@@ -56,7 +59,7 @@ jobs:
   detect-languages:
     name: Detect CodeQL languages
     if: github.event.action != 'closed'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     permissions:
       contents: read
       pull-requests: read
@@ -148,7 +151,7 @@ jobs:
     # dependency exactly; the only case where it's genuinely skipped is a
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     permissions:
       contents: read
       id-token: write
@@ -180,16 +183,27 @@ jobs:
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
-          if [ -z "$live_head" ] || [ -z "$live_state" ]; then
+          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ && "$live_head" =~ ^[0-9a-fA-F]{40}$ ]] || [[ "$live_state" != "open" && "$live_state" != "closed" ]]; then
             echo "::error::Could not validate live pull request state before CodeQL dispatch."
             exit 1
           fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head CodeQL scan is not requested."
+            echo "verdict=obsolete" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ]; then
+            # A lagging API read or diverged history must not retire the current scan.
+            comparison="$(gh api "repos/${TARGET_REPOSITORY}/compare/${PR_HEAD_SHA}...${live_head}")"
+            if ! printf '%s' "$comparison" | jq -e '
+              .status == "ahead" and .behind_by == 0 and
+              ((.ahead_by | type) == "number") and .ahead_by >= 1
+            ' >/dev/null; then
+              echo "::error::Live head does not prove this CodeQL shard was superseded."
+              exit 1
+            fi
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
+            echo "verdict=obsolete" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -287,6 +301,9 @@ jobs:
             exit 1
           fi
           case "$VERDICT_STATE" in
+            obsolete)
+              echo "Closed or superseded PR shard; no scan verdict is asserted."
+              ;;
             success)
               echo "Current-head CodeQL dispatch verdict for ${LANGUAGE}: success."
               ;;
@@ -313,7 +330,7 @@ jobs:
       && github.event.pull_request.state != 'closed'
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     permissions:
       contents: read
       id-token: write

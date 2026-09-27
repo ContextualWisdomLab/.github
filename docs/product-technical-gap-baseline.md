@@ -19,6 +19,12 @@
 |---|---|---|---|
 | CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
 
+### 2026-09-27 CodeQL compatibility retirement delta
+
+| Gap ID | Status | Evidence and remaining gate |
+|---|---|---|
+| CONTROL-CODEQL-OBSOLETE-VERDICT-01 | Source repair under verification | ContextualWisdomLab/fast-mlsirm#2172 closed before compatibility job 108414341704 began. The live read returned no verdict and enforcement failed. Explicit obsolete output repairs closed/superseded target retirement without weakening exact-head security evidence. See [RCA and regression checks](doctoring/codeql-obsolete-pr-verdict.md); protected merge and hosted current-head gates remain required. |
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
