@@ -1,3 +1,7 @@
+### Native release prescreen coverage remains fail-closed
+
+- Added behavior-level contracts for directory entries, cached analyzer reuse, oversized and unreadable native members, build-snapshot files omitted from package receipts, runtime wheels with unknown dynamic links, and malformed static-link evidence. This repairs the coverage regression introduced when runtime wheels and build-interpreter snapshots began using the pinned native-link analyzer. The exact-tree suite is 4,037 passed, 8 skipped, and 40 subtests passed; all 17,186 production statements and 7,000 branches are covered. Release admission remains Draft/HOLD pending fresh exact-head hosted Checks and qualifying independent review.
+
 ### Canonical Rust materializer integration closes the repository coverage gate
 
 - Ordinary-merged the complete `ContextualWisdomLab/.github#2360` owner branch into the release-control stack, preserving its foundation ancestry, multi-root `cargo vendor --sync --locked` implementation, target-path confinement, real-Cargo integration cases, and toolchain-independent mock/error/CLI contracts. The focused materializer suite is 26 passed and 3 real-Cargo skips with `materialize_base_rust_dependencies.py` at 155/155 statements and 60/60 branches. The merged exact tree is 4,030 passed, 8 skipped, and 40 subtests passed; all 17,144 production statements and 6,982 branches are covered. Draft remains required until fresh exact-head hosted Checks and qualifying independent review complete.

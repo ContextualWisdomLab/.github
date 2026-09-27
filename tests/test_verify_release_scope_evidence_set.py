@@ -11,13 +11,16 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci import prescreen_release_runtime_archives as prescreen_module
+from scripts.ci import release_dependency_gate as gate
+from scripts.ci import verify_release_scope_evidence_set as scope_module
+from scripts.ci.prescreen_release_runtime_archives import (
+    _build_packages,
+    _maturin_tool,
+    prescreen,
+)
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
-from scripts.ci import verify_release_scope_evidence_set as scope_module
-from scripts.ci import prescreen_release_runtime_archives as prescreen_module
-from scripts.ci.prescreen_release_runtime_archives import _build_packages, _maturin_tool, prescreen
-from scripts.ci import release_dependency_gate as gate
-
 
 SOURCE = "a" * 40
 CONTROL = "b" * 40
@@ -39,12 +42,58 @@ def test_runtime_native_wheel_reads_links_and_refuses_uninspected_members(monkey
     monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
     monkeypatch.setattr(prescreen_module, "_links", lambda binary, target, reader, **kwargs: [
         {"arch": "x86_64", "needed": ["libc.so.6"]}])
-    wheel = _zip({"package/native.so": b"\x7fELFfixture"})
+    wheel = _zip({"directory/": b"", "package/native.so": b"\x7fELFfixture",
+                  "package/second.pyd": b"MZfixture"})
     assert prescreen_module._native_wheel_libraries(wheel, "x86_64-unknown-linux-gnu") == [
-        {"path": "package/native.so", "needed": ["libc.so.6"], "static_archives": []}]
+        {"path": "package/native.so", "needed": ["libc.so.6"], "static_archives": []},
+        {"path": "package/second.pyd", "needed": ["libc.so.6"], "static_archives": []}]
     with pytest.raises(gate.GateError, match="static or wasm native member"):
         prescreen_module._native_wheel_libraries(
             _zip({"package/libnative.a": b"!<arch>\n"}), "x86_64-unknown-linux-gnu")
+
+
+def test_runtime_native_wheel_refuses_oversized_or_unreadable_members(monkeypatch):
+    """Native inspection must fail closed on resource and analyzer failures."""
+    class OversizedEntry:
+        filename = "package/native.so"
+        file_size = 128 * 1024 * 1024 + 1
+
+        @staticmethod
+        def is_dir() -> bool:
+            return False
+
+    class OversizedArchive:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def infolist():
+            return [OversizedEntry()]
+
+        @staticmethod
+        def open(_entry):
+            return io.BytesIO(b"\x7fELFfixture")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(prescreen_module.zipfile, "ZipFile", lambda *_args: OversizedArchive())
+        with pytest.raises(gate.GateError, match="exceeds inspection limit"):
+            prescreen_module._native_wheel_libraries(
+                b"fixture", "x86_64-unknown-linux-gnu"
+            )
+
+    monkeypatch.setattr(
+        prescreen_module,
+        "_reader",
+        lambda: (_ for _ in ()).throw(ValueError("unavailable")),
+    )
+    with pytest.raises(gate.GateError, match="could not be inspected"):
+        prescreen_module._native_wheel_libraries(
+            _zip({"package/native.so": b"\x7fELFfixture"}),
+            "x86_64-unknown-linux-gnu",
+        )
 
 
 def _case() -> dict:
@@ -242,6 +291,40 @@ def test_build_snapshot_native_file_requires_reviewed_links(tmp_path: Path, monk
         {"arch": "x86_64", "needed": ["libmystery.so.1"]}])
     with pytest.raises(gate.GateError, match="NATIVE_LINK_UNKNOWN"):
         _build_packages(row, folder)
+
+
+def test_build_snapshot_refuses_unlisted_native_file(tmp_path: Path, monkeypatch) -> None:
+    """A native snapshot member omitted from its package receipt is rejected."""
+    root, rows = _prescreen_case(tmp_path)
+    row = rows[0]
+    folder = root / row["artifact_name"]
+    leg = row["leg"]
+    snapshot = folder / f"{leg}.build-python.zip"
+    with zipfile.ZipFile(snapshot) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    members["pip/unlisted.so"] = b"\x7fELFfixture"
+    receipt = json.loads((folder / f"{leg}.build-first.json").read_text())
+    _rewrite_build_snapshot(row, root, members, receipt)
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [])
+
+    with pytest.raises(gate.GateError, match="unlisted native build file"):
+        _build_packages(row, folder)
+
+
+def test_runtime_archive_refuses_unknown_native_link(tmp_path: Path, monkeypatch) -> None:
+    """A runtime archive with an unlicensed dynamic target cannot pass prescreen."""
+    root, rows = _prescreen_case(tmp_path)
+    original = gate.evaluate_native_links
+
+    def evaluate(evidence, subject, **kwargs):
+        if subject.startswith("pypi/package@"):
+            return [gate.Failure(gate.NATIVE_LINK_UNKNOWN, subject, "unknown link")], []
+        return original(evidence, subject, **kwargs)
+
+    monkeypatch.setattr(gate, "evaluate_native_links", evaluate)
+    with pytest.raises(gate.GateError, match="NATIVE_LINK_UNKNOWN"):
+        prescreen({"verified_scope_evidence": rows}, root)
 
 
 def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -> None:
