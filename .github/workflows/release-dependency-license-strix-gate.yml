@@ -1058,7 +1058,7 @@ jobs:
         id: full-set-verdict
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: ${{ inputs.evidence_artifact_name }}--full-set-verdict
+          name: ${{ inputs.evidence_artifact_name == 'release-dependency-sealed-evidence' && 'release-dependency-sealed-evidence--full-set-verdict' || format('release-dependency-full-set-verdict--{0}', inputs.evidence_artifact_name) }}
           path: |
             ${{ runner.temp }}/full-set-verdict.json
             ${{ runner.temp }}/gate-report.json
