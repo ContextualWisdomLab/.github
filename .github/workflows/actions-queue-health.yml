@@ -48,6 +48,7 @@ jobs:
           owner: ContextualWisdomLab
           repositories: ${{ steps.repository_scope.outputs.repositories }}
           permission-actions: read
+          permission-checks: read
           permission-pull-requests: read
 
       - name: Collect read-only repository and runner evidence

@@ -2,7 +2,7 @@
 
 The scheduled `actions-queue-health.yml` workflow reads a fixed allowlist of
 CWL repositories once per hour and publishes a JSON report plus a keyboard-
-readable HTML report as an artifact. It mints a short-lived, Actions-read and
+readable HTML report as an artifact. It mints a short-lived, Actions-read, Checks-read and
 pull-request-read `cwl-noema-review` installation token scoped to the reviewed
 allowlist. The existing cross-repository `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` remain fallbacks; all collector calls are `gh api` reads.
@@ -146,3 +146,19 @@ API failures, or inconsistent pages still reject the repository snapshot.
 This collects the entire selected history rather than treating the first
 1,000 runs as complete. Small terminal queries keep their existing path;
 active-run consistency checks and cancellation authority are unchanged.
+
+
+The corrected 2026-09-27 collection still exhausted the shared REST quota while
+reading the central repository's cancelled history; all 14 repositories were
+incomplete. Splitting that history made each query complete but did not make
+the hourly collection practical. An oversized target-history query now resolves
+terminal evidence through every bounded page of the open PR heads' check suites,
+then through the native `check_suite_id` workflow-run filter. Suite heads and
+returned run-to-suite IDs must match exactly; missing permissions, malformed
+identities and partial lists remain collection failures. Failed and cancelled
+suite evidence is retained, including runs with no materialized jobs. This
+avoids enumerating unrelated closed/superseded terminal history. All active
+statuses remain repository-wide, so closed or superseded expensive work remains
+visible. Small target-history queries and the head-specific terminal queries
+retain their existing path. The installation token adds only Checks-read,
+scoped to the same reviewed repository allowlist.

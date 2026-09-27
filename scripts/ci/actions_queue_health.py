@@ -138,6 +138,46 @@ def _read_terminal_runs(
     return runs
 
 
+def _read_target_terminal_runs(
+    endpoint: str, *, repository: str, heads: Sequence[str], runner: Runner
+) -> list[dict[str, Any]]:
+    """Resolve overflowing target history through complete current-head check suites."""
+    try:
+        return _list_payload(
+            github_json(endpoint, paginate=True, runner=runner), "workflow_runs",
+            max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+        )
+    except QueueHealthError as error:
+        if not str(error).startswith("GitHub API pagination exceeds "):
+            raise
+    runs_by_id = {}
+    for head in heads:
+        suites = _list_payload(
+            github_json(f"repos/{repository}/commits/{quote(head, safe='')}/check-suites"
+                        f"?per_page={MAX_API_PAGE_SIZE}", paginate=True, runner=runner),
+            "check_suites",
+        )
+        for suite in suites:
+            suite_id = suite.get("id")
+            if type(suite_id) is not int or suite_id <= 0 or suite.get("head_sha") != head:
+                raise QueueHealthError("check suite lacks exact current-head identity")
+            if (suite.get("status") != "completed"
+                    and str(suite.get("conclusion") or "").lower() not in TERMINAL_DIAGNOSTIC_STATUSES):
+                continue
+            runs = _list_payload(
+                github_json(f"repos/{repository}/actions/runs?check_suite_id={suite_id}"
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}", paginate=True, runner=runner),
+                "workflow_runs",
+                max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+            )
+            for run in runs:
+                if type(run.get("check_suite_id")) is not int or run["check_suite_id"] != suite_id:
+                    raise QueueHealthError("workflow run escaped its check suite binding")
+                if str(run.get("conclusion") or "").lower() in TERMINAL_DIAGNOSTIC_STATUSES:
+                    runs_by_id[run["id"]] = run
+    return [runs_by_id[run_id] for run_id in sorted(runs_by_id)]
+
+
 def collect_snapshot(
     repositories: Sequence[str],
     *,
@@ -275,14 +315,12 @@ def collect_snapshot(
                     terminal_diagnostic_snapshot[workflow_run["id"]] = workflow_run
 
             for terminal_status in TARGET_TERMINAL_DIAGNOSTIC_STATUSES:
-                target_workflow_runs = _read_terminal_runs(
+                target_workflow_runs = _read_target_terminal_runs(
                     f"repos/{repository_name}/actions/runs?status={terminal_status}"
                     "&event=pull_request_target"
                     f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                    start=parse_timestamp(repository_metadata.get(
-                        "created_at", "1970-01-01T00:00:00Z"
-                    )),
-                    end=parse_timestamp(snapshot_timestamp).replace(microsecond=0),
+                    repository=repository_name,
+                    heads=current_head_shas,
                     runner=runner,
                 )
                 for workflow_run in target_workflow_runs:
