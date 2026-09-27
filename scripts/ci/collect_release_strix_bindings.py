@@ -67,6 +67,7 @@ def collect_bindings(
     archive_report_path: Path | None = None,
     verified_scope_path: Path | None = None,
     native_report_path: Path | None = None,
+    source_root: Path | None = None,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -247,7 +248,8 @@ def collect_bindings(
         for row in scope_identities:
             _artifact(listed, row["artifact_name"], row["artifact_id"],
                       row["artifact_digest"], run_id, control_sha, started)
-    report = gate.gate(capture_root, stage=gate.FULL_STAGE)
+    report = gate.gate(capture_root, stage=gate.FULL_STAGE,
+                       **({"source_root": source_root} if source_root is not None else {}))
     archive_reviews = []
     build_reviews = []
     tool_reviews = []
@@ -345,6 +347,7 @@ def main() -> None:
     parser.add_argument("--runtime-archive-license-report")
     parser.add_argument("--verified-scope")
     parser.add_argument("--native-report")
+    parser.add_argument("--source")
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
@@ -365,6 +368,7 @@ def main() -> None:
                              if args.runtime_archive_license_report else None),
         verified_scope_path=Path(args.verified_scope) if args.verified_scope else None,
         native_report_path=Path(args.native_report) if args.native_report else None,
+        source_root=Path(args.source) if args.source else None,
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 

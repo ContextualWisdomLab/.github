@@ -1564,7 +1564,8 @@ def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure], s
     return dependencies, failures, expected
 
 
-def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], set[str]]:
+def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
+                     source_sha: str | None = None) -> tuple[list[Dependency], list[Failure], set[str]]:
     """Enumerate Cargo dependencies, returning Cargo.lock's full expected key set."""
 
     lock = parse_cargo_lock(
@@ -1585,18 +1586,57 @@ def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], se
     if (workspace_root is None or not workspace_root.is_absolute()
             or ".." in workspace_root.parts):
         raise GateError(CAPTURE_INCOMPLETE, "cargo metadata workspace root is invalid")
-    for package in graph.values():
+    bound_root = None
+    if source_root is not None:
+        try:
+            if not GIT_SHA_RE.fullmatch(source_sha or ""):
+                raise ValueError("selected commit is not an exact SHA")
+            bound_root = source_root.resolve(strict=True)
+            if (subprocess.check_output(["git", "-C", str(bound_root), "rev-parse", "--show-toplevel"],
+                                        text=True).strip() != str(bound_root)
+                    or subprocess.check_output(["git", "-C", str(bound_root), "rev-parse", "HEAD"],
+                                               text=True).strip() != source_sha):
+                raise ValueError("source checkout differs from selected commit")
+            if not workspace_root.is_relative_to(bound_root):
+                raise ValueError("Cargo workspace is outside selected source")
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            raise GateError(CAPTURE_INCOMPLETE, "Cargo source checkout cannot be bound") from error
+
+    def source_blob(path: Path) -> bytes:
+        try:
+            relative = path.relative_to(bound_root)
+            if any((bound_root / parent).is_symlink() for parent in (relative, *relative.parents)):
+                raise ValueError("source declaration is a symlink")
+            blob = subprocess.check_output(["git", "-C", str(bound_root), "show", f"{source_sha}:{relative.as_posix()}"])
+            if _require_regular_file(path, CAPTURE_INCOMPLETE).read_bytes() != blob:
+                raise ValueError("source declaration differs from selected commit")
+            return blob
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            raise GateError(CAPTURE_INCOMPLETE, "Cargo declaration cannot be bound to source") from error
+
+    if bound_root is not None:
+        committed_lock = source_blob(Path(workspace_root) / "Cargo.lock")
+        if _require_regular_file(capture / "cargo" / "Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != committed_lock:
+            raise GateError(CAPTURE_INCOMPLETE, "captured Cargo lock differs from selected source")
+    for package in [root_package, *graph.values()]:
         if package.get("source") is not None:
             continue
         manifest_value = package.get("manifest_path")
         manifest_path = PurePosixPath(manifest_value) if isinstance(manifest_value, str) else None
         if (manifest_path is None or not manifest_path.is_absolute()
                 or ".." in manifest_path.parts
-                or not manifest_path.is_relative_to(workspace_root)):
+                or not manifest_path.is_relative_to(bound_root or workspace_root)):
             raise GateError(
                 CAPTURE_INCOMPLETE,
                 "source-bound Cargo package manifest is outside the release workspace",
             )
+        if bound_root is not None:
+            declaration = tomllib.loads(source_blob(Path(manifest_path)).decode("utf-8")).get("package", {})
+            version = declaration.get("version")
+            if version == {"workspace": True}:
+                version = tomllib.loads(source_blob(Path(workspace_root) / "Cargo.toml").decode("utf-8"))["workspace"]["package"]["version"]
+            if (declaration.get("name"), version) != _package_identity(package):
+                raise GateError(CAPTURE_INCOMPLETE, "Cargo path identity differs from selected source")
     failures = reconcile_cargo(lock, graph, root_identity)
     external = {entry for entry, package in graph.items() if package.get("source") is not None}
     dependencies = [
@@ -1797,7 +1837,8 @@ def _dependency_row(
     }
 
 
-def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
+def gate(capture_root: Path, stage: str = FULL_STAGE, *,
+         source_root: Path | None = None) -> GateReport:
     """Run one fail-closed gate stage over a captured release.
 
     ``stage="license"`` establishes the full dependency scope and applies licence,
@@ -1833,7 +1874,7 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
         dependencies.extend(found)
         report.failures.extend(failures)
     if "cargo" in declared:
-        found, failures, expected["cargo"] = _enumerate_cargo(capture)
+        found, failures, expected["cargo"] = _enumerate_cargo(capture, source_root=source_root, source_sha=source_sha)
         dependencies.extend(found)
         report.failures.extend(failures)
     # Every declared ecosystem is compared as a whole set before any dependency is
@@ -2492,6 +2533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     screen.add_argument("--capture", required=True)
     screen.add_argument("--report", required=True)
+    screen.add_argument("--source")
 
     fanout = sub.add_parser(
         "fanout-plan", help="Emit a bounded exact dependency matrix after licence approval"
@@ -2539,6 +2581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
     run.add_argument("--report", required=True)
+    run.add_argument("--source")
 
     compose = sub.add_parser("seal", help="Seal gated bytes for exact-artifact attestation")
     compose.add_argument("--report", required=True)
@@ -2619,7 +2662,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command in {"gate", "prescreen"}:
             stage = FULL_STAGE if args.command == "gate" else LICENSE_STAGE
-            report = gate(Path(args.capture), stage=stage)
+            report = gate(Path(args.capture), stage=stage,
+                          source_root=Path(args.source) if args.source else None)
             payload = report.to_json()
             Path(args.report).write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"

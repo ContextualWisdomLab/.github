@@ -513,3 +513,12 @@ def test_both_capture_paths_load_exact_source_licence_choices() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
     assert workflow.count("capture-license-selections") == 2
     assert workflow.count('--source release-source --source-sha "$SOURCE_SHA"') == 2
+
+
+def test_cargo_path_crates_are_bound_to_the_selected_checkout_in_both_stages():
+    text = _workflow_text()
+    for command, count in (("release_dependency_gate.py prescreen", 2),
+                           ("collect_release_strix_bindings.py", 1)):
+        blocks = re.findall(re.escape(command) + r" \\\n(.*?)(?=\n\s*--capture)", text, re.DOTALL)
+        assert len(blocks) == count
+        assert all("--source release-source" in block for block in blocks)

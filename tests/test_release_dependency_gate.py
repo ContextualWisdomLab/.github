@@ -993,3 +993,64 @@ def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> N
     assert policy.LICENSE_TEXT_MISSING in codes
     assert (policy.LICENSE_SELECTION_REQUIRED in codes) == (selection is None)
     assert decision.allowed == (selection is not None)
+
+
+@pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
+                                      "changed_manifest", "changed_lock", "captured_lock",
+                                      "symlink", "identity"])
+def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
+    import subprocess
+
+    capture = build_capture(tmp_path / "capture")
+    source = tmp_path / "source"
+    wheel = source / "crates/wheel"
+    core = source / "crates/core/Cargo.toml"
+    wheel.mkdir(parents=True)
+    core.parent.mkdir(parents=True)
+    core.write_text('[package]\nname = "local-core"\nversion = "1.0.0"\n')
+    (wheel / "Cargo.toml").write_text('[package]\nname = "fast-mlsirm"\nversion = "0.11.5"\n')
+    lock = capture / "cargo/Cargo.lock"
+    lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
+    (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+    git("init", "-q")
+    git("add", ".")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "-qm", "immutable source")
+    sha = git("rev-parse", "HEAD")
+    path = capture / "cargo/metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["workspace_root"] = str(wheel)
+    metadata["packages"][0]["manifest_path"] = str(wheel / "Cargo.toml")
+    metadata["packages"].append({"id": "local-id", "name": "local-core", "version": "1.0.0",
+                                 "source": None, "manifest_path": str(core)})
+    metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "local-id"})
+    metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id"}]})
+    if mutation == "wrong_sha":
+        sha = "a" * 40
+    elif mutation == "foreign_path":
+        metadata["packages"][-1]["manifest_path"] = str(tmp_path / "foreign/Cargo.toml")
+    elif mutation == "changed_manifest":
+        core.write_text(core.read_text() + "# altered\n")
+    elif mutation == "changed_lock":
+        (wheel / "Cargo.lock").write_text(lock.read_text() + "# altered\n")
+    elif mutation == "captured_lock":
+        lock.write_text(lock.read_text() + "# altered\n")
+    elif mutation == "symlink":
+        content = core.read_bytes()
+        core.unlink()
+        external = tmp_path / "foreign-manifest"
+        external.write_bytes(content)
+        core.symlink_to(external)
+    elif mutation == "identity":
+        metadata["packages"][-1]["name"] = "foreign-core"
+    _write(path, metadata)
+    if mutation is not None:
+        with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
+            gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
+                                  source_sha=sha)
+    else:
+        dependencies, failures, expected = gate._enumerate_cargo(capture, source_root=source, source_sha=sha)
+        assert not failures
+        assert {dependency.key for dependency in dependencies} == expected == {"cargo/greencrate@0.1.0"}
