@@ -1476,7 +1476,11 @@ def capture_license_selections(source: Path, source_sha: str, capture: Path) -> 
         return  # No selection is still refused when an OR licence is encountered.
     if not entry.startswith("100644 blob "):
         raise GateError(CAPTURE_INCOMPLETE, "selection source must be a regular Git blob")
-    payload = subprocess.check_output(["git", "show", f"{source_sha}:{path}"], cwd=source)
+    blob_oid = entry.split()[2]
+    size = int(subprocess.check_output(["git", "cat-file", "-s", blob_oid], cwd=source))
+    if size > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, "selection source exceeds bounded size")
+    payload = subprocess.check_output(["git", "cat-file", "blob", blob_oid], cwd=source)
     if len(payload) > _MAX_METADATA_BYTES:
         raise GateError(CAPTURE_INCOMPLETE, "selection source exceeds bounded size")
     capture.mkdir(parents=True, exist_ok=True)

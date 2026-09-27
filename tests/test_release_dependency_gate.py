@@ -871,3 +871,30 @@ def test_selection_loader_refuses_dangling_link_and_nonstring_choice(tmp_path: P
                                 "chosen": ["MIT"], "rationale": "reviewed"}]))
     with pytest.raises(gate.GateError):
         gate._load_selections(tmp_path)
+
+
+def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    path = source / "docs/release-license-selections.json"
+    path.parent.mkdir()
+    path.write_bytes(b" " * (gate._MAX_METADATA_BYTES + 1))
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "oversized selection"], cwd=source, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    original = subprocess.check_output
+
+    def metadata_only(command, **kwargs):
+        assert command[1] != "show"
+        assert command[1:3] != ["cat-file", "blob"]
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(gate.subprocess, "check_output", metadata_only)
+    capture = tmp_path / "capture"
+    with pytest.raises(gate.GateError, match="exceeds bounded size"):
+        gate.capture_license_selections(source, sha, capture)
+    assert not capture.exists()
