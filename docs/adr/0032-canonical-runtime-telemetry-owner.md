@@ -94,6 +94,19 @@ HTTP failure, redirect, malformed acknowledgement, or TLS failure leaves the
 record pending. Local failure/recovery tests cover this handoff. The retention
 limits above are now defined, but no actual SIEM destination, gateway
 deployment, expiry enforcement, or live delivery has been verified.
+
+Policy-owner lookup (2026-09-27 13:12 UTC): the existing
+[CWL GRC repository](https://github.com/ContextualWisdomLab/governance-risk-compliance/blob/529cf321f134e26c0cd379ee53c06ab5297363b6/README.md)
+owns versioned policy, control, risk, evidence and compliance-audit truth.
+Its inspected default-branch head `529cf321f134e26c0cd379ee53c06ab5297363b6`
+is a loopback-only developer preview. Its
+[HTTP routes](https://github.com/ContextualWisdomLab/governance-risk-compliance/blob/529cf321f134e26c0cd379ee53c06ab5297363b6/cwl_grc/app.py)
+provide policy/evidence operations, not the normalized security gateway contract
+used here. GRC is the existing home for retention-policy provenance; naming it
+does not supply an approved policy version, SIEM destination, operational
+assignee or deployed expiry evidence. Other GRC feature branches and deployments
+were not verified in this lookup.
+
 Normal export failure must not fail a product transaction: a bounded queue
 retries with backoff, then follows an explicit drop/dead-letter/local durable
 buffer policy and reports loss. The audit/outbox path remains durable and
