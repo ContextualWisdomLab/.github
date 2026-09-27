@@ -1055,7 +1055,7 @@ def test_dispatch_settles_all_languages_with_one_run_wide_mutation() -> None:
     assert "actions: write" in settlement.split("    steps:\n", 1)[0]
     assert 'github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in settlement
     assert 'github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in settlement
-    assert 'github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100"' in settlement
+    assert 'github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100" | jq -s .' in settlement
     assert "rerun-failed-jobs" in settlement
     assert '"rerun"' in settlement
     assert "actions/jobs/${REQUIRED_JOB_ID}/rerun" not in workflow
@@ -1189,6 +1189,7 @@ def _run_settlement_step(
         "set -euo pipefail\n"
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
+        'if printf \'%s\\n\' "$@" | grep -qx -- --slurp; then exit 2; fi\n'
         'if printf \'%s\\n\' "$@" | grep -qx POST; then\n'
         '  printf \'%s\\n\' "$endpoint" >>"$FAKE_POST_LOG"\n'
         '  if [ -n "${FAKE_WAKE_POST_FAIL_TOKEN:-}" ] && '
@@ -1226,10 +1227,10 @@ def _run_settlement_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
-        "FAKE_REQUIRED_JOB_PAGES": json.dumps([{"jobs": required_jobs}]),
-        "FAKE_HANDLER_JOB_PAGES": json.dumps([{"jobs": handler_jobs}]),
+        "FAKE_REQUIRED_JOB_PAGES": "\n".join(json.dumps({"jobs": [job]}) for job in required_jobs),
+        "FAKE_HANDLER_JOB_PAGES": json.dumps({"jobs": handler_jobs}),
         "FAKE_HANDLER_ARTIFACT_PAGES": json.dumps(
-            [{"artifacts": handler_artifacts}]
+            {"artifacts": handler_artifacts}
         ),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_EXIT": "0",
