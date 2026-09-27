@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -40,15 +41,20 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 6)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
-        """Require every Noema Review job to use explicit Ubuntu 24.04."""
+        """Keep trusted metadata jobs separate from the model review pool."""
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')"), 5)
-        self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 5)
-        self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 5)
+        self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 1)
+        self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 1)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
         self.assertEqual(workflow.count('"cwlab-control"'), 4)
+        for name in ("admit-current-head", "changed-scope", "cancel-closed-pr-runs", "continue-noema-transport"):
+            block = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+            self.assertIn('"group":"CWL central control"', block)
+            self.assertNotIn("CWL MCP remediation", block)
+            self.assertNotIn("actions/checkout", block)
         review = workflow.split("\n  noema-review:\n", 1)[1].split("\n  continue-noema-transport:\n", 1)[0]
         self.assertNotIn("cwlab-control", review)
 
