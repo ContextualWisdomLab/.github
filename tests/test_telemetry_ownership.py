@@ -2,6 +2,7 @@
 
 import sys
 import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -458,3 +459,12 @@ def test_wildcard_otel_import_tracks_calls_and_respects_shadowing() -> None:
     assert scan_source(source) == ((2, "TracerProvider"), (4, "factory"))
     assert scan_source("from opentelemetry.sdk.trace import *") == ()
     assert scan_source("from unrelated import *\nTracerProvider()") == ()
+
+
+def test_canonical_sdk_is_an_exact_review_dispatch_target() -> None:
+    mirror = json.loads(
+        Path("scripts/ci/opencode_repository_dispatch_targets.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert mirror["targets"].count("ContextualWisdomLab/cwl-telemetry") == 1
