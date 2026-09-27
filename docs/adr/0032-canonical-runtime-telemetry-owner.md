@@ -80,6 +80,9 @@ contractual limit before deployment. A documented legal hold suspends deletion
 only for the affected records, with access and release audited. The Collector,
 backend, SIEM, replicas and backups need tested expiry; a configuration value
 alone does not prove deletion.
+The SDK receiver's seven-day delivered-event replay cache is a deduplication
+window, not the 365-day SIEM record store; undelivered outbox rows remain
+pending until an exact acknowledgement or an explicit audited disposition.
 
 Receiver admission checks schema/version, content type, size, tenant binding,
 timestamp window, replay/idempotency, authentication and TLS. An external
