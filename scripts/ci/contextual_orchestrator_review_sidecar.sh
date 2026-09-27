@@ -333,9 +333,9 @@ export ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"
 # pipe and silently show an empty/truncated diagnostic (the exact class of bug
 # this sanitizer exists to avoid: see the 2026-08-30 sidecar-diagnostics gap
 # baseline entry).
-exec {orchestrator_stdout_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
+exec {orchestrator_stdout_fd}> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
 stdout_sanitizer_pid=$!
-exec {orchestrator_stderr_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
+exec {orchestrator_stderr_fd}> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
 stderr_sanitizer_pid=$!
 wait_for_sidecar_sanitizers() {
   wait "$stdout_sanitizer_pid" 2>/dev/null || true

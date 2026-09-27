@@ -463,8 +463,8 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     assert "exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-" in text
     assert "wait_for_sidecar_sanitizers" in text
     # The old bare, unwaited process-substitution redirection must be gone.
-    assert '> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \\' not in text
-    assert '2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &' not in text
+    assert '> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \\' not in text
+    assert '2> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &' not in text
     # The drain must happen strictly before the failure-path read, only in the
     # branch where the sidecar has already exited (not the healthz-timeout
     # branch, where it may still be running and draining would hang).

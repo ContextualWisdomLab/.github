@@ -40,3 +40,16 @@ re-publish older staging data. Linked evidence outputs, staging reports, or
 work directories must fail without modifying their targets; unrelated files
 must survive. The credential, dependency, and launcher cases failed before
 the staging repair and pass afterward.
+
+## Standard-library log-filter startup
+
+The two log filters use only Python's standard library. They run with `-S`
+so installed-package and `sitecustomize` startup hooks do not run before
+stream filtering begins. The model launcher keeps its normal dependency
+environment. The filter input, redaction rules, and model timing are unchanged.
+
+The real-shell launcher failure test supplies a controlled `sitecustomize`
+hook that writes a marker. The old invocation writes that marker and fails
+the regression. The isolated invocation uses the real filter, leaves no
+marker, reports the launcher exit, and preserves the existing evidence and
+unrelated-file assertions.

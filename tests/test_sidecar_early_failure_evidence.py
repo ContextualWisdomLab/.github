@@ -70,7 +70,7 @@ case "$1" in
       cp "$0" "$3/bin/python"
     fi
     ;;
-  -u) exec "{sys.executable}" "$@" ;;
+  -S|-u) exec "{sys.executable}" "$@" ;;
   */launch_sidecar.py) exit 37 ;;
   -) cat >/dev/null ;;
 esac
@@ -90,6 +90,11 @@ exit 0
                ORCHESTRATOR_PIN_SHA=pin)
     if failure != "credentials":
         env["OPENAI_API_KEY"] = "synthetic"
+    startup_marker = tmp_path / "site-startup.txt"
+    if failure == "launcher":
+        (bin_dir / "sitecustomize.py").write_text(
+            f"from pathlib import Path; Path({str(startup_marker)!r}).write_text('unexpected site startup')\n")
+        env["PYTHONPATH"] = str(bin_dir)
     result = subprocess.run(["bash", str(ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh")],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
@@ -103,5 +108,4 @@ exit 0
         assert result.returncode == (37 if failure == "dependencies" else 1)
         if failure == "launcher":
             assert "sidecar exited before healthz (status 37)" in result.stderr
-        if failure == "launcher":
-            assert "sidecar exited before healthz (status 37)" in result.stderr
+            assert not startup_marker.exists()
