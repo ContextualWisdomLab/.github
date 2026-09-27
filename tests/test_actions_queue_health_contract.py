@@ -1,8 +1,8 @@
 """Contract tests for the scheduled read-only Actions queue report."""
 
+import ast
 import json
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,3 +57,15 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
             "ContextualWisdomLab/quarantine-sandbox-runtime",
         ]
     }
+
+
+def test_queue_health_core_does_not_duplicate_executable_entrypoints() -> None:
+    """Keep collection and CLI orchestration solely in the executable module."""
+    core_path = ROOT / "scripts/ci/actions_queue_health_core.py"
+    tree = ast.parse(core_path.read_text(encoding="utf-8"))
+    top_level_functions = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    assert "collect_snapshot" not in top_level_functions
+    assert "main" not in top_level_functions

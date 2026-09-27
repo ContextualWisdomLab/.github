@@ -1,0 +1,28 @@
+[
+  {
+    "package": "android_system_properties@0.1.5",
+    "ecosystem": "cargo",
+    "artifact_filename": "android_system_properties-0.1.5.crate",
+    "artifact_sha256": "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311",
+    "member": "android_system_properties-0.1.5/LICENSE-APACHE",
+    "raw_sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+    "normalized_sha256": "ce03197ac0bc9c47f5b54e363c8832966483f167792f63e61bc2f3a7e1f4c953",
+    "fixture": "android_system_properties-0.1.5-LICENSE-APACHE-reference.txt",
+    "reference_only": true,
+    "basis": "https://www.apache.org/licenses/LICENSE-2.0.txt Appendix application notice",
+    "limitation": "Reference is not a full Apache grant; MIT alternative needs an independent complete MIT grant."
+  },
+  {
+    "package": "android_system_properties@0.1.6",
+    "ecosystem": "cargo",
+    "artifact_filename": "android_system_properties-0.1.6.crate",
+    "artifact_sha256": "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc",
+    "member": "android_system_properties-0.1.6/LICENSE-APACHE",
+    "raw_sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+    "normalized_sha256": "ce03197ac0bc9c47f5b54e363c8832966483f167792f63e61bc2f3a7e1f4c953",
+    "fixture": "android_system_properties-0.1.6-LICENSE-APACHE-reference.txt",
+    "reference_only": true,
+    "basis": "https://www.apache.org/licenses/LICENSE-2.0.txt Appendix application notice",
+    "limitation": "Reference is not a full Apache grant; MIT alternative needs an independent complete MIT grant."
+  }
+]

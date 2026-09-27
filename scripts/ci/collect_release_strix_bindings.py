@@ -13,9 +13,11 @@ from typing import Any, BinaryIO, Callable, Iterable, Mapping
 
 try:
     from scripts.ci import release_dependency_gate as gate
+    from scripts.ci.scan_release_native_links import _reader, scan
     from scripts.ci.verify_release_distribution_set import (
-        DistributionSetError,
+        DIGEST_RE,
         MAX_CONTROL_BYTES,
+        DistributionSetError,
         _archive,
         _artifact,
         _digest,
@@ -28,9 +30,11 @@ try:
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
+    from scan_release_native_links import _reader, scan
     from verify_release_distribution_set import (
-        DistributionSetError,
+        DIGEST_RE,
         MAX_CONTROL_BYTES,
+        DistributionSetError,
         _archive,
         _artifact,
         _digest,
@@ -60,6 +64,10 @@ def collect_bindings(
     verdict_path: Path,
     record_artifact_id: int,
     record_artifact_digest: str,
+    archive_report_path: Path | None = None,
+    verified_scope_path: Path | None = None,
+    native_report_path: Path | None = None,
+    source_root: Path | None = None,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -69,7 +77,7 @@ def collect_bindings(
         raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "workflow attempt differs from collector")
     started = _timestamp(attempt.get("run_started_at"))
     expected = gate.strix_fanout_plan(
-        capture_root, license_report, control_sha, run_id, run_attempt
+        capture_root, license_report, control_sha, run_id, run_attempt, archive_report_path
     )
     plan = gate.load_json(plan_path)
     if plan != expected or plan["source_repository"] != repository or plan["source_sha"] != source_sha:
@@ -111,6 +119,8 @@ def collect_bindings(
             gate.STRIX_BINDING_UNBOUND,
             "verified distribution report lacks wheel/sdist coverage",
         )
+    native_report_sha256 = None
+    native_link_analyzer = None
     try:
         with tempfile.TemporaryDirectory(
             prefix=".release-distributions-", dir=bindings.parent
@@ -130,6 +140,20 @@ def collect_bindings(
                 fetch=fetch,
                 output_dir=Path(distribution_scratch) / "verified",
             )
+            if native_report_path is not None:
+                if (native_report_path.is_symlink() or not native_report_path.is_file()
+                        or native_report_path.stat().st_size > MAX_CONTROL_BYTES):
+                    raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "native link report is missing or oversized")
+                native_bytes = native_report_path.read_bytes()
+                native_payload = _json_bytes(native_bytes)
+                if native_payload != scan(
+                    {"verified_distributions": canonical_distributions},
+                    Path(distribution_scratch) / "verified", source_sha, _reader()
+                ):
+                    raise gate.GateError(gate.SOURCE_HASH_MISMATCH,
+                                         "native links differ from immutable distribution bytes")
+                native_report_sha256 = hashlib.sha256(native_bytes).hexdigest()
+                native_link_analyzer = native_payload["analyzer"]
     except DistributionSetError as error:
         raise gate.GateError(
             gate.STRIX_BINDING_UNBOUND,
@@ -172,15 +196,119 @@ def collect_bindings(
                 raise gate.GateError(gate.STRIX_BINDING_UNBOUND, f"{row['key']}: binding differs from plan")
             (staging / member_name).write_bytes(raw)
         staging.rename(bindings)
-    report = gate.gate(capture_root, stage=gate.FULL_STAGE)
-    report_path.write_text(json.dumps(report.to_json(), indent=2, sort_keys=True) + "\n")
+    scope_identities: list[dict[str, Any]] | None = None
+    variant_identities: list[dict[str, Any]] | None = None
+    if verified_scope_path is not None:
+        scope = gate.load_json(verified_scope_path)
+        rows = scope.get("verified_scope_evidence") if isinstance(scope, Mapping) else None
+        variants = scope.get("verified_runtime_variants") if isinstance(scope, Mapping) else None
+        if (not isinstance(rows, list) or len(rows) != 13
+                or not all(isinstance(row, Mapping) for row in rows)
+                or not isinstance(variants, list) or len(variants) != 3
+                or not all(isinstance(row, Mapping) for row in variants)):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope set is incomplete")
+        scope_identities = [{key: row.get(key) for key in
+                             ("leg", "artifact_id", "artifact_name", "artifact_digest")}
+                            for row in rows]
+        if (any(not isinstance(row["leg"], str)
+                       or row["artifact_name"] != f"repro-digest-{row['leg']}"
+                       or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
+                       or not isinstance(row["artifact_digest"], str)
+                       or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
+                       for row in scope_identities)
+                or len({row["leg"] for row in scope_identities}) != 13
+                or len({row["artifact_id"] for row in scope_identities}) != 13
+                or sum(row["leg"] == "sdist" for row in scope_identities) != 1):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope identities are malformed")
+        used_ids = seen_ids | {row.get("artifact_id") for row in verified_distributions}
+        if any(row["artifact_id"] in used_ids for row in scope_identities):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
+        for row in scope_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
+        variant_identities = [{key: row.get(key) for key in
+                               ("leg", "arch", "artifact_id", "artifact_name", "artifact_digest")}
+                              for row in variants]
+        if (any(not isinstance(row["leg"], str) or row["arch"] != "x86_64"
+                or row["artifact_name"] != f"repro-macos-x86-{row['leg']}"
+                or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
+                or not isinstance(row["artifact_digest"], str)
+                or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
+                for row in variant_identities)
+                or len({row["leg"] for row in variant_identities}) != 3
+                or len({row["artifact_id"] for row in variant_identities}) != 3
+                or {row["leg"] for row in variant_identities}
+                != {f"universal2-apple-darwin-py{version}" for version in ("3.12", "3.13", "3.14")}
+                or any(row["artifact_id"] in used_ids | {item["artifact_id"] for item in scope_identities}
+                       for row in variant_identities)):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "Intel runtime identities are malformed")
+        for row in variant_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
+        for row in scope_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
+    report = gate.gate(capture_root, stage=gate.FULL_STAGE,
+                       **({"source_root": source_root} if source_root is not None else {}))
+    archive_reviews = []
+    build_reviews = []
+    tool_reviews = []
+    if archive_report_path is not None and report.passed:
+        archive_payload = gate.load_json(archive_report_path)
+        by_key = {row["key"]: row for row in archive_payload["archives"]}
+        build_by_key = {row["key"]: row for row in archive_payload["build_packages"]}
+        tool_by_key = {row["key"]: row for row in archive_payload["build_tools"]}
+        for row in plan["dependencies"]:
+            if not {"runtime_archive", "build_package", "build_tool"} & row.keys():
+                continue
+            build = "build_package" in row
+            tool = "build_tool" in row
+            approved = (tool_by_key if tool else build_by_key if build else by_key)[row["key"]]
+            dependency = gate.Dependency("github-release" if tool else "pypi",
+                                         approved["name"], approved["version"])
+            failures = gate.validate_strix_binding(
+                bindings / f"{row['slug']}.json", dependency,
+                {"source_sha256": approved["source_sha256"]}, row["fixture_sha256"],
+                source_sha, fixture_key=row["key"],
+            )
+            report.failures.extend(failures)
+            review = {"key": row["key"], "package_key": approved["package_key"],
+                      "source_sha256": approved["source_sha256"],
+                      "license": approved["license"],
+                      "fixture_sha256": row["fixture_sha256"],
+                      "legs": approved["legs"]}
+            (tool_reviews if tool else build_reviews if build else archive_reviews).append(review)
+    report_payload = report.to_json()
+    if archive_report_path is not None:
+        report_payload["runtime_archive_reviews"] = sorted(archive_reviews, key=lambda row: row["key"])
+        report_payload["build_package_reviews"] = sorted(build_reviews, key=lambda row: row["key"])
+        report_payload["build_tool_reviews"] = sorted(tool_reviews, key=lambda row: row["key"])
+    report_path.write_text(json.dumps(report_payload, indent=2, sort_keys=True) + "\n")
     if not report.passed:
         raise gate.GateError(gate.STRIX_FINDINGS_OPEN, "full gate refused collected bindings")
     binding_artifacts = [
         {"key": row["key"], "name": row["artifact_name"],
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
-        for row in plan["dependencies"]
+        for row in plan["dependencies"] if not {"runtime_archive", "build_package", "build_tool"} & row.keys()
+    ]
+    archive_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "runtime_archive" in row
+    ]
+    build_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "build_package" in row
+    ]
+    tool_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "build_tool" in row
     ]
     verdict = {
         "schema": "cwl.release-full-set-verdict/1", "result": "PASS",
@@ -193,6 +321,17 @@ def collect_bindings(
         "license_report_sha256": hashlib.sha256(license_report.read_bytes()).hexdigest(),
         "gate_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
     }
+    if archive_report_path is not None:
+        verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
+        verdict["build_package_binding_artifacts"] = build_binding_artifacts
+        verdict["build_tool_binding_artifacts"] = tool_binding_artifacts
+        verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
+    if scope_identities is not None:
+        verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])
+        verdict["runtime_variants"] = sorted(variant_identities, key=lambda row: row["leg"])
+    if native_report_sha256 is not None:
+        verdict["native_links_sha256"] = native_report_sha256
+        verdict["native_link_analyzer"] = native_link_analyzer
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
@@ -205,6 +344,10 @@ def main() -> None:
         "verified-distributions", "verdict", "record-artifact-id", "record-artifact-digest",
     ):
         parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--runtime-archive-license-report")
+    parser.add_argument("--verified-scope")
+    parser.add_argument("--native-report")
+    parser.add_argument("--source")
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
@@ -221,9 +364,14 @@ def main() -> None:
         verdict_path=Path(args.verdict),
         record_artifact_id=int(args.record_artifact_id),
         record_artifact_digest=args.record_artifact_digest,
+        archive_report_path=(Path(args.runtime_archive_license_report)
+                             if args.runtime_archive_license_report else None),
+        verified_scope_path=Path(args.verified_scope) if args.verified_scope else None,
+        native_report_path=Path(args.native_report) if args.native_report else None,
+        source_root=Path(args.source) if args.source else None,
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - main() owns the tested CLI contract
     main()

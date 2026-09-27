@@ -225,7 +225,7 @@ def test_the_workflow_installs_only_after_source_validation_and_the_licence_stag
 
 def test_the_workflow_install_step_reuses_the_collected_download_root() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.count('--download-root "${RUNNER_TEMP}/collected"') == 2
+    assert text.count('--download-root "${RUNNER_TEMP}/collected"') == 4
     assert "--install-gated" in text
     # The old unconditional install line must not come back.
     assert 'pip --python "${RUNNER_TEMP}/gate-venv/bin/python" install' not in text

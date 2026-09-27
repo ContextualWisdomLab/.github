@@ -195,3 +195,12 @@ def test_unknown_identifier_is_not_silently_allowed() -> None:
     """An identifier outside the allowlist fails rather than passing as unknown."""
     decision = policy.classify_identifier("Elastic-2.0")
     assert (decision.allowed, decision.code) == (False, policy.LICENSE_UNRECOGNIZED)
+
+
+def test_compound_choice_records_resolved_unicode_obligations():
+    decision = policy.evaluate_license_expression(
+        "(MIT OR Apache-2.0) AND Unicode-3.0", selection="MIT AND Unicode-3.0", rationale="Both grants retained")
+    assert decision.allowed and decision.selected == "MIT AND Unicode-3.0"
+    decision = policy.evaluate_license_expression(
+        "MIT OR Apache-2.0", selection="MIT AND Unicode-3.0", rationale="Extra obligation")
+    assert not decision.allowed and decision.code == policy.LICENSE_SELECTION_INVALID

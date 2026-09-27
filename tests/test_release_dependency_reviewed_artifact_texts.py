@@ -64,3 +64,48 @@ def test_atheris_missing_declaration_is_not_auto_repaired():
         row["package"], None)
     assert not decision.allowed
     assert failures
+
+
+def test_allocator_dual_licence_uses_both_actual_archive_texts():
+    rows = [row for row in ROWS if row['package'] == 'allocator-api2@0.2.21']
+    evidence = _python_evidence(
+        license_expression='MIT OR Apache-2.0',
+        license_texts={row['member']: TEXTS[row['fixture']] for row in rows},
+    )
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, 'cargo/allocator-api2@0.2.21',
+        {'chosen': 'MIT', 'rationale': 'Inspected both archive licence texts; retain the MIT permission notice.'},
+    )
+    assert failures == []
+    assert decision.allowed
+    failures, _, _ = gate.evaluate_dependency_license(evidence, 'cargo/allocator-api2@0.2.21', None)
+    assert policy.LICENSE_SELECTION_REQUIRED in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize("row", json.loads((ROOT / "reference_provenance.json").read_text()),
+                         ids=lambda row: row["package"])
+@pytest.mark.parametrize("mutation", [None, "no-mit", "notice-only", "changed-notice",
+                                      "apache-choice", "pypi", "and-expression", "no-choice"])
+def test_android_apache_notice_does_not_supply_a_full_grant(row, mutation):
+    text = TEXTS[row["fixture"]]
+    assert hashlib.sha256(text.encode()).hexdigest() == row["raw_sha256"]
+    normalized = re.sub(r"[ \t\r\n]+", " ", text).strip(" \t\r\n")
+    assert hashlib.sha256(normalized.encode()).hexdigest() == row["normalized_sha256"]
+    assert policy.recognize_license_text(text) is None
+    texts = {"LICENSE-MIT": TEXTS["android_system_properties-0.1.6-LICENSE-MIT.txt"],
+             "LICENSE-APACHE": text}
+    if mutation in {"no-mit", "notice-only"}:
+        del texts["LICENSE-MIT"]
+    if mutation == "changed-notice":
+        texts["LICENSE-APACHE"] += "Commercial redistribution requires additional permission."
+    expression = "MIT AND Apache-2.0" if mutation == "and-expression" else "MIT OR Apache-2.0"
+    selection = {"chosen": "Apache-2.0" if mutation == "apache-choice" else "MIT",
+                 "rationale": "Read complete MIT grant and the separate Apache reference notice."}
+    if mutation == "no-choice":
+        selection = None
+    evidence = _python_evidence(license_expression=expression, license_texts=texts,
+                                ecosystem="pypi" if mutation == "pypi" else "cargo")
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, row["package"], selection)
+    assert (decision.allowed and not failures) == (mutation is None)
+    if mutation == "apache-choice":
+        assert policy.LICENSE_TEXT_MISSING in {failure.code for failure in failures}
