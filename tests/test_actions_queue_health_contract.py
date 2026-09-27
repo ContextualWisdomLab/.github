@@ -26,6 +26,12 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     assert "repositories: ${{ steps.repository_scope.outputs.repositories }}" in workflow
     assert "config/actions_queue_health_repositories.json)" in workflow
     assert "GH_TOKEN: ${{ steps.observer_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}" in workflow
+    workflow_permissions = workflow.split("permissions:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert workflow_permissions == "  contents: read\n  actions: read\n"
+    collect_permissions = workflow.split("  collect:\n", 1)[1].split(
+        "    permissions:\n", 1
+    )[1].split("    steps:\n", 1)[0]
+    assert collect_permissions == "      contents: read\n      actions: read\n"
     assert "GH_TOKEN: ${{ github.token }}" not in workflow
     assert "required for cross-repository queue reads" in workflow
     assert "gh run cancel" not in workflow
