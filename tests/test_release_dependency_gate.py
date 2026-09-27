@@ -348,6 +348,9 @@ def test_green_bsd_dependency_with_selected_dual_license(tmp_path: Path) -> None
     row = next(row for row in report.dependencies if row["key"] == "pypi/greenlib@1.0.0")
     assert row["license"] == "BSD-3-Clause"
     assert "GPL option is never exercised" in row["license_selection_rationale"]
+    assert report.to_json()["license_selections_sha256"] == hashlib.sha256(
+        (capture / "license-selections.json").read_bytes()
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -828,3 +831,31 @@ def test_fixtures_are_isolated_per_dependency(tmp_path: Path) -> None:
     assert gate.fixture_digest(python_fixture) == gate.fixture_digest(
         gate.build_fixture(gate.Dependency("pypi", "greenlib", "1.0.0"), _python_evidence())
     )
+
+
+def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -> None:
+    """Working-tree edits cannot replace the selected release's licence choices."""
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    path = source / "docs/release-license-selections.json"
+    path.parent.mkdir()
+    selection = {"ecosystem": "cargo", "name": "example", "version": "1",
+                 "chosen": "MIT", "rationale": "Inspected the MIT licence in the archive."}
+    payload = json.dumps([selection]).encode()
+    path.write_bytes(payload)
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "selection"], cwd=source, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    path.write_text("untrusted working-tree replacement")
+    capture = tmp_path / "capture"
+    gate.capture_license_selections(source, sha, capture)
+    assert (capture / "license-selections.json").read_bytes() == payload
+    with pytest.raises(gate.GateError, match="already exists"):
+        gate.capture_license_selections(source, sha, capture)
+    (capture / "license-selections.json").write_text(json.dumps([selection, selection]))
+    with pytest.raises(gate.GateError, match="duplicate license selection"):
+        gate._load_selections(capture)

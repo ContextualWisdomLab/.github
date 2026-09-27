@@ -52,6 +52,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tarfile
 import urllib.parse
@@ -309,6 +310,7 @@ class GateReport:
     source_sha: str
     binder_sha256: str = ""
     lock_sha256: str = ""
+    license_selections_sha256: str = ""
     stage: str = FULL_STAGE
     scopes: list[dict[str, Any]] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
@@ -331,6 +333,7 @@ class GateReport:
             # The install step may only install the artifacts this verdict judged,
             # from the lock this verdict read; both are bound here by digest.
             "python_lock_sha256": self.lock_sha256,
+            "license_selections_sha256": self.license_selections_sha256,
             "scopes": sorted(self.scopes, key=lambda row: row["ecosystem"]),
             "dependency_count": len(self.dependencies),
             "dependencies": sorted(self.dependencies, key=lambda row: row["key"]),
@@ -1458,12 +1461,36 @@ def capture(raw_root: Path, capture_root: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def capture_license_selections(source: Path, source_sha: str, capture: Path) -> None:
+    """Copy only a regular selection blob from the exact release commit."""
+    if not GIT_SHA_RE.fullmatch(source_sha):
+        raise GateError(CAPTURE_INCOMPLETE, "selection source must be an exact commit SHA")
+    path = "docs/release-license-selections.json"
+    entry = subprocess.check_output(
+        ["git", "ls-tree", source_sha, "--", path], cwd=source, text=True
+    ).strip()
+    destination = capture / "license-selections.json"
+    if destination.exists() or destination.is_symlink():
+        raise GateError(CAPTURE_INCOMPLETE, "selection destination already exists")
+    if not entry:
+        return  # No selection is still refused when an OR licence is encountered.
+    if not entry.startswith("100644 blob "):
+        raise GateError(CAPTURE_INCOMPLETE, "selection source must be a regular Git blob")
+    payload = subprocess.check_output(["git", "show", f"{source_sha}:{path}"], cwd=source)
+    if len(payload) > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, "selection source exceeds bounded size")
+    capture.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    _load_selections(capture)
+
+
 def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
     """Load optional dual-license selections, keyed by dependency identity."""
 
     path = capture / "license-selections.json"
     if not path.exists():
         return {}
+    _require_regular_file(path, CAPTURE_INCOMPLETE)
     payload = load_json(path)
     if not isinstance(payload, list):
         raise GateError(CAPTURE_INCOMPLETE, "license-selections.json must be a JSON array")
@@ -1478,6 +1505,8 @@ def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
                 f"license selection must declare {sorted(required)}",
             )
         key = f"{item['ecosystem']}/{item['name']}@{item['version']}"
+        if key in selections:
+            raise GateError(CAPTURE_INCOMPLETE, f"duplicate license selection: {key}")
         selections[key] = {"chosen": str(item["chosen"]), "rationale": str(item["rationale"])}
     return selections
 
@@ -1791,6 +1820,8 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
     # test_zero_enumerated_dependencies_always_carries_a_failure instead.
 
     selections = _load_selections(capture)
+    if (capture / "license-selections.json").exists():
+        report.license_selections_sha256 = _sha256_file(capture / "license-selections.json")
     if stage == FULL_STAGE:
         # Binder provenance belongs to the Strix stage only; a licence-stage report
         # must not claim it, or it would read as Strix evidence it never gathered.
@@ -2468,6 +2499,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     bind.add_argument("--download-root", required=True)
     bind.add_argument("--output", required=True)
 
+    selections = sub.add_parser("capture-license-selections")
+    selections.add_argument("--source", required=True)
+    selections.add_argument("--source-sha", required=True)
+    selections.add_argument("--capture", required=True)
+
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
     run.add_argument("--report", required=True)
@@ -2483,6 +2519,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     github_output = os.environ.get("GITHUB_OUTPUT")
     destination = Path(github_output) if github_output else None
     try:
+        if args.command == "capture-license-selections":
+            capture_license_selections(Path(args.source), args.source_sha, Path(args.capture))
+            return 0
         if args.command == "capture":
             keys = capture(Path(args.raw), Path(args.capture))
             json.dump({"captured": keys}, sys.stdout, indent=2, sort_keys=True)
