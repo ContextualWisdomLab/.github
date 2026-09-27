@@ -140,6 +140,10 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             otel = node.module == "opentelemetry" or (node.module or "").startswith("opentelemetry.")
             for alias in node.names:
+                if otel and alias.name == "*":
+                    # Wildcard exports are opaque; track known bootstrap names conservatively.
+                    self.bindings.update(dict.fromkeys(BOOTSTRAP_NAMES, direct))
+                    continue
                 name = alias.asname or alias.name
                 self.bindings[name] = direct if otel and alias.name in BOOTSTRAP_NAMES else module if otel else other
 

@@ -435,3 +435,20 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     assert "python3 governance/scripts/ci/check_telemetry_ownership.py product" in workflow
     assert "if: github.repository != 'ContextualWisdomLab/cwl-telemetry'" in workflow
     assert "if: github.repository == 'ContextualWisdomLab/cwl-telemetry'" in workflow
+
+
+def test_wildcard_otel_import_tracks_calls_and_respects_shadowing() -> None:
+    """An opaque import must not hide bootstrap calls or override local scope."""
+    source = "\n".join((
+        "from opentelemetry.sdk.trace import *",
+        "TracerProvider()",
+        "factory = TracerProvider",
+        "factory()",
+        "def local(TracerProvider):",
+        "    return TracerProvider()",
+        "TracerProvider = lambda: None",
+        "TracerProvider()",
+    ))
+    assert scan_source(source) == ((2, "TracerProvider"), (4, "factory"))
+    assert scan_source("from opentelemetry.sdk.trace import *") == ()
+    assert scan_source("from unrelated import *\nTracerProvider()") == ()
