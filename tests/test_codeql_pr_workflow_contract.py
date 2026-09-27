@@ -185,11 +185,12 @@ def _dispatch_scan_title(
     head_sha: str = _TEST_HEAD_SHA,
     base_sha: str = _TEST_BASE_SHA,
     required_run_id: str = _TEST_REQUIRED_RUN_ID,
+    producer_source_sha: str = _TEST_PRODUCER_SOURCE_SHA,
 ) -> str:
     """Return the immutable CodeQL dispatch run-name for one required shard."""
     return (
         "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
-        f"{head_sha}/{base_sha}/{required_run_id}"
+        f"{head_sha}/{base_sha}/{required_run_id}/{producer_source_sha}"
     )
 
 
@@ -567,8 +568,32 @@ def test_codeql_pr_rejects_completed_dispatch_scan_from_a_different_required_run
     assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
 
 
+def test_codeql_pr_rejects_completed_dispatch_scan_from_a_stale_merge_source(
+    tmp_path: Path,
+) -> None:
+    """A regenerated live merge source cannot reuse its predecessor's scan."""
+    stale_title = _dispatch_scan_title(producer_source_sha="d" * 40)
+    dispatch_result, _verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={"workflow_runs": [_completed_dispatch_run(title=stale_title)]},
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 1, dispatch_result.stderr + dispatch_result.stdout
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
+
+
 def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
-    """The required shard looks up the public dispatch run by immutable identity."""
+    """The shard binds fallback proof to base, run, and live merge source."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     shard = workflow.split("  analyze-head:\n", 1)[1].split(
         "  dispatch-current-head:\n", 1
@@ -578,7 +603,7 @@ def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
     assert 'live_base="$(printf' in shard
     assert (
         'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'
-        '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"'
+        '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}/${live_merge}"'
     ) in shard
     assert "Could not validate live pull request base/source SHA before CodeQL verdict read." in shard
 

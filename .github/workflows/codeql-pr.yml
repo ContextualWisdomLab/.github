@@ -226,7 +226,7 @@ jobs:
               ;;
           esac
 
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}/${live_merge}"
           expected_job="CodeQL dispatch scan (${LANGUAGE})"
           runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
           run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
