@@ -401,7 +401,7 @@ until grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/de
   fi
   sleep 0.2
 done
-sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' || true)"
+sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' | tr '\n' ' ' || true)"
 if [ -n "$sidecar_startup_warnings" ]; then
   log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"
 fi
