@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`0d0637d032560417a9a08a8477c4aaf3a5942e0a` today) into `RUNNER_TEMP`. The
+   (`01bf92a3ec67a0e1f9b68978eb16b60301e985fd` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -306,3 +306,12 @@ all five, and auto-optimize routing by cost.
   null model timeout. Both revisions have byte-identical `requirements.lock`.
   This pin change still needs protected delivery and a successful exact-head
   Noema or OpenCode review; preflight success alone is not that evidence.
+
+- **2026-09-27 amendment: retain cooldown recovery with a patched dependency lock.**
+  The deployed pin is `01bf92a3ec67a0e1f9b68978eb16b60301e985fd`, a merged CO main revision containing
+  #1179 recovery and AnyIO 4.14.2. Auditing the earlier proposed `0d0637d0`
+  pin with pip-audit 2.10.1 found CVE-2026-63374, CVE-2026-64847, and
+  CVE-2026-63349 in AnyIO 4.14.1. The replacement hash lock has no known
+  vulnerabilities in the same audit. The earlier byte-identical-lock claim
+  describes the superseded proposal, not this amended target. No review
+  completion or runtime provider success is inferred from the lock audit.
