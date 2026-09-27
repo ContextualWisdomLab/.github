@@ -3562,3 +3562,21 @@ in the central release-control gate; consumer repositories receive only its
 immutable released workflow contract. Status remains Proposed/Draft and release
 admission remains HOLD until fresh exact-head hosted Checks and a qualifying
 independent approval complete.
+
+The next ordinary integration closes a distinct native-link review Gap. The
+pinned analyzer previously proved which dynamic libraries each wheel needed,
+but the sealed report did not bind why those external names were admissible on
+the declared Linux, macOS, or Windows target. The central release-control
+bounded context remains the single owner: it now classifies only explicit
+operating-system runtimes, the wheel-tag-matched CPython DLL, the inspected
+extension's own macOS install name, and the named Visual C++ runtimes. Unknown
+names fail before verdict sealing, while every accepted name and review basis
+is carried in `cwl.release-native-links/2`; consumers receive only the released
+workflow contract. The native-link continuation and the coverage repair were
+combined by an ordinary two-parent merge, preserving both histories without a
+force update. Fresh current-tree evidence is 191 focused tests plus the full
+suite at 4,040 passed, 8 skipped, and 40 subtests passed, with all 17,227
+production statements and 7,026 branches covered. Ruff E9/F/I, compileall, and
+diff checks pass after import-order repair. Status is Proposed/Draft and
+release admission remains HOLD because hosted exact-head Checks and a
+qualifying independent approval are not yet complete.

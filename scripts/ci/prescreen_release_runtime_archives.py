@@ -12,8 +12,7 @@ import re
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 try:

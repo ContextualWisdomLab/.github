@@ -51,16 +51,17 @@ import io
 import json
 import os
 import re
-import sys
 import stat
+import sys
 import tarfile
-import tomllib
 import urllib.parse
 import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
+
+import tomllib
 
 try:
     from scripts.ci.spdx_license_policy import (
