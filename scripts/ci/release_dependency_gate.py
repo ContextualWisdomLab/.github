@@ -1131,13 +1131,29 @@ def evaluate_dependency_license(
     for filename in sorted(texts):
         recognized = recognized_texts[filename]
         # Exact reference notices from checksum-verified memchr 2.8.3,
-        # termcolor 1.4.1, winapi-util 0.1.11 and typenum 1.20.1.
+        # termcolor 1.4.1, winapi-util 0.1.11, typenum 1.20.1 and reviewed
+        # COPYRIGHT bodies in Rand, unicode-width, rustix and linux-raw-sys.
         # A reference is never a grant; every named full grant must be present.
         normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
+        reference_digest = hashlib.sha256(normalized.encode()).hexdigest()
         references = {
             "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1": frozenset({"MIT", "Unlicense"}),
             "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a": frozenset({"MIT", "Apache-2.0"}),
-        }.get(hashlib.sha256(normalized.encode()).hexdigest())
+            "fbe36b2f9c615c784fdb1a83a9ff22f1446349491f1fd29dd3d24db381527b07": frozenset({"MIT", "Apache-2.0"}),
+            "9fba058782d4dbf4eda66df225dfc11e8afdc5618f6bc36c2dafbb087cda3971": frozenset({"MIT", "Apache-2.0"}),
+            "175bdea6e6b8888ac70595db99c828183a9796b5ca60a3982b5242f1ecad22c0": frozenset({"MIT", "Apache-2.0"}),
+            "27c181067597d1d238893ff4fec1f2cfbf385100cf2e73f39e2e0af9fbcbde7a": frozenset({"MIT", "Apache-2.0"}),
+        }.get(reference_digest)
+        if reference_digest in {
+            "175bdea6e6b8888ac70595db99c828183a9796b5ca60a3982b5242f1ecad22c0",
+            "27c181067597d1d238893ff4fec1f2cfbf385100cf2e73f39e2e0af9fbcbde7a",
+        } and not any(
+            hashlib.sha256(re.sub(r"[ \t\r\n]+", " ", str(text)).strip(" \t\r\n").encode()).hexdigest()
+            == "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c"
+            for text in texts.values()
+        ):
+            # These two notices also name the complete Apache + LLVM exception.
+            references = None
         if evidence.get("ecosystem") == "cargo" and references is not None and references <= grants:
             recognized = references
         # Reviewed android_system_properties 0.1.5/0.1.6 Apache application notice:

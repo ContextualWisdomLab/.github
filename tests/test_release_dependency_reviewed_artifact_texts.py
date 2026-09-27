@@ -361,3 +361,50 @@ def test_spirv_generated_input_obligation_is_independent(mutation):
     failures, decision, _ = gate.evaluate_dependency_license(
         evidence, "cargo/spirv@0.4.0+sdk-1.4.341.0", {"chosen": selected, "rationale": "Retain both grants."})
     assert (decision.allowed and not failures) == (mutation is None)
+
+
+@pytest.mark.parametrize("row", [r for r in json.loads((ROOT / "reference_provenance.json").read_text())
+                                  if "archive_license_members" in r], ids=lambda r: r["package"])
+@pytest.mark.parametrize("mutation", [None, "notice-only", "changed-notice", "no-mit", "no-apache",
+                                      "changed-grant", "pypi", "additional-restriction"])
+def test_copyright_references_require_complete_independent_grants(row, mutation):
+    files = {}
+    for member, proof in row["archive_license_members"].items():
+        text = TEXTS[proof["fixture"]]
+        assert hashlib.sha256(text.encode()).hexdigest() == proof["raw_sha256"]
+        files[member] = text
+    reference = files[row["member"]]
+    assert policy.recognize_license_text(reference) is None
+    assert hashlib.sha256(re.sub(r"[ \t\r\n]+", " ", reference).strip(" \t\r\n").encode()).hexdigest() == row["normalized_sha256"]
+    if mutation == "notice-only":
+        files = {row["member"]: reference}
+    elif mutation == "changed-notice":
+        files[row["member"]] += "Commercial redistribution requires permission."
+    elif mutation in {"no-mit", "no-apache"}:
+        suffix = "/LICENSE-MIT" if mutation == "no-mit" else "/LICENSE-APACHE"
+        files = {member: text for member, text in files.items() if not member.endswith(suffix)}
+        if mutation == "no-apache":
+            files = {member: text for member, text in files.items() if "LLVM-exception" not in member}
+    elif mutation == "changed-grant":
+        member = next(member for member in files if member.endswith("/LICENSE-MIT"))
+        files[member] += "Commercial use is prohibited."
+    elif mutation == "additional-restriction":
+        files["NOTICE"] = "Commercial use is prohibited."
+    evidence = _python_evidence(ecosystem="pypi" if mutation == "pypi" else "cargo",
+                                source_sha256=row["artifact_sha256"], license_expression=row["expression"],
+                                license_texts=files)
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, "cargo/" + row["package"], {"chosen": "MIT", "rationale": "Retain reviewed original reference and complete grants."})
+    assert (decision.allowed and not failures) == (mutation is None)
+
+
+@pytest.mark.parametrize("package", ["rustix@1.1.4", "linux-raw-sys@0.12.1"])
+def test_copyright_llvm_reference_requires_complete_exception(package):
+    row = next(r for r in json.loads((ROOT / "reference_provenance.json").read_text()) if r["package"] == package)
+    files = {member: TEXTS[proof["fixture"]] for member, proof in row["archive_license_members"].items()
+             if "LLVM-exception" not in member}
+    failures, decision, _ = gate.evaluate_dependency_license(
+        _python_evidence(ecosystem="cargo", license_expression=row["expression"], license_texts=files),
+        "cargo/" + package, {"chosen": "MIT", "rationale": "Negative test: exception body is absent."})
+    assert decision.allowed
+    assert policy.LICENSE_TEXT_UNVERIFIED in {failure.code for failure in failures}
