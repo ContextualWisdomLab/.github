@@ -175,7 +175,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          ref: 2a53d90ad7e210b491d958c2fe95d1821bdc259b
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -195,14 +195,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          expected=2a53d90ad7e210b491d958c2fe95d1821bdc259b
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = e24bb60959d35cf6f37030019d06e34192eab812
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = d9c10c269b9e688ba914d003ddb021043fd65596
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -389,6 +389,7 @@ jobs:
           # also performs the full-set scope comparison, so an ecosystem whose
           # membership cannot be established fails here too.
           python3 -I trusted-gate/scripts/ci/release_dependency_gate.py prescreen \
+            --source release-source \
             --capture "${RUNNER_TEMP}/capture" \
             --report "${RUNNER_TEMP}/license-report.json"
 
@@ -460,7 +461,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          ref: 2a53d90ad7e210b491d958c2fe95d1821bdc259b
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -480,14 +481,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          expected=2a53d90ad7e210b491d958c2fe95d1821bdc259b
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = e24bb60959d35cf6f37030019d06e34192eab812
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = d9c10c269b9e688ba914d003ddb021043fd65596
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -729,7 +730,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          ref: 2a53d90ad7e210b491d958c2fe95d1821bdc259b
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -749,14 +750,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=13a59cacc13ee86b27f5962f27ec78eac2edcb80
+          expected=2a53d90ad7e210b491d958c2fe95d1821bdc259b
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = e24bb60959d35cf6f37030019d06e34192eab812
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = d9c10c269b9e688ba914d003ddb021043fd65596
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -943,6 +944,7 @@ jobs:
           # also performs the full-set scope comparison, so an ecosystem whose
           # membership cannot be established fails here too.
           python3 -I trusted-gate/scripts/ci/release_dependency_gate.py prescreen \
+            --source release-source \
             --capture "${RUNNER_TEMP}/capture" \
             --report "${RUNNER_TEMP}/license-report.json"
 
@@ -997,6 +999,7 @@ jobs:
           gh api --paginate "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
             --jq '.artifacts[]' > "${RUNNER_TEMP}/release-artifacts.jsonl"
           python3 -I trusted-gate/scripts/ci/collect_release_strix_bindings.py \
+            --source release-source \
             --capture "${RUNNER_TEMP}/capture" \
             --license-report "${RUNNER_TEMP}/license-report.json" \
             --plan "${RUNNER_TEMP}/strix-fanout-plan.json" \
