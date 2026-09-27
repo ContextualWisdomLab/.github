@@ -368,8 +368,13 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         "pull_requests": sorted(links, key=lambda item: item["number"]),
         "jobs": sorted((_normalise_job(job) for job in jobs), key=lambda item: item["id"]),
     }
+    source = run.get("workflow_source")
+    if repository != "ContextualWisdomLab/.github" and isinstance(source, dict):
+        normalized_run["workflow_source"] = {key: source.get(key) for key in (
+            "repositoryName", "path", "repositoryFileUrl", "workflowResourcePath", "head_sha")}
     if run.get("event") != "pull_request_target" or _run_identity(normalized_run, {})[0] == "unlinked":
         normalized_run["display_title"] = ""
+        normalized_run.pop("workflow_source", None)
     return normalized_run
 
 
@@ -394,20 +399,35 @@ def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]])
     """
     links = run.get("pull_requests") or []
     if run.get("event") == "pull_request_target":
+        repository = str(run.get("repository") or "")
+        path = run.get("workflow_path")
+        source = run.get("workflow_source") or {}
+        required_source = (
+            isinstance(source, dict) and REPOSITORY_PATTERN.fullmatch(repository)
+            and repository.startswith("ContextualWisdomLab/")
+            and source.get("repositoryName") == "ContextualWisdomLab/.github"
+            and source.get("path") == path
+            and source.get("workflowResourcePath") == (
+                f"/{repository}/actions/workflows/required/ContextualWisdomLab/.github/{path}")
+            and re.fullmatch(r"https://github\.com/ContextualWisdomLab/\.github/blob/[0-9a-f]{40}/"
+                             + re.escape(str(path)), str(source.get("repositoryFileUrl") or ""))
+        )
         # Only these protected central producers declare this immutable event
         # identity. A PR title or a refreshed association is not head evidence.
         prefix = {
             ".github/workflows/noema-review.yml": "Required Noema Review",
             ".github/workflows/opencode-review.yml": "Required OpenCode Review",
             ".github/workflows/strix.yml": "Strix Security Scan",
-        }.get(run.get("workflow_path")) if run.get("repository") == "ContextualWisdomLab/.github" else None
+        }.get(path) if repository == "ContextualWisdomLab/.github" or required_source else None
         identity = re.fullmatch(
-            rf"{re.escape(prefix or '')} ContextualWisdomLab/\.github#([1-9][0-9]*)@([0-9a-f]{{40}})",
+            rf"{re.escape(prefix or '')} {re.escape(repository)}#([1-9][0-9]*)@([0-9a-f]{{40}})",
             str(run.get("display_title") or ""),
         )
         number = next((link["number"] for link in links
                        if type(link.get("number")) is int and str(link["number"]) == identity[1]), None) if identity else None
         if not prefix or not identity or number is None:
+            return "unlinked", None
+        if required_source and source.get("head_sha") != identity[2]:
             return "unlinked", None
         pull_request = pull_requests.get(number)
         return ("current_head" if pull_request and pull_request.get("head_sha") == identity[2] else "obsolete"), number

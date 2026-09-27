@@ -72,6 +72,58 @@ def _normalise_run(
 _core_module._normalise_run = _normalise_run
 
 
+def _bind_required_workflow_sources(
+    repository: str, runs: list[dict[str, Any]], *, runner: Runner
+) -> None:
+    """Bind required target producers to immutable native source and check objects."""
+    candidates = [run for run in runs if run.get("event") == "pull_request_target"
+                  and type(run.get("workflow_id")) is int and run["workflow_id"] > 0
+                  and run.get("workflow_url") == (
+                      f"https://api.github.com/repos/{repository}/actions/required_workflows/{run['workflow_id']}")
+                  and re.fullmatch(r"WFR_[A-Za-z0-9_-]{1,200}", str(run.get("node_id") or ""))
+                  and "workflow_source" not in run]
+    for offset in range(0, len(candidates), 100):
+        batch = candidates[offset:offset + 100]
+        query = "{nodes(ids:" + json.dumps([run["node_id"] for run in batch]) + "){" + (
+            "... on WorkflowRun { databaseId event displayTitle "
+            "workflow { databaseId resourcePath } "
+            "file { path repositoryName repositoryFileUrl } "
+            "checkSuite { databaseId commit { oid } } } }}")
+        try:
+            result = runner(["gh", "api", "graphql", "-f", f"query={query}"],
+                            capture_output=True, text=True, check=False,
+                            timeout=GITHUB_API_TIMEOUT_SECONDS)
+            if result.returncode:
+                raise QueueHealthError("required workflow source read failed")
+            payload = json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            raise QueueHealthError("required workflow source read was incomplete") from exc
+        if not isinstance(payload, dict) or payload.get("errors"):
+            raise QueueHealthError("required workflow source response was incomplete")
+        nodes = _list_payload(payload.get("data"), "nodes", max_items=100)
+        if len(nodes) != len(batch):
+            raise QueueHealthError("required workflow source identities were incomplete")
+        for run, node in zip(batch, nodes):
+            workflow = node.get("workflow") or {}
+            source = node.get("file") or {}
+            suite = node.get("checkSuite") or {}
+            if (not all(isinstance(value, dict) for value in (workflow, source, suite))
+                    or not isinstance(suite.get("commit"), dict)):
+                raise QueueHealthError("required workflow source objects were incomplete")
+            if (node.get("databaseId") != run["id"]
+                    or workflow.get("databaseId") != run["workflow_id"]
+                    or suite.get("databaseId") != run.get("check_suite_id")
+                    or node.get("event") != run["event"]
+                    or node.get("displayTitle") != run.get("display_title")):
+                raise QueueHealthError("required workflow source identity does not match native run")
+            run["workflow_source"] = {
+                "repositoryName": source.get("repositoryName"), "path": source.get("path"),
+                "repositoryFileUrl": source.get("repositoryFileUrl"),
+                "workflowResourcePath": workflow.get("resourcePath"),
+                "head_sha": (suite.get("commit") or {}).get("oid"),
+            }
+
+
 def _read_pull_request_snapshot(
     pulls_endpoint: str, *, runner: Runner
 ) -> list[dict[str, Any]]:
@@ -341,6 +393,7 @@ def collect_snapshot(
                     runner=runner,
                     known_runs=list(terminal_diagnostic_snapshot.values()),
                 )
+                _bind_required_workflow_sources(repository_name, target_workflow_runs, runner=runner)
                 for workflow_run in target_workflow_runs:
                     normalized_candidate = _normalise_run(
                         repository_name, workflow_run, []
@@ -356,6 +409,7 @@ def collect_snapshot(
 
             observed_snapshot = dict(second_snapshot)
             observed_snapshot.update(terminal_diagnostic_snapshot)
+            _bind_required_workflow_sources(repository_name, list(observed_snapshot.values()), runner=runner)
             def collect_run_evidence(item: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
                 """Read one independent run while preserving its exact identity."""
                 workflow_run_id, workflow_run = item

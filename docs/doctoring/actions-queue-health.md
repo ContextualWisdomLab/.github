@@ -198,13 +198,30 @@ its protected `run-name` still bound the request to
 check suite `98371086029` also remained on the older commit. The previous
 reader incorrectly classified that run as current using the refreshed link.
 
-For `pull_request_target`, the reader now accepts only the central repository's
-known Noema, OpenCode and Strix workflow paths and their exact protected producer
+For `pull_request_target`, the reader accepts the central repository's
+known Noema, OpenCode and Strix workflow paths and their exact producer
 prefixes, repository, native associated PR number, and lowercase full commit.
 It preserves that producer identity through collect/report normalization. Neither
 the run's base SHA nor the mutable linked head proves the reviewed commit.
 Unknown producers, arbitrary PR titles, malformed identities and missing native
 associations remain unlinked. This does not infer targets for unlinked dispatches
-or authorize cancellation. Other repositories need their own independently
-verified producer contract before their target events can become authoritative;
-a matching association alone is insufficient.
+or authorize cancellation. A matching association alone is insufficient.
+
+Consumer repositories bind required central producers through native GraphQL
+`WorkflowRun` objects, in batches of at most 100. The run, workflow and check-suite
+IDs, event and immutable title must match the REST record. The source must name
+`ContextualWisdomLab/.github`, the same known workflow path and an exact full
+commit file URL; the native workflow route must name that central required
+producer in the target repository. Its check-suite commit must equal the
+declared event head. Unknown sources remain unlinked; partial/error responses
+reject the repository snapshot. Normalization retains only those bounded source
+fields, including through offline report round trips. Source reads happen before
+current-head cancelled-run filtering so consumer pre-runner cancellations remain
+visible. This read-only trace is not a Noema/OpenCode approval or cancellation
+authorization.
+
+Native consumer run `36328534902` provided the central Strix source at
+`e07c7e1e6ddb7c2704ca1c51bdafb4b81b68e6b7` and check-suite target
+`e655c530e659b1875a195fa78f96d0228ccf3b68`. The live PR identity was stable
+across this bounded verification and the PR remained Draft. This is one-run
+integration evidence, not whole-allowlist scheduled/App runtime acceptance.
