@@ -397,6 +397,9 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     """The exact vendored SHA must enforce the review limit at its HTTP boundary."""
     text = _read(SIDECAR)
+    assert text.index("faulthandler.enable()") < text.index(
+        "from contextual_orchestrator.server import SecurityConfig, build_server"
+    )
     assert "from contextual_orchestrator.server import SecurityConfig, build_server" in text
     assert '"POST",' in text
     assert '"/v1/chat/completions",' in text
