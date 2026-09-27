@@ -44,7 +44,9 @@ permissions:
 jobs:
   validate-dispatch:
     name: validate-dispatch
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:
       contents: read
@@ -430,7 +432,9 @@ jobs:
   scan:
     name: CodeQL dispatch scan (${{ matrix.language }})
     needs: validate-dispatch
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 30
     permissions:
       actions: read
@@ -555,18 +559,14 @@ jobs:
           python3 -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_ghas_configuration_identity.py').read())"
 
       - name: Materialize pull request head for CodeQL scan
-        env:
-          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
-          HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          gh auth setup-git
-          git init -q .
-          git remote add origin "$GITHUB_SERVER_URL/$TARGET_REPOSITORY.git"
-          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
-          git checkout --detach --quiet "$HEAD_SHA"
-          git cat-file -e "$HEAD_SHA^{commit}"
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ needs.validate-dispatch.outputs.target_repository }}
+          ref: ${{ needs.validate-dispatch.outputs.head_sha }}
+          token: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          persist-credentials: false
+          clean: true
+          fetch-depth: 1
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
@@ -844,7 +844,9 @@ jobs:
       && needs.validate-dispatch.result == 'success'
       && needs.scan.result != 'cancelled'
       && needs.scan.result != 'skipped'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central CodeQL
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:
       actions: write
