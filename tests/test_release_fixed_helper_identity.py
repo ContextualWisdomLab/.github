@@ -32,8 +32,8 @@ def test_literal_source_pin_and_sibling_scope(filename, destination):
     pin, tree = _pin_and_tree(script)
     if filename == "release-dependency-license-strix-gate.yml":
         assert (pin, tree) == (
-            "5192d108a5a3870b18e8e5040f688c412ab6fcd0",
-            "9a24b47e2b3648c7947396b92e1c87486432becc",
+            "84ba6431ffc6c70e9313d174b7b4f3012125f11b",
+            "3026fbd931e0eb0ddc4f20656afdb2f3fc24d030",
         )
     assert f"ref: {pin}" in checkout
     assert "repository: ContextualWisdomLab/.github" in checkout
@@ -50,6 +50,9 @@ def test_literal_source_pin_and_sibling_scope(filename, destination):
 def test_actual_guard_rejects_bad_source(tmp_path, filename, destination, case):
     _, script = _parts(filename, destination)
     pin, tree = _pin_and_tree(script)
+    requirements_tree = re.search(
+        r'HEAD:requirements-strix-ci-hashes\.txt\)" = ([0-9a-f]{40})', script
+    ).group(1)
     helper = tmp_path / destination
     (helper / "scripts/ci").mkdir(parents=True)
     for name in ("scripts/ci/release_dependency_gate.py", "scripts/ci/verify_release_distribution_set.py",
@@ -63,14 +66,14 @@ def test_actual_guard_rejects_bad_source(tmp_path, filename, destination, case):
       if [ "$CASE" = missing ]; then return 128; fi
       case "$*" in
         *"rev-parse HEAD:scripts/ci") [ "$CASE" = tree ] && echo bad || echo __TREE__ ;;
-        *"rev-parse HEAD:requirements-strix-ci-hashes.txt") echo 9e705850b5ce53c7fe836bc3df3a18771151e3f6 ;;
+        *"rev-parse HEAD:requirements-strix-ci-hashes.txt") echo __REQ_TREE__ ;;
         *"rev-parse HEAD") [ "$CASE" = pin ] && echo bad || echo __PIN__ ;;
         *"remote get-url origin") [ "$CASE" = foreign ] && echo https://github.com/caller/repo || echo https://github.com/ContextualWisdomLab/.github ;;
         *"diff --exit-code"*) [ "$CASE" != dirty ] ;;
         *) return 99 ;;
       esac
     }
-'''.replace("__TREE__", tree).replace("__PIN__", pin)
+'''.replace("__TREE__", tree).replace("__PIN__", pin).replace("__REQ_TREE__", requirements_tree)
     result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fake + script],
         env={**os.environ, "HELPER_ROOT": str(helper), "CASE": case,
              "CALLER_WORKFLOW_SHA": ("b" if case == "caller_changed" else "a") * 40},
