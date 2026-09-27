@@ -29,7 +29,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
     def test_strix_uses_explicit_supported_image(self) -> None:
         """Route trusted metadata to control while preserving the scan image."""
         workflow = STRIX.read_text(encoding="utf-8")
-        for name in ("changed-scope", "admit-current-head", "cancel-superseded-pr-runs", "publish-manual-pr-evidence-status"):
+        for name in ("changed-scope", "admit-current-head", "cancel-superseded-pr-runs", "publish-manual-pr-evidence-status", "continue-strix-transport"):
             block = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
             self.assertIn('"group":"CWL central control"', block)
             self.assertIn('"labels":["self-hosted","linux","x64","cwlab-control"]', block)

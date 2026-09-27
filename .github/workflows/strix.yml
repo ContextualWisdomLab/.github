@@ -1430,7 +1430,7 @@ jobs:
       && needs.strix.result == 'failure'
       && needs.strix.outputs.transport_capacity_unavailable == 'true'
       && needs.strix.outputs.transport_retry_eligible == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/naruon') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 10
     permissions:
       contents: write
