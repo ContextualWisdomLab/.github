@@ -1193,6 +1193,22 @@ def test_attribution_licence_text_is_captured_and_denied(ecosystem, filename):
     assert gate.LICENSE_TEXT_DISAGREEMENT in {failure.code for failure in failures}
 
 
+@pytest.mark.parametrize("declared", [False, True])
+def test_rust_source_candidate_requires_explicit_license_declaration(declared):
+    source = "pub trait Copying {}\n"
+    manifest = '[package]\nname="fixture"\nversion="1.0.0"\n'
+    if declared:
+        manifest += 'license-file="src/copying.rs"\n'
+    raw = _fixture_archive({"fixture/Cargo.toml": manifest,
+                            "fixture/LICENSE": REVIEWED_TEXTS["pytest-9.1.1.txt"],
+                            "fixture/src/copying.rs": source}, "cargo")
+    evidence = gate.archive_license_evidence(raw, "cargo")
+    assert ("fixture/src/copying.rs" in evidence["license_texts"]) == declared
+    failures, _, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(**evidence, license_expression="MIT"), "cargo/greencrate@0.1.0", None)
+    assert bool(failures) == declared
+
+
 @pytest.mark.parametrize("version, digest", [
     ("5.3.0", "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"),
     ("6.0.0", "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"),
