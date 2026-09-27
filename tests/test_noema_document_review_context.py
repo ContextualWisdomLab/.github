@@ -123,7 +123,7 @@ def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
 
     def fake_run(args, stdin=None):
         assert "contents/docs/review.docx?ref=head" in args[2]
-        return encoded
+        return json.dumps({"content": encoded, "encoding": "base64", "size": len(raw)})
 
     monkeypatch.setattr(noema, "run", fake_run)
     context = noema.build_review_context(
@@ -175,8 +175,11 @@ def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
 
 def test_malformed_docx_is_explicit_in_review_context(monkeypatch):
     """Malformed document bytes are reported instead of UTF-8 replacement text."""
-    encoded = base64.b64encode(_docx_bytes(malformed=True)).decode("ascii")
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
+    raw = _docx_bytes(malformed=True)
+    encoded = base64.b64encode(raw).decode("ascii")
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: json.dumps(
+        {"content": encoded, "encoding": "base64", "size": len(raw)}
+    ))
 
     context = noema.changed_file_context(
         "owner/repo", 7, "head", changed_files=[("docs/broken.docx", "modified")]
@@ -277,7 +280,7 @@ def test_docx_visible_controls_and_ragged_tables_are_preserved():
 
 def test_invalid_github_base64_content_fails_closed(monkeypatch):
     """Malformed GitHub file data must not reach the document reader."""
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: "not/base64!")
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: json.dumps({"content": "not/base64!", "encoding": "base64", "size": 1}))
     with pytest.raises(RuntimeError, match="malformed base64"):
         noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")
 
