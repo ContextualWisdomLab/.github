@@ -34,8 +34,14 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(OPENCODE_REVIEW)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
-        """Require every Noema Review job to use explicit Ubuntu 24.04."""
-        self.assert_explicit_supported_image(NOEMA_REVIEW)
+        """Separate central control admission from hosted model execution."""
+        workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/.github'"), 4)
+        self.assertEqual(workflow.count('["self-hosted","Linux","X64","cwlab-control"]'), 4)
+        self.assertEqual(workflow.count('["ubuntu-24.04"]'), 4)
+        review = workflow.split("\n  noema-review:\n", 1)[1].split("\n  noema-transport-redispatch:\n", 1)[0]
+        self.assertIn("runs-on: ubuntu-24.04", review)
+        self.assertNotIn("cwlab-control", review)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:
         """Require OpenCode dispatch jobs to use the compatible dedicated group.

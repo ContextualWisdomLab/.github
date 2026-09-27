@@ -64,3 +64,24 @@ workflow blob pin, and existing affected contracts. Native assignment receipts
 already show CodeQL dispatch and OpenCode review execution on the new runners
 and a successful control queue job; they do not prove this proposed source has
 landed or that all required review gates pass.
+
+
+## Noema control admission follow-up
+
+At 2026-09-27 10:38 UTC the organization API listed five online runners,
+while the central repository still listed 455 queued runs. Group 6's control
+runner was idle in the subsequent group-membership observation; these are
+point-in-time observations, not a measured capacity forecast.
+
+Noema's admission, changed-scope, closed-run cleanup, and post-failure
+re-dispatch jobs now select `self-hosted`, `Linux`, `X64`, `cwlab-control`
+only in the central repository. Consumer repositories retain Ubuntu 24.04.
+The Noema model-review job retains Ubuntu 24.04: this change allocates short
+control work and does not assert compatibility of a model sandbox with the
+one-core/four-GiB control guest.
+
+Deployment requires group 6's existing trusted-main workflow allowlist to
+include `ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main`.
+Preserve every existing allowlist entry, repository restriction, and external
+contributor approval. Do not allow a feature-branch ref. Until that grant is
+verified, the source change is not an operational routing repair.
