@@ -983,3 +983,13 @@ def test_typenum_reference_requires_both_full_grants(omit):
     assert (not failures) == (omit is None)
     if omit is not None:
         assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+
+
+@pytest.mark.parametrize("selection", [None, {"chosen": "MIT", "rationale": "Retain MIT."}])
+def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> None:
+    evidence = _cargo_evidence(license_expression="MIT OR Apache-2.0", license_texts={})
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, "cargo/example@1", selection)
+    codes = {failure.code for failure in failures}
+    assert policy.LICENSE_TEXT_MISSING in codes
+    assert (policy.LICENSE_SELECTION_REQUIRED in codes) == (selection is None)
+    assert decision.allowed == (selection is not None)

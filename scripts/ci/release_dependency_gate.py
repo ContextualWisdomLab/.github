@@ -996,7 +996,7 @@ def evaluate_dependency_license(
     if not decision.allowed:
         failures.append(Failure(decision.code, subject, decision.detail))
     texts = _require_mapping(evidence, "license_texts", subject)
-    if decision.allowed and not texts:
+    if not texts:
         # A permissive declaration is a claim by the publisher, not evidence. With no
         # bundled text there is nothing to check it against, so the release cannot be
         # cleared on the claim alone.
