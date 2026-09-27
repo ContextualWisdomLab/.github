@@ -35,12 +35,15 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
 
 
 def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
-    """Consumer repositories cannot access the central-only runner group."""
+    """Reusable trusted schedulers share control capacity without PR execution."""
     text = workflow_text("pr-review-merge-scheduler.yml")
     selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
-    assert "github.repository == 'ContextualWisdomLab/.github'" in selector
-    assert "fromJSON('[\"self-hosted\",\"Linux\",\"X64\",\"cwlab-control\"]')" in selector
-    assert "|| fromJSON('[\"ubuntu-24.04\"]')" in selector
+    assert selector.strip() == "runs-on:"
+    assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
+    assert "fromJSON" not in selector
+    assert 'trusted_repository != "ContextualWisdomLab/.github"' in text
+    assert 'tarball/${TRUSTED_SOURCE_REF}' in text
+    assert 'Trusted scheduler source ref must resolve to the immutable workflow commit SHA' in text
 
 
 # The workflow-level block is the one whose key starts at column zero; job-level
