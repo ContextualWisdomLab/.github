@@ -364,7 +364,7 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
                   "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {

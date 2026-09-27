@@ -1,6 +1,13 @@
 ### Pingora declared binary artifacts reject readable runtime directives
 
 - A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
+### Queue-health permission contract rejects aggregate token grants
+
+- The queue-health workflow contract now pins both workflow-level and collector-job permissions to exactly `contents: read` plus `actions: read`, rejecting scalar `read-all`/`write-all`, quoting/spacing variants, inline maps, and unexpected write scopes.
+
+### OpenCode coverage image materializes every Dockerfile lock input
+
+- Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 

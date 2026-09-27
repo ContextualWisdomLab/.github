@@ -78,6 +78,12 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     )
 
     assert "Provision local reviewed HWP document reader" in workflow
+    node_setup = "Provision pinned Node.js for Noema document review"
+    assert node_setup in workflow
+    setup = workflow.split(node_setup, 1)[1].split("\n      - name:", 1)[0]
+    assert "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020" in setup
+    assert 'node-version: "22.23.3"' in setup
+    assert workflow.index(node_setup) < workflow.index("Provision contextual-orchestrator review sidecar")
     assert 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' in workflow
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in workflow
     assert "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" in workflow
@@ -174,6 +180,13 @@ def test_forbidden_docx_entities_are_explicitly_rejected():
     """Defused XML entity failures become the same bounded reader error."""
     with pytest.raises(document.DocumentReadError, match="DOCX document.xml is malformed"):
         document.extract_review_document("docs/entity.docx", _docx_entity_bytes())
+
+
+def test_invalid_github_base64_content_fails_closed(monkeypatch):
+    """Malformed GitHub file data must not reach the document reader."""
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: "not/base64!")
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")
 
 
 def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
