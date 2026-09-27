@@ -372,6 +372,10 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  if [ "$((i % 60))" -eq 0 ]; then
+    # Only report file presence; provider content stays in sanitized artifacts.
+    log "startup pending: polls=${i} discovery=$([ -s "$discovery_report" ] && echo present || echo absent) catalog=$([ -s "$catalog_file" ] && echo present || echo absent) policy=$([ -s "$policy_report" ] && echo present || echo absent) preflight=$([ -s "$preflight_report" ] && echo present || echo absent)"
+  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then
