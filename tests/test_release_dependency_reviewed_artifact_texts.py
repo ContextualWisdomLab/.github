@@ -225,3 +225,15 @@ def test_libm_complete_source_members_preserve_independent_notices(mutation):
     assert (decision.allowed and not failures) == (mutation is None)
     if mutation is None:
         assert decision.selected == "MIT AND BSD-2-Clause AND SunPro"
+
+
+def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
+    text = TEXTS["profiling-1.0.18-upstream-LICENSE-MIT.txt"]
+    assert policy.recognize_license_text(text) == frozenset({"MIT"})
+    evidence = _python_evidence(ecosystem="cargo", license_expression="MIT OR Apache-2.0",
+                                license_texts={},
+                                source_sha256="3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5")
+    failures, _, _ = gate.evaluate_dependency_license(
+        evidence, "cargo/profiling@1.0.18",
+        {"chosen": "MIT", "rationale": "Upstream full text known; captured crate still lacks it."})
+    assert policy.LICENSE_TEXT_MISSING in {failure.code for failure in failures}

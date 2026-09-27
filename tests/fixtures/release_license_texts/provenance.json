@@ -1327,5 +1327,82 @@
     "basis": "https://spdx.org/licenses/Unicode-DFS-2016.html",
     "upstream": "https://raw.githubusercontent.com/rust-lang/regex/140167995737fa11dfe11b8af8b9aa143b790b4e/regex-syntax/src/unicode_tables/LICENSE-UNICODE",
     "limitation": "Exact whole text recognition only; Unicode data obligations are independent of the MIT/Apache main code choice."
+  },
+  {
+    "package": "profiling@1.0.18 (immutable upstream grant)",
+    "ecosystem": "cargo",
+    "origin": "immutable_upstream_not_crate_member",
+    "artifact_filename": "LICENSE-MIT",
+    "artifact_sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+    "source_archive_sha256": "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
+    "member": "LICENSE-MIT at upstream commit 8271551172eb6fa4cba47369aedd93790c623df9",
+    "raw_sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+    "normalized_sha256": "1834e4a70e47109cc013a1fa4f34cb0e5b32753be1247a116ec1f1357b87115f",
+    "identifier": "MIT",
+    "fixture": "profiling-1.0.18-upstream-LICENSE-MIT.txt",
+    "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "source_members": [
+      {
+        "member": "profiling-1.0.18/Cargo.toml.orig",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/Cargo.toml",
+        "sha256": "5c2cc51af406c9e636730400d7fd1293c3cc3ef294421113c6af826bb2d47c1b",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/README.md",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/README.md",
+        "sha256": "970c9abdb06b09f7cdb52ab5b5d578e2c928d0b909320c24fcdac9e526d45b1a",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/empty_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/empty_impl.rs",
+        "sha256": "4d6ee3bb4add86d8b01a7ae5f319dce7b463d89e724dfcb031c3239fb1229eec",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/lib.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/lib.rs",
+        "sha256": "2eb645fff043b95ac6e37b5304f0d1b0fe6d7935c68a644f21c4d6dd83aa1907",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/optick_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/optick_impl.rs",
+        "sha256": "92430474c21bc49c3e54d8073b215772850d2498abf600d7c54cfd8acd92e5c6",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/puffin_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/puffin_impl.rs",
+        "sha256": "8d859ef3ca3f1deda8981ba9b9e7b9d3f2ea3c4417526d9ec4d188bc3806c167",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/superluminal_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/superluminal_impl.rs",
+        "sha256": "061fe63327a9f4dbb5632f26482e44212aa08f8e26e60170076785fd279f2e5c",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/tracing_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/tracing_impl.rs",
+        "sha256": "94b74d71928478402863d85dcbb66e96da2268745ca5434106d1374b89b54261",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/tracy_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/tracy_impl.rs",
+        "sha256": "1b632448ed75bd698d3ed9067afdf05f60caec7a55ebf0258e2519afb951f890",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "profiling-1.0.18/src/type_check_impl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/profiling/src/type_check_impl.rs",
+        "sha256": "230d91cabf46a63f46e4a0e2764537634e6b10bdb879d44e21dd4ed02a12ad54",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "limitation": "Full text recognition only; the crate contains no license text and remains refused. No supplemental evidence or package admission is implied."
   }
 ]
