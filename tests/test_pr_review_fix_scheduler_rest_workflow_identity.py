@@ -14,8 +14,9 @@ def test_workflow_name_rest_paginates_and_propagates_real_errors(monkeypatch: An
     """REST workflow identity consumes full pages and fails on non-permission errors."""
     calls = {"count": 0}
 
-    def pages(_path: str) -> Any:
+    def pages(path: str) -> Any:
         calls["count"] += 1
+        assert path.endswith(f"&page={calls['count']}")
         if calls["count"] == 1:
             return {"workflow_runs": [{"check_suite_id": index, "name": f"workflow-{index}"} for index in range(100)]}
         return {"workflow_runs": [{"check_suite_id": 101, "name": "last"}, {"check_suite_id": None, "name": "ignored"}, {"check_suite_id": 102, "name": ""}]}
