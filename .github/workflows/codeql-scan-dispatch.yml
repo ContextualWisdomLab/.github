@@ -1057,7 +1057,7 @@ jobs:
             exit 1
           fi
 
-          if ! required_job_pages="$(github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100")"; then
+          if ! required_job_pages="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100" | jq -s .)"; then
             echo "::error::CodeQL settlement could not read the required jobs."
             exit 1
           fi
@@ -1094,8 +1094,8 @@ jobs:
             exit 1
           fi
 
-          if ! handler_job_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")" ||
-            ! handler_artifact_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100")"; then
+          if ! handler_job_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" | jq -s .)" ||
+            ! handler_artifact_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" | jq -s .)"; then
             echo "::error::CodeQL settlement could not read exact handler evidence."
             exit 1
           fi

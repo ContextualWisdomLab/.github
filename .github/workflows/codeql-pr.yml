@@ -250,7 +250,7 @@ jobs:
             echo "::error::Could not validate required run creation time before CodeQL verdict lookup."
             exit 1
           fi
-          runs_json="$(gh api --method GET --paginate --slurp -f per_page=100 -f event=repository_dispatch -f created=">=${required_created_at}" "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
+          runs_json="$(gh api --method GET --paginate -f per_page=100 -f event=repository_dispatch -f created=">=${required_created_at}" "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs" | jq -s .)"
           run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
             [
               .[] | .workflow_runs[]
@@ -263,7 +263,7 @@ jobs:
             | .id // empty
           ')"
           if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
-            jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
+            jobs_json="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs" | jq -s .)"
             dispatch_job="$(printf '%s' "$jobs_json" | jq -c --arg name "$expected_job" '
               [.[] | .jobs[] | select(.name == $name)]
               | if length == 1 then .[0] else empty end
