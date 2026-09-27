@@ -101,5 +101,29 @@
     "normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
     "identifier": "Apache-2.0",
     "fixture": "maturin-1.15.0-license-apache.txt"
+  },
+  {
+    "package": "allocator-api2@0.2.21",
+    "ecosystem": "cargo",
+    "artifact_filename": "allocator-api2-0.2.21.crate",
+    "artifact_sha256": "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923",
+    "artifact_url": "https://static.crates.io/crates/allocator-api2/allocator-api2-0.2.21.crate",
+    "member": "allocator-api2-0.2.21/LICENSE-APACHE",
+    "raw_sha256": "20fe7b00e904ed690e3b9fd6073784d3fc428141dbd10b81c01fd143d0797f58",
+    "normalized_sha256": "59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99",
+    "identifier": "Apache-2.0",
+    "fixture": "allocator-api2-0.2.21-LICENSE-APACHE.txt"
+  },
+  {
+    "package": "allocator-api2@0.2.21",
+    "ecosystem": "cargo",
+    "artifact_filename": "allocator-api2-0.2.21.crate",
+    "artifact_sha256": "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923",
+    "artifact_url": "https://static.crates.io/crates/allocator-api2/allocator-api2-0.2.21.crate",
+    "member": "allocator-api2-0.2.21/LICENSE-MIT",
+    "raw_sha256": "36516aefdc84c5d5a1e7485425913a22dbda69eb1930c5e84d6ae4972b5194b9",
+    "normalized_sha256": "fe2a9817987f862eaced948f0468c7f51d2fedfc48c5c505b246a49a3870e9a5",
+    "identifier": "MIT",
+    "fixture": "allocator-api2-0.2.21-LICENSE-MIT.txt"
   }
 ]

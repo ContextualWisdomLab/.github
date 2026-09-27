@@ -1488,7 +1488,7 @@ def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
     """Load optional dual-license selections, keyed by dependency identity."""
 
     path = capture / "license-selections.json"
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return {}
     _require_regular_file(path, CAPTURE_INCOMPLETE)
     payload = load_json(path)
@@ -1499,7 +1499,9 @@ def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
         if not isinstance(item, Mapping):
             raise GateError(CAPTURE_INCOMPLETE, "license selection entry must be an object")
         required = {"ecosystem", "name", "version", "chosen", "rationale"}
-        if not required.issubset(item):
+        if not required.issubset(item) or any(
+            not isinstance(item[field], str) or not item[field].strip() for field in required
+        ):
             raise GateError(
                 CAPTURE_INCOMPLETE,
                 f"license selection must declare {sorted(required)}",

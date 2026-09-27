@@ -859,3 +859,15 @@ def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -
     (capture / "license-selections.json").write_text(json.dumps([selection, selection]))
     with pytest.raises(gate.GateError, match="duplicate license selection"):
         gate._load_selections(capture)
+
+
+def test_selection_loader_refuses_dangling_link_and_nonstring_choice(tmp_path: Path) -> None:
+    path = tmp_path / "license-selections.json"
+    path.symlink_to(tmp_path / "missing")
+    with pytest.raises(gate.GateError):
+        gate._load_selections(tmp_path)
+    path.unlink()
+    path.write_text(json.dumps([{"ecosystem": "cargo", "name": "example", "version": "1",
+                                "chosen": ["MIT"], "rationale": "reviewed"}]))
+    with pytest.raises(gate.GateError):
+        gate._load_selections(tmp_path)

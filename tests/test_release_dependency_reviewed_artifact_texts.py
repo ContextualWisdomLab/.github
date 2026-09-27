@@ -64,3 +64,19 @@ def test_atheris_missing_declaration_is_not_auto_repaired():
         row["package"], None)
     assert not decision.allowed
     assert failures
+
+
+def test_allocator_dual_licence_uses_both_actual_archive_texts():
+    rows = [row for row in ROWS if row['package'] == 'allocator-api2@0.2.21']
+    evidence = _python_evidence(
+        license_expression='MIT OR Apache-2.0',
+        license_texts={row['member']: TEXTS[row['fixture']] for row in rows},
+    )
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, 'cargo/allocator-api2@0.2.21',
+        {'chosen': 'MIT', 'rationale': 'Inspected both archive licence texts; retain the MIT permission notice.'},
+    )
+    assert failures == []
+    assert decision.allowed
+    failures, _, _ = gate.evaluate_dependency_license(evidence, 'cargo/allocator-api2@0.2.21', None)
+    assert policy.LICENSE_SELECTION_REQUIRED in {failure.code for failure in failures}
