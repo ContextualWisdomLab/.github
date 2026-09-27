@@ -313,12 +313,13 @@ install_gated() {
 }
 
 capture_cargo() {
-	local manifest="$1" manifest_dir
-	manifest_dir="$(dirname -- "$manifest")"
+	local manifest="$1" workspace_root
 	mkdir -p "$CAPTURE_ROOT/cargo"
-	cp -- "$manifest_dir/Cargo.lock" "$CAPTURE_ROOT/cargo/Cargo.lock"
 	cargo metadata --format-version 1 --locked --manifest-path "$manifest" \
 		>"$CAPTURE_ROOT/cargo/metadata.json"
+	workspace_root="$(jq -er '.workspace_root | select(type == "string" and startswith("/"))' \
+		"$CAPTURE_ROOT/cargo/metadata.json")"
+	cp -- "$workspace_root/Cargo.lock" "$CAPTURE_ROOT/cargo/Cargo.lock"
 	cargo fetch --locked --manifest-path "$manifest" >/dev/null
 
 	while IFS=$'\t' read -r name version license; do

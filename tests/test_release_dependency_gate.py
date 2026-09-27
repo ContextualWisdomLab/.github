@@ -1054,3 +1054,40 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
         dependencies, failures, expected = gate._enumerate_cargo(capture, source_root=source, source_sha=sha)
         assert not failures
         assert {dependency.key for dependency in dependencies} == expected == {"cargo/greencrate@0.1.0"}
+
+
+@pytest.mark.parametrize("missing_workspace_lock", [False, True])
+def test_cargo_collector_uses_workspace_lock_and_refuses_adjacent_decoy(tmp_path, missing_workspace_lock):
+    import os
+    import subprocess
+
+    workspace = tmp_path / "workspace"
+    member = workspace / "crates/core"
+    member.mkdir(parents=True)
+    manifest = member / "Cargo.toml"
+    manifest.write_text('[package]\nname="core"\nversion="1.0.0"\n')
+    (member / "Cargo.lock").write_bytes(b"adjacent decoy must not be selected")
+    if not missing_workspace_lock:
+        (workspace / "Cargo.lock").write_bytes(b"workspace lock selected by Cargo")
+    metadata = tmp_path / "metadata.json"
+    _write(metadata, {"workspace_root": str(workspace), "packages": []})
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    cargo = binaries / "cargo"
+    cargo.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\n"
+                     "if sys.argv[1] == 'metadata':\n"
+                     "    sys.stdout.write(pathlib.Path(os.environ['CARGO_PROBE_METADATA']).read_text())\n"
+                     "elif sys.argv[1] != 'fetch':\n    sys.exit(2)\n")
+    cargo.chmod(0o755)
+    capture = tmp_path / "captured"
+    result = subprocess.run(["bash", str(Path(__file__).parents[1] / "scripts/ci/release_dependency_capture_raw.sh"),
+                             "--ecosystems", "cargo", "--cargo-manifest", str(manifest),
+                             "--raw-root", str(tmp_path / "raw"), "--capture-root", str(capture)],
+                            env={**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                                 "CARGO_PROBE_METADATA": str(metadata)}, capture_output=True, text=True)
+    if missing_workspace_lock:
+        assert result.returncode != 0
+        assert not (capture / "cargo/Cargo.lock").exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (capture / "cargo/Cargo.lock").read_bytes() == (workspace / "Cargo.lock").read_bytes()
