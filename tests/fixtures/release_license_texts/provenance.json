@@ -125,5 +125,29 @@
     "normalized_sha256": "fe2a9817987f862eaced948f0468c7f51d2fedfc48c5c505b246a49a3870e9a5",
     "identifier": "MIT",
     "fixture": "allocator-api2-0.2.21-LICENSE-MIT.txt"
+  },
+  {
+    "package": "windows-core@0.62.2",
+    "ecosystem": "cargo",
+    "artifact_filename": "windows-core-0.62.2.crate",
+    "artifact_sha256": "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb",
+    "artifact_url": "https://static.crates.io/crates/windows-core/windows-core-0.62.2.crate",
+    "member": "windows-core-0.62.2/license-apache-2.0",
+    "raw_sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+    "normalized_sha256": "145806f1918280735937d8be844ea1da8d912251b1a234ce3406e9338e8cf9e0",
+    "identifier": "Apache-2.0",
+    "fixture": "windows-core-0.62.2-license-apache-2.0.txt"
+  },
+  {
+    "package": "windows-core@0.62.2",
+    "ecosystem": "cargo",
+    "artifact_filename": "windows-core-0.62.2.crate",
+    "artifact_sha256": "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb",
+    "artifact_url": "https://static.crates.io/crates/windows-core/windows-core-0.62.2.crate",
+    "member": "windows-core-0.62.2/license-mit",
+    "raw_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "normalized_sha256": "1f17794ed0a91f046d197aec731e880a0d318af4832967ff8d86580a16520f6e",
+    "identifier": "MIT",
+    "fixture": "windows-core-0.62.2-license-mit.txt"
   }
 ]

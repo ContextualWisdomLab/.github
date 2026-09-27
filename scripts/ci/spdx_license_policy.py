@@ -114,6 +114,8 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: approvals: missing declarations, other files and incomplete scope still HOLD.
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "145806f1918280735937d8be844ea1da8d912251b1a234ce3406e9338e8cf9e0": frozenset({"Apache-2.0"}),
+    "1f17794ed0a91f046d197aec731e880a0d318af4832967ff8d86580a16520f6e": frozenset({"MIT"}),
     "59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99": frozenset({"Apache-2.0"}),
     "fe2a9817987f862eaced948f0468c7f51d2fedfc48c5c505b246a49a3870e9a5": frozenset({"MIT"}),
     "f5ac0308cf2b3f96a0f49a8c0c9e4a2a02c483afc72a646af8de1f356983de06": frozenset({"MIT"}),
