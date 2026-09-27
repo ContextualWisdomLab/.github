@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-767e67fbc6b881a452761f32abb69b9971b9b03b}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-01bf92a3ec67a0e1f9b68978eb16b60301e985fd}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -43,7 +43,7 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 # equivalence relation.
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
-sidecar_python="$(command -v python3)"
+sidecar_python="${SIDECAR_PYTHON:-$(command -v python3)}"
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
@@ -101,6 +101,10 @@ requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
 if [ ! -f "$requirements_lock" ]; then
   fail "vendored orchestrator is missing its hash-pinned requirements.lock"
 fi
+# The pinned lock includes CPython 3.12 wheels; isolate them from consumer runtimes.
+"$sidecar_python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else "sidecar requires Python 3.12 for its pinned wheel hashes")'
+"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"
+sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   --require-hashes \
@@ -372,6 +376,10 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  if [ "$((i % 60))" -eq 0 ]; then
+    # Only report file presence; provider content stays in sanitized artifacts.
+    log "startup pending: polls=${i} discovery=$([ -s "$discovery_report" ] && echo present || echo absent) catalog=$([ -s "$catalog_file" ] && echo present || echo absent) policy=$([ -s "$policy_report" ] && echo present || echo absent) preflight=$([ -s "$preflight_report" ] && echo present || echo absent)"
+  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then

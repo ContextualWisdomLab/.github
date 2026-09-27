@@ -28,6 +28,8 @@ REVIEWER_TOKEN = (
     " || steps.noema_oidc_token.outputs.token }}"
 )
 GATED_MODEL_STEPS = (
+    "Provision pinned Node.js for Noema document review",
+    "Set up lock-compatible sidecar Python",
     "Provision contextual-orchestrator review sidecar",
     "Provision local reviewed HWP document reader",
     "Prepare Noema model verdict",
@@ -93,11 +95,12 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
         "Publish prepared Noema verdict on the exact live head",
     ):
         assert "steps.noema_prepare.outputs.prepared == 'true'" in workflow_step(workflow, name)
-    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
-    assert "failure()" in redispatch
-    assert "steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'" in redispatch
-    assert "if: failure() && env.PR_NUMBER != ''" in workflow_step(
-        workflow, "Upload contextual-orchestrator sidecar evidence on failure"
+    continuation = workflow.split("  continue-noema-transport:\n", 1)[1]
+    assert "needs.noema-review.result == 'failure'" in continuation
+    assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in continuation
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in continuation
+    assert "if: always() && env.PR_NUMBER != ''" in workflow_step(
+        workflow, "Upload contextual-orchestrator sidecar evidence"
     )
 
 

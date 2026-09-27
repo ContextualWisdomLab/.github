@@ -191,6 +191,10 @@ def _run_verdict_read(
     dispatch_runs: dict | list[dict] | None = None,
     dispatch_jobs: dict | list[dict] | None = None,
     run_attempt: str = "2",
+    live_state: str = "open",
+    live_head: str = _TEST_HEAD_SHA,
+    comparison: dict | None = None,
+    required_created_at: str = "2026-09-27T11:08:00Z",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -203,9 +207,9 @@ def _run_verdict_read(
 
     head_sha = _TEST_HEAD_SHA
     live_pr = {
-        "head": {"sha": head_sha},
+        "head": {"sha": live_head},
         "base": {"sha": _TEST_BASE_SHA},
-        "state": "open",
+        "state": live_state,
     }
 
     fake_bin = tmp_path / "bin"
@@ -215,9 +219,11 @@ def _run_verdict_read(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
+        'if [[ "$*" == *"/actions/runs/42 --jq .created_at" ]]; then printf \'%s\\n\' "$FAKE_REQUIRED_CREATED_AT"; exit 0; fi\n'
         'endpoint="${@: -1}"\n'
         'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
+        "  */compare/*) printf '%s\\n' \"$FAKE_COMPARE_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
         "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
         "  */actions/runs/*/jobs*) printf '%s\\n' \"$FAKE_DISPATCH_JOBS_JSON\" ;;\n"
@@ -231,7 +237,11 @@ def _run_verdict_read(
     dispatch_env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_REQUIRED_CREATED_AT": required_created_at,
         "FAKE_PULL_JSON": json.dumps(live_pr),
+        "FAKE_COMPARE_JSON": json.dumps(comparison if comparison is not None else {
+            "status": "ahead", "behind_by": 0, "ahead_by": 1,
+        }),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
         "FAKE_DISPATCH_RUNS_JSON": json.dumps(
             dispatch_runs
@@ -267,15 +277,11 @@ def _run_verdict_read(
             line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
             if "=" in line
         )
-    if "verdict" not in output_values:
-        return dispatch_result, subprocess.CompletedProcess(
-            args=[bash], returncode=1, stdout="", stderr=""
-        )
     verdict_env = {
         **os.environ,
         "LANGUAGE": "python",
-        "DISPATCH_OUTCOME": "success",
-        "VERDICT_STATE": output_values["verdict"],
+        "DISPATCH_OUTCOME": "success" if dispatch_result.returncode == 0 else "failure",
+        "VERDICT_STATE": output_values.get("verdict", ""),
     }
     verdict_result = subprocess.run(
         [bash], input=verdict_script, text=True, capture_output=True, check=False,
@@ -613,6 +619,7 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
         "  exit 0\n"
         "fi\n"
+        'if [[ "$*" == *"/actions/runs/42 --jq .created_at" ]]; then printf \'%s\\n\' "$FAKE_REQUIRED_CREATED_AT"; exit 0; fi\n'
         'endpoint="${@: -1}"\n'
         'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
@@ -638,6 +645,7 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         "FAKE_STATUSES_JSON": json.dumps([]),
         "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": []}]),
         "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": []}]),
+        "FAKE_REQUIRED_CREATED_AT": "2026-09-27T11:08:00Z",
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -949,3 +957,80 @@ def test_codeql_coordinator_does_not_dispatch_a_closed_or_stale_pull_request(
     assert stale.returncode == 0, stale.stderr
     assert not closed_log.exists()
     assert not stale_log.exists()
+
+
+def test_codeql_obsolete_pr_verdict_releases_runner(tmp_path: Path) -> None:
+    """Closed and superseded PR shards finish without claiming a scan passed."""
+    for state, head in (("closed", _TEST_HEAD_SHA), ("open", "c" * 40)):
+        case = tmp_path / state
+        case.mkdir()
+        read, enforce = _run_verdict_read(case, [], live_state=state, live_head=head)
+        assert read.returncode == 0, read.stderr
+        assert "verdict=obsolete" in (case / "github-output").read_text()
+        assert enforce.returncode == 0, enforce.stdout + enforce.stderr
+        assert "no scan verdict is asserted" in enforce.stdout
+
+
+def test_codeql_unknown_live_state_fails_closed(tmp_path: Path) -> None:
+    """An unknown API state cannot turn a superseded shard into success."""
+    read, enforce = _run_verdict_read(
+        tmp_path, [], live_state="unexpected", live_head="c" * 40,
+    )
+    assert read.returncode != 0
+    assert enforce.returncode != 0
+
+
+def test_codeql_malformed_live_head_fails_closed(tmp_path: Path) -> None:
+    """Malformed live identity must not qualify as an obsolete scan target."""
+    read, enforce = _run_verdict_read(tmp_path, [], live_state="closed", live_head="bad")
+    assert read.returncode != 0
+    assert enforce.returncode != 0
+
+
+def test_codeql_moved_head_requires_forward_ancestry(tmp_path: Path) -> None:
+    """Lagging reads and diverged or malformed histories cannot retire a shard."""
+    for index, comparison in enumerate((
+        {"status": "behind", "behind_by": 1, "ahead_by": 0},
+        {"status": "diverged", "behind_by": 1, "ahead_by": 1},
+        {"status": "ahead", "behind_by": 1, "ahead_by": 1},
+        {"status": "ahead", "behind_by": 0},
+        {},
+    )):
+        case = tmp_path / str(index)
+        case.mkdir()
+        read, enforce = _run_verdict_read(
+            case, [], live_head="c" * 40, comparison=comparison,
+        )
+        assert read.returncode != 0
+        assert enforce.returncode != 0
+
+
+def test_codeql_control_routing_keeps_pr_workflows_hosted() -> None:
+    """Only the trusted main revision may request the restricted control group."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    selectors = [line.strip() for line in workflow.splitlines() if line.strip().startswith("runs-on:")]
+    trusted = "ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main"
+    assert len(selectors) == 3
+    for selector in selectors:
+        assert f"fromJSON(github.workflow_ref == '{trusted}' && " in selector
+        choices = re.findall(r"'([^']*)'", selector)
+        assert choices[0] == trusted
+        assert json.loads(choices[1]) == {"group": "CWL central control", "labels": ["self-hosted", "linux", "x64"]}
+        assert json.loads(choices[2]) == "ubuntu-24.04"
+
+
+def test_codeql_pr_rejects_invalid_required_run_time(tmp_path: Path) -> None:
+    """Missing time must fail closed rather than scan all workflow history."""
+    dispatch, verdict = _run_verdict_read(tmp_path, statuses=[], required_created_at="null")
+    assert dispatch.returncode != 0
+    assert "validate required run creation time" in dispatch.stdout
+    assert verdict.returncode != 0
+
+
+def test_codeql_pr_scopes_dispatch_history_to_required_run_creation() -> None:
+    """Server-side history filtering retains pagination and exact identity checks."""
+    script = _extract_run_block(WORKFLOW_PATH.read_text(), DISPATCH_STEP_NAME)
+    assert '-f created=">=${required_created_at}"' in script
+    assert '-f event=repository_dispatch' in script
+    assert '--paginate --slurp' in script
+    assert 'select(.display_title == $title or .name == $title)' in script
