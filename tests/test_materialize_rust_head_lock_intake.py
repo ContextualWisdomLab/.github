@@ -2,6 +2,9 @@
 
 import json
 import subprocess
+import os
+import pathlib
+import textwrap
 
 import pytest
 
@@ -9,6 +12,61 @@ from scripts.ci import materialize_base_rust_dependencies as materializer
 from tests.test_materialize_base_rust_dependencies import _init_repo, _commit_all
 
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+
+
+@pytest.mark.parametrize("change", ["lock", "source", "manifest", "rename-manifest"])
+def test_workflow_opts_into_head_locks_only_with_unchanged_manifests(tmp_path, change):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "Cargo.toml").write_text("base manifest\n")
+    (repo / "Cargo.lock").write_text("base lock\n")
+    base = _commit_all(repo)
+    if change != "source":
+        (repo / "Cargo.lock").write_text("repaired lock\n")
+    if change == "source":
+        (repo / "source.rs").write_text("source change\n")
+    if change == "manifest":
+        (repo / "Cargo.toml").write_text("changed manifest\n")
+    if change == "rename-manifest":
+        (repo / "Cargo.toml").rename(repo / "renamed.txt")
+    head = _commit_all(repo)
+    workflow = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / ".github/workflows/opencode-review-dispatch.yml"
+    ).read_text()
+    start = workflow.index("            rust_lock_args=()")
+    end = workflow.index('            cat >"$coverage_build_dir/Dockerfile"', start)
+    block = textwrap.dedent(workflow[start:end])
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "python3"
+    fake.write_text('#!/bin/bash\nprintf "%s\\0" "$@" >"$ARGUMENT_RECEIPT"\n')
+    fake.chmod(0o755)
+    receipt = tmp_path / "arguments"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "RUNNER_TEMP": str(tmp_path),
+        "COVERAGE_SOURCE_WORKDIR": str(repo),
+        "PR_BASE_SHA": base,
+        "PR_HEAD_SHA": head,
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "coverage_build_dir": str(tmp_path),
+        "ARGUMENT_RECEIPT": str(receipt),
+    }
+    subprocess.run(
+        ["bash", "-euo", "pipefail"],
+        input=block,
+        text=True,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    arguments = receipt.read_bytes().decode().split("\0")[:-1]
+    assert ("--head-sha" in arguments) == (change == "lock")
+    if change == "lock":
+        assert arguments[arguments.index("--head-sha") + 1] == head
+    assert arguments[arguments.index("--base-sha") + 1] == base
 
 
 def lock(packages):
