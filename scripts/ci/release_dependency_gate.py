@@ -45,6 +45,7 @@ trusted verifier is materialized.
 from __future__ import annotations
 
 import argparse
+import ast
 import email.parser
 import hashlib
 import io
@@ -62,7 +63,10 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
+    import tomli as tomllib
 
 try:
     from scripts.ci.spdx_license_policy import (
@@ -827,6 +831,40 @@ def detect_install_hooks(sources: Mapping[str, str]) -> list[str]:
         for pattern, reason in _HOOK_PATTERNS:
             if pattern in text:
                 findings.append(f"{path} {reason} ({pattern})")
+        if path.endswith(".py"):
+            try:
+                nodes = list(ast.walk(ast.parse(text)))
+            except SyntaxError:
+                findings.append(f"{path} cannot be inspected as Python source")
+                continue
+            imports: dict[str, set[str]] = {}
+            for node in nodes:
+                if isinstance(node, ast.Import):
+                    for item in node.names:
+                        imports.setdefault(item.asname or item.name.split('.')[0], set()).add(
+                            item.name if item.asname else item.name.split('.')[0])
+                elif isinstance(node, ast.ImportFrom):
+                    for item in node.names:
+                        imports.setdefault(item.asname or item.name, set()).add(
+                            f"{node.module}.{item.name}")
+            dangerous = {"subprocess", "socket", "urllib", "http", "requests",
+                         "importlib", "builtins"}
+            for module in sorted(set().union(*imports.values())):
+                if module.split('.')[0] in dangerous:
+                    findings.append(f"{path} imports process/network or dynamic-code capability ({module})")
+            for node in nodes:
+                targets: set[str] = set()
+                if isinstance(node, ast.Name):
+                    targets = imports.get(node.id, {node.id})
+                elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                    targets = {f"{base}.{node.attr}" for base in
+                               imports.get(node.value.id, {node.value.id})}
+                for target in sorted(targets):
+                    if target in {"__import__", "eval", "exec", "os.system", "os.popen", "os.fork"} or target.startswith(("os.exec", "os.spawn", "os.posix_spawn")):
+                        findings.append(f"{path} references process or dynamic-code capability ({target})")
+        elif path.endswith(".rs") and re.search(
+                r"\b(?:std\s*::\s*(?:process|net)\b|std\s*::\s*\{[^}]*\b(?:process|net)\b|reqwest\b)", text):
+            findings.append(f"{path} references a process/network namespace")
     return findings
 
 
@@ -1278,7 +1316,8 @@ def build_fixture(dependency: Dependency, evidence: Mapping[str, Any]) -> dict[s
                     str(item) for item in _require_list(evidence, "parsed_inputs", dependency.key)
                 )
             },
-            "install_hooks": {"sources": sorted(sources)},
+            "install_hooks": {"sources": sorted(sources),
+                              "source_texts": {name: str(sources[name]) for name in sorted(sources)}},
             "known_vulnerability_surface": {"advisories": sorted(advisories)},
             "native_library_loading": {"libraries": sorted(libraries)},
         },

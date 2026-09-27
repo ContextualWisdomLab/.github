@@ -679,6 +679,43 @@ def test_red_untrusted_install_hook(tmp_path: Path, source: str) -> None:
     assert gate.INSTALL_HOOK in _codes(gate.gate(capture))
 
 
+@pytest.mark.parametrize("path,source", [
+    ("setup.py", "from subprocess import run; run(['sh'])"),
+    ("setup.py", "from urllib import request; request.urlopen(url)"),
+    ("setup.py", "import os as o; o.system('sh')"),
+    ("setup.py", "from os import system as shell; shell('sh')"),
+    ("setup.py", "from os import system as f; f('sh'); from math import sqrt as f"),
+    ("setup.py", "__import__('subprocess').run(['sh'])"),
+    ("setup.py", "import importlib as loader; loader.import_module(name)"),
+    ("build.rs", 'use std::process; fn main() { process::Command::new("sh"); }'),
+    ("build.rs", 'use std::{process as p}; fn main() { p::Command::new("sh"); }'),
+])
+def test_hook_import_aliases_refuse_the_real_gate(tmp_path, path, source):
+    """Import spelling must not erase process/network capabilities."""
+    capture = build_capture(tmp_path, python_evidence=_python_evidence(
+        install_hook_sources={path: source}))
+    assert gate.INSTALL_HOOK in _codes(gate.gate(capture))
+
+
+def test_hook_source_bytes_reach_strix_and_change_its_binding():
+    """Same-named hooks with different bodies require different scan verdicts."""
+    dependency = gate.Dependency("pypi", "greenlib", "1.0.0")
+    source = "import os as o; root = o.path.dirname(__file__)"
+    fixture = gate.build_fixture(dependency, _python_evidence(
+        install_hook_sources={"setup.py": source}))
+    assert fixture["scenarios"]["install_hooks"]["source_texts"] == {"setup.py": source}
+    changed = gate.build_fixture(dependency, _python_evidence(
+        install_hook_sources={"setup.py": source + "\nprint(root)"}))
+    assert gate.fixture_digest(fixture) != gate.fixture_digest(changed)
+
+
+def test_benign_os_path_import_does_not_refuse_the_gate(tmp_path):
+    """Reading a package path does not spawn a process or access a network."""
+    capture = build_capture(tmp_path, python_evidence=_python_evidence(
+        install_hook_sources={"setup.py": "import os as o; root = o.path.dirname(__file__)"}))
+    assert gate.gate(capture).failures == []
+
+
 def test_cmdclass_single_quoted_command_is_detected(tmp_path: Path) -> None:
     """Single-quoted cmdclass keys are detected exactly like double-quoted ones."""
     capture = build_capture(
