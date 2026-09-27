@@ -47,6 +47,11 @@ on:
         required: false
         type: string
         default: ""
+      cargo_dev_manifest_path:
+        description: Development Cargo member whose workspace lock must also be gated.
+        required: false
+        type: string
+        default: ""
       distribution_set_artifact_id:
         description: Immutable same-run reproducibility record artifact ID containing the complete distribution set manifest.
         required: true
@@ -175,7 +180,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: c770d502715b84723ae9c4b3da84937ad8935429
+          ref: 2cd2ede2097f48236452a9c6412cc2505b3c3db1
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -195,14 +200,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=c770d502715b84723ae9c4b3da84937ad8935429
+          expected=2cd2ede2097f48236452a9c6412cc2505b3c3db1
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 7b80ee0b9f39cdf0fde254b6ea338ff20d943696
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0c0ca6079716c1c69ef8ba02605ac9b34a8dca25
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -337,15 +342,20 @@ jobs:
           ECOSYSTEMS: ${{ inputs.ecosystems }}
           PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
           CARGO_MANIFEST_PATH: ${{ inputs.cargo_manifest_path }}
+          CARGO_DEV_MANIFEST_PATH: ${{ inputs.cargo_dev_manifest_path }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python_lock=""
           cargo_manifest=""
+          cargo_dev_manifest=""
           if [ -n "$PYTHON_LOCK_PATH" ]; then
             python_lock="${PWD}/release-source/${PYTHON_LOCK_PATH}"
           fi
           if [ -n "$CARGO_MANIFEST_PATH" ]; then
             cargo_manifest="${PWD}/release-source/${CARGO_MANIFEST_PATH}"
+          fi
+          if [ -n "$CARGO_DEV_MANIFEST_PATH" ]; then
+            cargo_dev_manifest="${PWD}/release-source/${CARGO_DEV_MANIFEST_PATH}"
           fi
           bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh \
             --raw-root "${RUNNER_TEMP}/raw" \
@@ -353,7 +363,8 @@ jobs:
             --ecosystems "$ECOSYSTEMS" \
             --python-lock "$python_lock" \
             --download-root "${RUNNER_TEMP}/collected" \
-            --cargo-manifest "$cargo_manifest"
+            --cargo-manifest "$cargo_manifest" \
+            --cargo-dev-manifest "$cargo_dev_manifest"
 
       - name: Assemble per-dependency evidence and isolated synthetic fixtures
         env:
@@ -461,7 +472,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: c770d502715b84723ae9c4b3da84937ad8935429
+          ref: 2cd2ede2097f48236452a9c6412cc2505b3c3db1
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -481,14 +492,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=c770d502715b84723ae9c4b3da84937ad8935429
+          expected=2cd2ede2097f48236452a9c6412cc2505b3c3db1
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 7b80ee0b9f39cdf0fde254b6ea338ff20d943696
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0c0ca6079716c1c69ef8ba02605ac9b34a8dca25
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -730,7 +741,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: c770d502715b84723ae9c4b3da84937ad8935429
+          ref: 2cd2ede2097f48236452a9c6412cc2505b3c3db1
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -750,14 +761,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=c770d502715b84723ae9c4b3da84937ad8935429
+          expected=2cd2ede2097f48236452a9c6412cc2505b3c3db1
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 7b80ee0b9f39cdf0fde254b6ea338ff20d943696
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0c0ca6079716c1c69ef8ba02605ac9b34a8dca25
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -892,15 +903,20 @@ jobs:
           ECOSYSTEMS: ${{ inputs.ecosystems }}
           PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
           CARGO_MANIFEST_PATH: ${{ inputs.cargo_manifest_path }}
+          CARGO_DEV_MANIFEST_PATH: ${{ inputs.cargo_dev_manifest_path }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python_lock=""
           cargo_manifest=""
+          cargo_dev_manifest=""
           if [ -n "$PYTHON_LOCK_PATH" ]; then
             python_lock="${PWD}/release-source/${PYTHON_LOCK_PATH}"
           fi
           if [ -n "$CARGO_MANIFEST_PATH" ]; then
             cargo_manifest="${PWD}/release-source/${CARGO_MANIFEST_PATH}"
+          fi
+          if [ -n "$CARGO_DEV_MANIFEST_PATH" ]; then
+            cargo_dev_manifest="${PWD}/release-source/${CARGO_DEV_MANIFEST_PATH}"
           fi
           bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh \
             --raw-root "${RUNNER_TEMP}/raw" \
@@ -908,7 +924,8 @@ jobs:
             --ecosystems "$ECOSYSTEMS" \
             --python-lock "$python_lock" \
             --download-root "${RUNNER_TEMP}/collected" \
-            --cargo-manifest "$cargo_manifest"
+            --cargo-manifest "$cargo_manifest" \
+            --cargo-dev-manifest "$cargo_dev_manifest"
 
       - name: Assemble per-dependency evidence and isolated synthetic fixtures
         env:
