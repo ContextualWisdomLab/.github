@@ -111,7 +111,7 @@ def _read_terminal_runs(
         )
     except QueueHealthError as error:
         if not str(error).startswith("GitHub API pagination exceeds "):
-            raise
+            raise QueueHealthError(f"{error} for {endpoint}") from error
         if start >= end:
             raise QueueHealthError(
                 "terminal workflow history exceeds the API limit within one second"
@@ -139,7 +139,8 @@ def _read_terminal_runs(
 
 
 def _read_target_terminal_runs(
-    endpoint: str, *, repository: str, heads: Sequence[str], runner: Runner
+    endpoint: str, *, repository: str, heads: Sequence[str], runner: Runner,
+    known_runs: Sequence[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Resolve overflowing target history through complete current-head check suites."""
     try:
@@ -149,7 +150,12 @@ def _read_target_terminal_runs(
         )
     except QueueHealthError as error:
         if not str(error).startswith("GitHub API pagination exceeds "):
-            raise
+            raise QueueHealthError(f"{error} for {endpoint}") from error
+    known_by_suite: dict[int, list[dict[str, Any]]] = {}
+    for run in known_runs:
+        suite_id = run.get("check_suite_id")
+        if type(suite_id) is int and suite_id > 0:
+            known_by_suite.setdefault(suite_id, []).append(run)
     runs_by_id = {}
     for head in heads:
         suites = _list_payload(
@@ -161,15 +167,24 @@ def _read_target_terminal_runs(
             suite_id = suite.get("id")
             if type(suite_id) is not int or suite_id <= 0 or suite.get("head_sha") != head:
                 raise QueueHealthError("check suite lacks exact current-head identity")
-            if (suite.get("status") != "completed"
-                    and str(suite.get("conclusion") or "").lower() not in TERMINAL_DIAGNOSTIC_STATUSES):
+            conclusion = str(suite.get("conclusion") or "").lower()
+            if (conclusion not in TERMINAL_DIAGNOSTIC_STATUSES
+                    and (suite.get("status") != "completed" or conclusion)):
                 continue
-            runs = _list_payload(
-                github_json(f"repos/{repository}/actions/runs?check_suite_id={suite_id}"
-                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}", paginate=True, runner=runner),
-                "workflow_runs",
-                max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-            )
+            # A native suite owns one workflow run, already read by the complete
+            # head query when its run head is the PR head rather than the base.
+            runs = known_by_suite.get(suite_id)
+            if runs is None:
+                suite_endpoint = (f"repos/{repository}/actions/runs?check_suite_id={suite_id}"
+                                  f"&per_page={WORKFLOW_RUN_PAGE_SIZE}")
+                try:
+                    runs = _list_payload(
+                        github_json(suite_endpoint, paginate=True, runner=runner),
+                        "workflow_runs",
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+                    )
+                except QueueHealthError as error:
+                    raise QueueHealthError(f"{error} for {suite_endpoint}") from error
             for run in runs:
                 if type(run.get("check_suite_id")) is not int or run["check_suite_id"] != suite_id:
                     raise QueueHealthError("workflow run escaped its check suite binding")
@@ -322,6 +337,7 @@ def collect_snapshot(
                     repository=repository_name,
                     heads=current_head_shas,
                     runner=runner,
+                    known_runs=list(terminal_diagnostic_snapshot.values()),
                 )
                 for workflow_run in target_workflow_runs:
                     normalized_candidate = _normalise_run(

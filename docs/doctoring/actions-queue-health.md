@@ -162,3 +162,24 @@ statuses remain repository-wide, so closed or superseded expensive work remains
 visible. Small target-history queries and the head-specific terminal queries
 retain their existing path. The installation token adds only Checks-read,
 scoped to the same reviewed repository allowlist.
+
+
+### Reuse complete current-head evidence
+
+The live `3f38bb36d` full collection ended with one of fourteen repositories
+collected. Central pagination was incomplete, ConceptWeave changed PR identity
+during evidence collection, and the shared user quota expired during LineageWeave.
+Zero pending jobs in that partial receipt is not organization-wide queue proof.
+
+Two native LineageWeave queries independently returned the same cancelled run
+`35841889134`, suite `97047968656`, head
+`182d3c9d4c5f2a8ab2d63e77b8a9ced663a183f6`: the complete head-specific query
+and the suite-specific fallback. The fallback now reuses already collected
+terminal runs by exact suite identity, fetching only suites not already owned
+by that complete read. Successful suites require no terminal diagnostic read;
+completed suites without a conclusion still receive startup-failure inspection.
+Malformed identities, missing pages, and unreadable unknown suites still fail
+closed. Terminal pagination errors now include the native query endpoint so a
+future incomplete response can be reproduced directly. This reduces redundant
+reads; it does not claim that the shared user quota, concurrent PR movement, or
+scoped installation-token runtime has been resolved.
