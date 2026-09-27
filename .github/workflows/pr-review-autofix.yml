@@ -263,8 +263,16 @@ jobs:
           python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
             "${context_args[@]}"
 
+      - name: Set up lock-compatible sidecar Python
+        id: sidecar_python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          update-environment: false
+
       - name: Provision contextual-orchestrator review sidecar
         env:
+          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
