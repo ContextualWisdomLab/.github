@@ -245,11 +245,20 @@ jobs:
               gate_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
                 (.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion) // empty
               ')"
+              ghas_identity_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
+                (.steps[]? | select(.name == "Verify GHAS base/head CodeQL configuration identity") | .conclusion) // empty
+              ')"
+              sarif_upload_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
+                (.steps[]? | select(.name == "Preserve CodeQL SARIF evidence") | .conclusion) // empty
+              ')"
               case "$gate_conclusion" in
                 success)
-                  echo "verdict=success" >>"$GITHUB_OUTPUT"
-                  echo "Found completed CodeQL dispatch scan gate for ${LANGUAGE}: success."
-                  exit 0
+                  if [ "$ghas_identity_conclusion" = "success" ] &&
+                    [ "$sarif_upload_conclusion" = "success" ]; then
+                    echo "verdict=success" >>"$GITHUB_OUTPUT"
+                    echo "Found completed CodeQL dispatch proof for ${LANGUAGE}: gate, GHAS identity, and SARIF evidence succeeded."
+                    exit 0
+                  fi
                   ;;
                 failure|cancelled|skipped)
                   echo "verdict=failure" >>"$GITHUB_OUTPUT"
@@ -269,7 +278,7 @@ jobs:
           fi
 
           if [ "$RUN_ATTEMPT" != "1" ]; then
-            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
+            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict; GHAS identity and preserved SARIF are required for authenticated terminal proof."
             exit 1
           fi
           echo "verdict=pending" >>"$GITHUB_OUTPUT"

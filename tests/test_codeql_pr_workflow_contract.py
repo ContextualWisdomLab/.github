@@ -350,6 +350,14 @@ def test_codeql_pr_one_shot_read_accepts_clean_gate_when_wake_step_failed_job(
                             "conclusion": "success",
                         },
                         {
+                            "name": "Verify GHAS base/head CodeQL configuration identity",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                        {
                             "name": "Wake exact CodeQL required job",
                             "conclusion": "failure",
                         },
@@ -360,8 +368,47 @@ def test_codeql_pr_one_shot_read_accepts_clean_gate_when_wake_step_failed_job(
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
-    assert "completed CodeQL dispatch scan gate for python: success" in dispatch_result.stdout
+    assert "completed CodeQL dispatch proof for python" in dispatch_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_one_shot_read_rejects_clean_gate_when_ghas_identity_failed(
+    tmp_path: Path,
+) -> None:
+    """A clean SARIF gate cannot hide a later GHAS identity proof failure."""
+    head_sha = _TEST_HEAD_SHA
+    title = _dispatch_scan_title(head_sha=head_sha)
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={"workflow_runs": [_completed_dispatch_run(title=title)]},
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "failure",
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Verify GHAS base/head CodeQL configuration identity",
+                            "conclusion": "failure",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 1
+    assert "authenticated terminal proof" in dispatch_result.stdout
+    assert verdict_result.returncode == 1
 
 
 def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(

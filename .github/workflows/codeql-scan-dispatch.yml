@@ -1000,6 +1000,26 @@ jobs:
               echo "::error::CodeQL settlement rejected incomplete handler gate or SARIF evidence for ${language}."
               exit 1
             fi
+            clean_gate_count="$(printf '%s' "$handler_jobs" | jq --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
+              [.[] | select(
+                .name == $name
+                and .status == "completed"
+                and .run_attempt == $attempt
+                and ([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate" and .conclusion == "success")] | length) == 1
+              )] | length
+            ')"
+            ghas_identity_count="$(printf '%s' "$handler_jobs" | jq --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
+              [.[] | select(
+                .name == $name
+                and .status == "completed"
+                and .run_attempt == $attempt
+                and ([.steps[]? | select(.name == "Verify GHAS base/head CodeQL configuration identity" and .conclusion == "success")] | length) == 1
+              )] | length
+            ')"
+            if [ "$clean_gate_count" -eq 1 ] && [ "$ghas_identity_count" -ne 1 ]; then
+              echo "::error::CodeQL settlement rejected missing GHAS configuration identity proof for ${language}."
+              exit 1
+            fi
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
 
           case "$RERUN_MODE" in

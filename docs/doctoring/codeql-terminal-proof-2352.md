@@ -1,0 +1,47 @@
+# CodeQL terminal-proof settlement (#2352)
+
+## Incident
+
+On `.github#2352@f1a8dc813e6dba4e4905bf3e1b770b6d44344944`, required CodeQL
+run `35805450471` initially failed pending and was later rerun. Attempt 2 jobs
+`107353895415` (Actions) and `107353895562` (Python) became GREEN by reading
+the successful `Enforce CodeQL Medium+ SARIF gate` step from producer run
+`35841640640`.
+
+The producer jobs were nevertheless terminal failures: the later
+`Verify GHAS base/head CodeQL configuration identity` step received HTTP 403.
+The gate-only fallback therefore hid the exact credential/permission defect
+tracked by `#2275` and `#2276`.
+
+## Root cause and boundary
+
+The required receiver and settlement contract treated one successful SARIF
+gate step as terminal success even when a later mandatory proof failed. This
+was originally allowed so a wake-only API failure could not invalidate an
+otherwise complete scan, but the contract did not distinguish that harmless
+late failure from GHAS identity or SARIF-preservation failure.
+
+A clean result now requires the same three proof units in both paths:
+
+1. `Enforce CodeQL Medium+ SARIF gate` succeeds;
+2. `Verify GHAS base/head CodeQL configuration identity` succeeds; and
+3. `Preserve CodeQL SARIF evidence` succeeds.
+
+A later failure confined to waking the exact required job remains outside the
+scan verdict and may still be reconciled. A Medium+ gate failure remains a
+terminal security failure and does not require a successful GHAS identity step.
+Missing, duplicate, skipped, cancelled, or failed clean-path proof stays
+fail-closed.
+
+## Verification and ownership
+
+Executable regressions reproduce both false-GREEN surfaces: direct receiver
+fallback and run-wide settlement. They are RED on protected `main` and GREEN
+with the proof contract. Focused workflow tests pass 90/90 and the complete
+repository suite passes 3,371 tests with 28 skips and 40 subtests.
+
+The central `.github` workflow remains the canonical owner. Do not copy the
+workflow into a consumer, synthesize a status, accept clean SARIF alone, or
+weaken the GHAS identity proof. `#2275`/`#2276` still own the real credential
+and target permission repair; this change prevents that missing authority from
+being mislabeled as a successful required check.
