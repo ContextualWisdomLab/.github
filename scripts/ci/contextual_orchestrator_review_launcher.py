@@ -28,6 +28,8 @@ import json
 import logging
 import os
 import re
+import queue
+import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -457,7 +459,8 @@ def _response_has_reasoning_without_content(response: object) -> bool:
 
 
 def _preflight_review_agents(
-    agents: list[object], *, client: Any, escalations_used: int = 0
+    agents: list[object], *, client: Any, escalations_used: int = 0,
+    claim_escalation: Callable[[], bool] | None = None
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
@@ -524,6 +527,7 @@ def _preflight_review_agents(
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
+        claim_escalation: Optional atomic reservation shared by concurrent probes.
         escalations_used: Escalations already spent earlier in this same
             preflight run (e.g. by a prior stage), so the shared budget is
             honored across calls rather than restarted at zero.
@@ -657,7 +661,10 @@ def _preflight_review_agents(
         if (
             not budget_signature
             or second_pass
-            or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS
+            or (
+                not claim_escalation() if claim_escalation is not None
+                else escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS
+            )
         ):
             row["status"] = "rejected"
             if not budget_signature:
@@ -753,8 +760,133 @@ def _preflight_review_agents(
     return [*viable, *deferred], report
 
 
+def _preflight_review_agents_concurrently(
+    agents: list[object], *, client: Any, escalations_used: int = 0
+) -> tuple[list[object], dict[str, object]]:
+    """Fill the validated pool without waiting for one pending inference.
+
+    Reuse the serial route validator; share the existing probe and escalation
+    budgets across at most MAX_PROBES outstanding calls. Pending calls are
+    neither cancelled nor classified as unavailable. Only completed ready
+    routes and explicitly retryable responses enter the serving pool.
+    """
+    completed: queue.Queue = queue.Queue()
+    budget_lock = threading.Lock()
+    sealed = False
+    rows: list[dict[str, object]] = []
+    probed: list[object] = []
+    ready: list[object] = []
+    streaks: dict[str, int] = {}
+    postponed: list[object] = []
+    postponed_probed = 0
+    walk = iter(agents)
+    second_pass = False
+    outstanding = 0
+    exhausted = object()
+
+    def claim() -> bool:
+        """Atomically reserve one of the shared escalated attempts."""
+        nonlocal escalations_used
+        with budget_lock:
+            if sealed or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
+                return False
+            escalations_used += 1
+            return True
+
+    def probe(index: int, agent: object, postponed_probe: bool) -> None:
+        """Publish a completed sanitized route result or an unexpected exception."""
+        try:
+            try:
+                _, report = _preflight_review_agents(
+                    [agent], client=client,
+                    escalations_used=(REVIEW_PREFLIGHT_MAX_ESCALATIONS if postponed_probe else 0),
+                    claim_escalation=(None if postponed_probe else claim),
+                )
+            except ReviewPreflightError as exc:
+                report = exc.report
+            row = report["routes"][0]
+            if postponed_probe and row.get("error_type") == "escalation_budget_exhausted":
+                row["error_type"] = "escalation_reserved_for_first_pass"
+            completed.put((index, row))
+        except BaseException as exc:  # propagate worker faults, never a review verdict
+            completed.put((index, exc))
+
+    try:
+        while len(ready) < REVIEW_PREFLIGHT_TARGET_READY:
+            try:
+                index, outcome = completed.get_nowait()
+            except queue.Empty:
+                agent = next(walk, exhausted) if len(probed) < REVIEW_PREFLIGHT_MAX_PROBES else exhausted
+                if agent is exhausted and not second_pass and postponed:
+                    walk = iter(postponed)
+                    second_pass = True
+                    continue
+                if agent is not exhausted:
+                    account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
+                    if second_pass:
+                        postponed_probed += 1
+                    elif streaks.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
+                        postponed.append(agent)
+                        continue
+                    index = len(probed)
+                    probed.append(agent)
+                    rows.append({
+                        "agent_id": str(getattr(agent, "id", "")),
+                        "provider": str(getattr(agent, "provider_name", "") or "unknown"),
+                        "model": str(getattr(agent, "model", "")),
+                        "status": "pending",
+                    })
+                    outstanding += 1
+                    # Lifecycle cancellation is owned by the sidecar process.
+                    # Daemons avoid an interpreter exit joining a pending model.
+                    threading.Thread(target=probe, args=(index, agent, second_pass), daemon=True).start()
+                    continue
+                if not outstanding:
+                    break
+                index, outcome = completed.get()
+            outstanding -= 1
+            if isinstance(outcome, BaseException):
+                raise outcome
+            rows[index] = outcome
+            agent = probed[index]
+            account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
+            streaks[account] = streaks.get(account, 0) + 1 if outcome.get("http_status") == 429 else 0
+            if outcome.get("status") == "ready":
+                ready.append(agent)
+    finally:
+        with budget_lock:
+            sealed = True
+
+    ready = [agent for agent, row in zip(probed, rows) if row["status"] == "ready"]
+    deferred: list[object] = []
+    if ready:
+        for agent, row in zip(probed, rows):
+            if row.get("status") == "rejected" and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS:
+                row["status"] = "deferred"
+                deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
+    report = {
+        "contract": "strix-plain-chat-preflight-v2",
+        "candidate_count": len(agents), "probed_count": len(probed),
+        "ready_count": len(ready), "deferred_count": len(deferred),
+        "rejected_count": sum(row["status"] == "rejected" for row in rows),
+        "pending_count": sum(row["status"] == "pending" for row in rows),
+        "skipped_count": len(postponed) - postponed_probed,
+        "postponed_probed_count": postponed_probed,
+        "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
+        "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
+        "account_skip_after_429": REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429,
+        "escalations_used": escalations_used,
+        "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
+        "routes": rows,
+    }
+    if not ready:
+        raise ReviewPreflightError("no provider route passed the Strix plain-chat preflight", report)
+    return [*ready, *deferred], report
+
+
 def _preflight_with_fallback(
-    primary_agents: list[object], fallback_agents: list[object], *, client: Any
+    primary_agents: list[object], fallback_agents: list[object], *, client: Any,
+    preflight: Callable | None = None
 ) -> tuple[list[object], dict[str, object], bool]:
     """Use the priced catalog only after every primary route rejects.
 
@@ -771,15 +903,16 @@ def _preflight_with_fallback(
     ``primary_attempt`` nests the primary stage's own report -- including its
     own ``escalations_used`` -- whenever a fallback stage ran at all.
     """
+    preflight = preflight or _preflight_review_agents
     try:
-        viable, report = _preflight_review_agents(primary_agents, client=client)
+        viable, report = preflight(primary_agents, client=client)
         return viable, report, False
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
             raise
         escalations_used = int(primary_error.report.get("escalations_used", 0))
         try:
-            viable, report = _preflight_review_agents(
+            viable, report = preflight(
                 fallback_agents, client=client, escalations_used=escalations_used
             )
         except ReviewPreflightError as fallback_error:
@@ -1220,7 +1353,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         agents, preflight_report, fallback_used = _preflight_with_fallback(
-            agents, fallback_agents, client=client
+            agents, fallback_agents, client=client,
+            preflight=_preflight_review_agents_concurrently,
         )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)

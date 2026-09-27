@@ -192,4 +192,5 @@ def test_invalid_present_workflow_id_fails_closed() -> None:
 def test_queue_health_workflow_does_not_grant_unused_pull_request_permission() -> None:
     """The scheduler token keeps only permissions used outside the cross-repository token."""
     workflow = (ROOT / ".github/workflows/actions-queue-health.yml").read_text(encoding="utf-8")
-    assert "pull-requests: read" not in workflow
+    assert "\n  pull-requests: read\n" not in workflow
+    assert "\n      pull-requests: read\n" not in workflow

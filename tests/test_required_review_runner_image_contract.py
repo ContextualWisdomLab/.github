@@ -38,7 +38,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(NOEMA_REVIEW)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:
-        """Require every OpenCode Review Dispatch job to use explicit Ubuntu 24.04.
+        """Require OpenCode dispatch jobs to use the compatible dedicated group.
 
         This is the workflow the required `opencode-review` check's
         `repository_dispatch` actually lands on to run the OpenCode CLI and
@@ -48,7 +48,11 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         2026-09-01 entry, whose own "Residual" note flagged this exact
         follow-up sweep as still open).
         """
-        self.assert_explicit_supported_image(OPENCODE_REVIEW_DISPATCH)
+        workflow = OPENCODE_REVIEW_DISPATCH.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("group: CWL central OpenCode"), 3)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 3)
+        self.assertNotIn("runs-on: ubuntu-latest", workflow)
+        self.assertNotIn("runs-on: ubuntu-24.04", workflow)
 
 
 if __name__ == "__main__":
