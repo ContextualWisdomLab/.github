@@ -41,3 +41,21 @@ https://docs.github.com/en/actions/reference/workflow-commands-for-github-action
 
 GitHub. (n.d.). *Contexts reference: Steps context*.
 https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#steps-context
+
+## Existing security baseline repaired with the consumer
+
+The repository's open Dependabot alerts 11–13 identify AnyIO 4.14.0 in
+`requirements-strix-ci-hashes.txt`. The Critical and High advisories are
+GHSA-82r6-8w77-94w6 and GHSA-3w57-8xmc-8v26; the patched version is 4.14.2.
+The source pin, two release hashes and source/lock parity test are reused from
+#2385 at `372f5b8bb1ae1bb32ab29e9afbe363d81aed81e3`, without claiming that PR's
+other changes or checks have been inherited. Both release digests were verified
+against PyPI's version-specific JSON. This removes the known vulnerable lock
+entry while preserving the repository-wide security gate.
+
+GitHub. (2026). *AnyIO: TLSStream IDNA 2003 host name encoding enables potential
+TLS certificate spoofing* (GHSA-82r6-8w77-94w6).
+https://github.com/advisories/GHSA-82r6-8w77-94w6
+
+Python Package Index. (2026). *AnyIO 4.14.2*.
+https://pypi.org/project/anyio/4.14.2/
