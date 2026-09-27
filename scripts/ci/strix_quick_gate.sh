@@ -243,7 +243,7 @@ PY
 sanitize_remediation_evidence_claims() {
 	local log_file="$1"
 	local report_root="$2"
-	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
+	local binder="$SCRIPT_DIR/strix_evidence_binding.py"
 	local report_file
 
 	if [ ! -f "$binder" ] || [ -L "$binder" ]; then
