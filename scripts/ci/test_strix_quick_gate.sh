@@ -8065,6 +8065,10 @@ run_pull_request_target_job_analysis_authority_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -n "${FAKE_STRIX_CALLS_FILE:-}" ]; then
+	printf 'call\n' >>"$FAKE_STRIX_CALLS_FILE"
+fi
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -8169,6 +8173,55 @@ EOF
 	assert_file_contains "$output_log" \
 		"scan ok with trusted Job Analysis authorization and persistence context" \
 		"case=$case_name output"
+
+	local missing_context_file="${context_files[0]}"
+	local missing_output_log="$tmp_dir/missing-context-output.log"
+	local strix_calls_file="$tmp_dir/strix-calls.log"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+	git -C "$repo_root_dir" rm -q -- "$missing_context_file"
+	git -C "$repo_root_dir" commit -qm 'base without required Job Analysis auth context'
+	local missing_context_base_sha
+	missing_context_base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	printf '%s\n' 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' >"$repo_root_dir/$changed_file"
+	git -C "$repo_root_dir" add "$changed_file"
+	git -C "$repo_root_dir" commit -qm 'head changes Job Analysis kernel'
+	local missing_context_head_sha
+	missing_context_head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$missing_context_base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$missing_context_base_sha" \
+			PR_HEAD_SHA="$missing_context_head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_CALLS_FILE="$strix_calls_file" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILES="$context_files_text" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$missing_output_log" 2>&1
+	)
+	local missing_context_rc=$?
+	set -e
+
+	assert_equals "2" "$missing_context_rc" "case=$case_name missing required context exits closed"
+	assert_file_contains "$missing_output_log" \
+		"required Job Analysis trusted context file is unavailable: $missing_context_file" \
+		"case=$case_name missing required context output"
+	local strix_call_count=0
+	if [ -f "$strix_calls_file" ]; then
+		strix_call_count="$(wc -l <"$strix_calls_file" | tr -d '[:space:]')"
+	fi
+	assert_equals "0" "$strix_call_count" "case=$case_name missing required context must not invoke Strix"
 
 	rm -rf "$tmp_dir"
 }

@@ -1702,6 +1702,26 @@ PY
 		esac
 		local src_path="$REPO_ROOT/$relative_path"
 		if [ ! -e "$src_path" ]; then
+			case "$relative_path" in
+			services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/http.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py)
+				local job_analysis_change_rc=0
+				changed_file_list_contains \
+					"packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py" || job_analysis_change_rc=$?
+				case "$job_analysis_change_rc" in
+				0)
+					echo "ERROR: required Job Analysis trusted context file is unavailable: $context_file" >&2
+					return 2
+					;;
+				2)
+					return 2
+					;;
+				esac
+				;;
+			esac
 			return 0
 		fi
 		if [ ! -f "$src_path" ] || [ -L "$src_path" ]; then
