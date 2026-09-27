@@ -15,9 +15,9 @@ verdict contract. The missing output is the causal defect.
 
 ## Repair and boundaries
 
-The live read now emits `verdict=obsolete` for a closed PR or changed head.
+The live read now emits `verdict=obsolete` for a closed PR or a live head proven to descend from the event head.
 Enforcement accepts that state without asserting a successful scan and without
-publishing a security status. A malformed live SHA or unknown PR state fails
+publishing a security status. A lagging or diverged head, failed/incomplete comparison, malformed SHA, or unknown PR state fails
 before retirement. Open PRs at the event head still require the existing
 trusted terminal verdict; pending, failed, missing and unauthenticated evidence
 remain failures. No permissions, security severity or required gates change.
@@ -30,7 +30,7 @@ historical check result.
 
 Tests execute the actual workflow shell blocks with a stubbed GitHub API.
 Closed and superseded targets reproduce the missing-output failure on the
-baseline and pass with the repair. Unknown states and malformed SHAs fail in
+baseline and pass with the repair. Unknown states, malformed SHAs and unproven forward ancestry fail in
 both the read and enforcement steps. Existing exact-head verdict tests cover
 trusted failure, spoofed success, missing evidence and terminal dispatch receipts.
 
