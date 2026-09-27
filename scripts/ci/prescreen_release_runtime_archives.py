@@ -64,12 +64,19 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
     if not isinstance(receipt, Mapping) or receipt.get("leg") != leg:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: build receipt is malformed")
     snapshot = folder / f"{leg}.build-python.zip"
-    raw_sha = hashlib.sha256(gate.read_archive_snapshot(snapshot)).hexdigest()
+    snapshot_bytes = gate.read_archive_snapshot(snapshot)
+    raw_sha = hashlib.sha256(snapshot_bytes).hexdigest()
     if receipt.get("python_snapshot_sha256") != raw_sha or item.get("members", {}).get(snapshot.name) != raw_sha:
         raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: build snapshot changed after transport")
     packages = receipt.get("python_packages")
     if not isinstance(packages, list) or not packages:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: build packages are missing")
+    target = "x86_64-unknown-linux-gnu" if leg == "sdist" else leg.rsplit("-py", 1)[0]
+    native_rows = _native_wheel_libraries(snapshot_bytes, target)
+    listed_native = {f"{package['name']}/{file['path']}" for package in packages
+                     for file in package["files"]}
+    if any(row["path"] not in listed_native for row in native_rows):
+        raise gate.GateError(gate.SCOPE_SET_MISMATCH, f"{leg}: unlisted native build file")
     result = []
     with zipfile.ZipFile(snapshot) as archive:
         members = {entry.filename: entry for entry in archive.infolist()}
@@ -131,12 +138,15 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
                                             for file in files],
                         "install_hook_sources": {},
                         "parsed_inputs": [file["path"] for file in files if file["path"].endswith(".py")],
-                        "native_libraries": [{"path": file["path"]} for file in files
-                                             if file["path"].endswith((".so", ".pyd", ".dylib"))],
+                        "native_libraries": [{**row, "path": row["path"].removeprefix(f"{name}/")}
+                                             for row in native_rows if row["path"].startswith(f"{name}/")],
                         "known_vulnerabilities": []}
             failures, decision, source = gate.evaluate_dependency_license(evidence, key, None)
             if failures:
                 raise gate.GateError(failures[0].code, f"{leg}: {key}: {failures[0].detail}")
+            native_failures, native_properties = gate.evaluate_native_links(evidence, key)
+            if native_failures:
+                raise gate.GateError(native_failures[0].code, f"{leg}: {key}: {native_failures[0].detail}")
             fixture_key = f"{key}/sha256/{source_sha}"
             fixture = gate.build_fixture(gate.Dependency("pypi", name, version), evidence)
             fixture["id"] = fixture_key
@@ -144,6 +154,7 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
                            "version": version, "source_sha256": source_sha,
                            "license": decision.selected, "license_source": source,
                            "license_member_sha256": hashes, "fixture": fixture,
+                           "native_properties": native_properties,
                            "fixture_sha256": gate.fixture_digest(fixture),
                            "legs": [leg], "snapshots": {leg: raw_sha}})
     return result

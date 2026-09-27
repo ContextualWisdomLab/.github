@@ -222,6 +222,28 @@ def _rewrite_build_snapshot(
     scope_row["members"][snapshot_path.name] = snapshot_digest
 
 
+def test_build_snapshot_native_file_requires_reviewed_links(tmp_path: Path, monkeypatch) -> None:
+    root, rows = _prescreen_case(tmp_path)
+    row = rows[0]
+    folder = root / row["artifact_name"]
+    leg = row["leg"]
+    snapshot = folder / f"{leg}.build-python.zip"
+    with zipfile.ZipFile(snapshot) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    binary = b"\x7fELFfixture"
+    members["pip/native.so"] = binary
+    receipt = json.loads((folder / f"{leg}.build-first.json").read_text())
+    receipt["python_packages"][0]["files"].append(
+        {"path": "native.so", "size": len(binary), "sha256": hashlib.sha256(binary).hexdigest()}
+    )
+    _rewrite_build_snapshot(row, root, members, receipt)
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [
+        {"arch": "x86_64", "needed": ["libmystery.so.1"]}])
+    with pytest.raises(gate.GateError, match="NATIVE_LINK_UNKNOWN"):
+        _build_packages(row, folder)
+
+
 def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -> None:
     case = _case()
     selected = _verify(case, tmp_path / "scope")
