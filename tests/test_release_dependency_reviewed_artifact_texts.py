@@ -150,3 +150,35 @@ def test_unarray_template_is_only_reference_for_exact_apache_choice(mutation):
     failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, selection)
     assert (decision.allowed and not failures) == (mutation is None)
     assert policy.recognize_license_text(template) is None
+
+
+@pytest.mark.parametrize("mutation", [None, "apache-choice", "mit-only", "no-choice", "no-unicode",
+                                      "changed-unicode", "no-main-grant", "checksum", "subject", "pypi"])
+def test_regex_unicode_grant_remains_an_independent_obligation(mutation):
+    files = {f"regex-syntax-0.8.11/{name}": TEXTS[f"regex-syntax-0.8.11-{Path(name).name}.txt"]
+             for name in ("LICENSE-MIT", "LICENSE-APACHE", "src/unicode_tables/LICENSE-UNICODE")}
+    evidence = _python_evidence(ecosystem="cargo", license_expression="MIT OR Apache-2.0",
+                                license_texts=files,
+                                source_sha256="d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4")
+    subject = "cargo/regex-syntax@0.8.11"
+    choice = {"chosen": "MIT AND Unicode-DFS-2016", "rationale": "Retain original main-code and independent Unicode notices."}
+    if mutation == "apache-choice":
+        choice["chosen"] = "Apache-2.0 AND Unicode-DFS-2016"
+    elif mutation == "mit-only":
+        choice["chosen"] = "MIT"
+    elif mutation == "no-choice":
+        choice = None
+    elif mutation == "no-unicode":
+        del files["regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE"]
+    elif mutation == "changed-unicode":
+        files["regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE"] += "Commercial use prohibited."
+    elif mutation == "no-main-grant":
+        del files["regex-syntax-0.8.11/LICENSE-MIT"]
+    elif mutation == "checksum":
+        evidence["source_sha256"] = "0" * 64
+    elif mutation == "subject":
+        subject = "cargo/regex-syntax@0.8.12"
+    elif mutation == "pypi":
+        evidence["ecosystem"] = "pypi"
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, choice)
+    assert (decision.allowed and not failures) == (mutation in {None, "apache-choice"})

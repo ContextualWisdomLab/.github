@@ -86,6 +86,7 @@ ALLOWED_LICENSE_IDENTIFIERS: frozenset[str] = frozenset(
         "Python-2.0",
         "Python-2.0.1",
         "Unicode-3.0",
+        "Unicode-DFS-2016",
         "Unlicense",
         "Zlib",
     }
@@ -114,6 +115,7 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: approvals: missing declarations, other files and incomplete scope still HOLD.
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "31ce8f08175a050da22857e3025c81328801ade3d9240b55ab6f963741d839fa": frozenset({"Unicode-DFS-2016"}),
     "721c9cd49fb542eae9ebe064ff9dfdf54a85072c40ca18a3e19b8d35182c8ead": frozenset({"MIT"}),
     "22c8b04e505adaeabce441622427804935a1de7f7ca24003366b477d89359ba4": frozenset({"MIT"}),
     "1e13a8a06f81a470e5014ba676ebb33ff06f7a560afd221fd9a95a9babea8960": frozenset({"MIT"}),

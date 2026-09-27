@@ -67,6 +67,7 @@ import tomllib
 try:
     from scripts.ci.spdx_license_policy import (
         LICENSE_MISSING,
+        LICENSE_SELECTION_INVALID,
         LICENSE_TEXT_MISSING,
         LICENSE_TEXT_UNVERIFIED,
         LicenseDecision,
@@ -83,6 +84,7 @@ except ImportError:  # pragma: no cover - direct `python3 -I <script>` execution
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from spdx_license_policy import (
         LICENSE_MISSING,
+        LICENSE_SELECTION_INVALID,
         LICENSE_TEXT_MISSING,
         LICENSE_TEXT_UNVERIFIED,
         LicenseDecision,
@@ -989,12 +991,24 @@ def evaluate_dependency_license(
     }:
         expression = "MIT OR Apache-2.0"
         source = "Cargo legacy licence pair"
+    # This exact crate bundles Unicode tables under an independent full grant.
+    # Cargo's main-code declaration must not erase the Unicode notice obligation.
+    # https://spdx.org/licenses/Unicode-DFS-2016.html (full text read).
+    if (evidence.get("ecosystem") == "cargo" and subject == "cargo/regex-syntax@0.8.11"
+            and evidence.get("source_sha256") == "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+            and expression == "MIT OR Apache-2.0"):
+        expression = "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+        source = "Cargo declaration plus exact archived Unicode data grant"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
         rationale=(selection or {}).get("rationale"),
     )
     failures: list[Failure] = []
+    if (expression == "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+            and decision.allowed and (selection or {}).get("chosen") != decision.selected):
+        failures.append(Failure(LICENSE_SELECTION_INVALID, subject,
+                                "selection must explicitly retain the independent Unicode obligation"))
     if not decision.allowed:
         failures.append(Failure(decision.code, subject, decision.detail))
     texts = _require_mapping(evidence, "license_texts", subject)
@@ -2549,11 +2563,13 @@ def install_is_authorized(report: Path) -> None:
     if payload.get("stage") != LICENSE_STAGE:
         raise GateError(
             LICENSE_MISSING,
+        LICENSE_SELECTION_INVALID,
             f"prescreen report records stage {payload.get('stage')!r}, not {LICENSE_STAGE!r}",
         )
     if payload.get("result") != "PASS":
         raise GateError(
             LICENSE_MISSING,
+        LICENSE_SELECTION_INVALID,
             f"prescreen report records result {payload.get('result')!r}, not 'PASS'",
         )
 

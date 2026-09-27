@@ -1313,5 +1313,19 @@
     "normalized_sha256": "2e2b94025b4c2fdb1864973c1497dd82e21bbfe3225d27d52c8c7e8792240b7a",
     "identifier": "Apache-2.0",
     "fixture": "rand_xorshift-0.4.0-LICENSE-APACHE.txt"
+  },
+  {
+    "package": "regex-syntax@0.8.11",
+    "ecosystem": "cargo",
+    "artifact_filename": "regex-syntax-0.8.11.crate",
+    "artifact_sha256": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4",
+    "member": "regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE",
+    "raw_sha256": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+    "normalized_sha256": "31ce8f08175a050da22857e3025c81328801ade3d9240b55ab6f963741d839fa",
+    "identifier": "Unicode-DFS-2016",
+    "fixture": "regex-syntax-0.8.11-LICENSE-UNICODE.txt",
+    "basis": "https://spdx.org/licenses/Unicode-DFS-2016.html",
+    "upstream": "https://raw.githubusercontent.com/rust-lang/regex/140167995737fa11dfe11b8af8b9aa143b790b4e/regex-syntax/src/unicode_tables/LICENSE-UNICODE",
+    "limitation": "Exact whole text recognition only; Unicode data obligations are independent of the MIT/Apache main code choice."
   }
 ]
