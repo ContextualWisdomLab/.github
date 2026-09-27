@@ -14,7 +14,7 @@ The same live API query with created >= 2026-09-27T11:08:00Z returned 3 runs. Th
 
 Real extracted Bash verdict scripts retain successful completed-dispatch recovery, later-page recovery, stale base/run rejection, unknown-state rejection and no-dispatch pending behavior. Added invalid timestamp failure coverage. The focused contract suite passed 29 tests before the explicit Actions read grant. Final combined verification is recorded in the PR.
 
-The extended runner-image oracle expects three literal ubuntu-24.04 jobs while protected main routes trusted workflow jobs to the central control group. Baseline reproduction is recorded separately; this repair does not weaken that oracle.
+The original extended runner-image oracle expected three literal ubuntu-24.04 jobs while protected main routes trusted workflow jobs to the central control group. The exact oracle failed on unmodified base c3e86141c. It now requires all three jobs to compare the exact trusted main workflow ref, select the control group with self-hosted/linux/x64 labels, and retain the explicit ubuntu-24.04 fallback for other refs. The six runner-image tests pass locally; combined final receipt is recorded in the PR.
 
 ## Reference
 

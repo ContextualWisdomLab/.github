@@ -47,10 +47,17 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assertIn("labels: [self-hosted, linux, x64]", workflow)
 
     def test_codeql_pr_uses_explicit_supported_image(self) -> None:
-        """Require detect-languages, analyze-head, and the coordinator to pin Ubuntu 24.04."""
+        """Require trusted control routing with an explicit hosted PR fallback."""
         workflow = CODEQL_PR.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
+        trusted_ref = "ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main"
+        routes = [line for line in workflow.splitlines() if "runs-on:" in line]
+        self.assertEqual(len(routes), 3)
+        for route in routes:
+            self.assertIn(f"github.workflow_ref == '{trusted_ref}'", route)
+            self.assertIn('"group":"CWL central control"', route)
+            self.assertIn('"labels":["self-hosted","linux","x64"]', route)
+            self.assertIn("|| '\"ubuntu-24.04\"'", route)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
         """Require validation, scan, and attempt wake jobs in the dedicated group."""
