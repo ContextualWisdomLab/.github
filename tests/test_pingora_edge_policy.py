@@ -1005,6 +1005,7 @@ def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
         ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
         ({"type": "file", "encoding": "none", "size": "not-an-int"}, "malformed size"),
         ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "invalid encoding"),
+        ({"type": "file", "encoding": "base64", "size": 1, "content": None}, "malformed size or content"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
@@ -1188,6 +1189,19 @@ def test_github_open_raw_bytes_is_bounded_and_requests_raw_blob(monkeypatch: pyt
     assert policy._github_open_raw_bytes(url, "token", 4) == b"abcd"
     with pytest.raises(policy.PolicyError, match="bounded response size"):
         policy._github_open_raw_bytes(url, "token", 3)
+
+
+@pytest.mark.parametrize("error", [URLError("unreachable"), TimeoutError("timeout"), HTTPError("https://api.github.com", 403, "denied", {}, None)])
+def test_raw_blob_transport_failure_remains_fail_closed(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    """Failed raw evidence requests preserve their cause without returning bytes."""
+
+    def fail_request(_request: object, timeout: int) -> None:
+        raise error
+
+    monkeypatch.setattr(policy.github_opener, "open", fail_request)
+    with pytest.raises(policy.PolicyError, match="GitHub raw blob request failed") as caught:
+        policy._github_open_raw_bytes("https://api.github.com/repos/a/b/git/blobs/" + "a" * 40, "token", 4)
+    assert caught.value.__cause__ is error
 
 
 @pytest.mark.parametrize(
