@@ -1143,6 +1143,10 @@ def _run_settlement_step(
             "run_attempt": 1,
             "steps": [
                 {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                {
+                    "name": "Verify GHAS base/head CodeQL configuration identity",
+                    "conclusion": "success",
+                },
                 {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
             ],
         },
@@ -1153,6 +1157,10 @@ def _run_settlement_step(
             "run_attempt": 1,
             "steps": [
                 {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                {
+                    "name": "Verify GHAS base/head CodeQL configuration identity",
+                    "conclusion": "success",
+                },
                 {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
             ],
         },
@@ -1568,6 +1576,49 @@ def test_dispatch_settlement_rejects_missing_handler_gate_steps(tmp_path: Path) 
 
     assert result.returncode == 1
     assert "incomplete handler gate or SARIF evidence for python" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_settlement_rejects_failed_ghas_identity_after_clean_gate(
+    tmp_path: Path,
+) -> None:
+    """Settlement cannot wake a required run after GHAS identity proof failed."""
+    result, post_log = _run_settlement_step(
+        tmp_path,
+        handler_jobs=[
+            {
+                "name": "CodeQL dispatch scan (python)",
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                    {
+                        "name": "Verify GHAS base/head CodeQL configuration identity",
+                        "conclusion": "failure",
+                    },
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+            {
+                "name": "CodeQL dispatch scan (actions)",
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                    {
+                        "name": "Verify GHAS base/head CodeQL configuration identity",
+                        "conclusion": "success",
+                    },
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "missing GHAS configuration identity proof for python" in result.stdout
     assert not post_log.exists()
 
 
