@@ -124,10 +124,10 @@ import faulthandler
 # Fatal startup diagnostics contain stack locations, never frame locals.
 faulthandler.enable()
 
-import contextlib
 import http.client
 import io
 import json
+import logging
 import threading
 
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
@@ -166,7 +166,10 @@ thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
     expected_rejection_log = io.StringIO()
-    with contextlib.redirect_stderr(expected_rejection_log):
+    capture = logging.StreamHandler(expected_rejection_log)
+    server_logger = logging.getLogger("contextual_orchestrator.server")
+    server_logger.addHandler(capture)
+    try:
         connection.request(
             "POST",
             "/v1/chat/completions",
@@ -180,6 +183,8 @@ try:
         response = connection.getresponse()
         assert response.status == 413, response.status
         response.read()
+    finally:
+        server_logger.removeHandler(capture)
     assert (
         "request_failed status=413 code=request_too_large"
         in expected_rejection_log.getvalue()
