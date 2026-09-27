@@ -23,3 +23,23 @@ startup cause. Gateway inference timeouts must not be invented to hide it.
 Verification: the changed workflow contract fails on the previous source;
 the Noema workflow contract suite and actionlint verify the revised step.
 Hosted execution and independent review remain required before integration.
+# Startup progress follow-up for CO #1083
+
+ContextualWisdomLab/contextual-orchestrator#1209 run `36138543702`, job
+`108153123179`, logged sidecar start at 19:11:54Z on 2026-09-25, then runner
+shutdown at 23:12:37Z without readiness confirmation. The run's artifact API
+returned no artifacts. This proves loss of startup evidence, not a particular
+provider deadlock or a model failure.
+
+The shared readiness loop now logs every 60 failed health polls whether its
+discovery, catalog, policy, and preflight report files are nonempty. These are
+presence observations only: no report content, provider response, or credential
+is printed. Poll count is not elapsed time and does not impose an inference
+deadline. A successful health check still ends the loop, and sidecar process
+exit retains the existing failure handling.
+
+The executable regression runs the real health loop with absent, partially
+completed, and completed report stages; verifies exact output and secret
+non-disclosure; and verifies readiness can succeed after the diagnostic. It
+does not establish that the unknown startup cause is repaired. A fresh hosted
+run after protected integration is still needed to locate that cause.
