@@ -1135,3 +1135,42 @@ def test_development_inclusion_is_retained_without_claiming_wheel_shipping(tmp_p
     assert report.passed
     crate = next(row for row in report.dependencies if row["key"] == "cargo/greencrate@0.1.0")
     assert crate["distribution_inclusion"] == ["dev"]
+
+
+def test_raw_collector_keeps_both_independently_locked_cargo_workspaces(tmp_path):
+    import os
+    import subprocess
+
+    source = tmp_path / "source"
+    wheel = source / "crates/wheel"
+    core = source / "crates/core"
+    wheel.mkdir(parents=True)
+    core.mkdir()
+    for path in (wheel / "Cargo.toml", core / "Cargo.toml"):
+        path.write_text('[package]\nname="fixture"\nversion="1.0.0"\n')
+    (wheel / "Cargo.lock").write_bytes(b"wheel workspace lock")
+    (source / "Cargo.lock").write_bytes(b"development workspace lock")
+    primary = tmp_path / "primary.json"
+    dev = tmp_path / "dev.json"
+    _write(primary, {"workspace_root": str(wheel), "packages": []})
+    _write(dev, {"workspace_root": str(source), "packages": []})
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    cargo = binaries / "cargo"
+    cargo.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\n"
+                     "if sys.argv[1] == 'metadata':\n"
+                     "    key = 'PRIMARY_METADATA' if sys.argv[-1] == os.environ['PRIMARY_MANIFEST'] else 'DEV_METADATA'\n"
+                     "    sys.stdout.write(pathlib.Path(os.environ[key]).read_text())\n"
+                     "elif sys.argv[1] != 'fetch':\n    sys.exit(2)\n")
+    cargo.chmod(0o755)
+    capture = tmp_path / "captured"
+    subprocess.run(["bash", str(Path(__file__).parents[1] / "scripts/ci/release_dependency_capture_raw.sh"),
+                    "--ecosystems", "cargo", "--cargo-manifest", str(wheel / "Cargo.toml"),
+                    "--cargo-dev-manifest", str(core / "Cargo.toml"),
+                    "--raw-root", str(tmp_path / "raw"), "--capture-root", str(capture)],
+                   env={**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                        "PRIMARY_MANIFEST": str(wheel / "Cargo.toml"),
+                        "PRIMARY_METADATA": str(primary), "DEV_METADATA": str(dev)},
+                   capture_output=True, text=True, check=True)
+    assert (capture / "cargo/Cargo.lock").read_bytes() == (wheel / "Cargo.lock").read_bytes()
+    assert (capture / "cargo-dev/Cargo.lock").read_bytes() == (source / "Cargo.lock").read_bytes()
