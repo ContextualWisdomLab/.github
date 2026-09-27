@@ -49,6 +49,30 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
+if [ -L "$STRIX_EVIDENCE_DIR" ]; then
+  fail "Strix evidence directory must not be a symbolic link"
+fi
+if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
+  fail "sidecar log sanitizer must be a regular, non-symlink file"
+fi
+mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+# Reset only this producer's outputs before even credential or dependency
+# admission can fail. Self-hosted workspaces may retain a previous job's files.
+for evidence_name in \
+  contextual-orchestrator-preflight.json \
+  contextual-orchestrator-sidecar.stdout.log \
+  contextual-orchestrator-sidecar.stderr.log \
+  contextual-orchestrator-discovery.json \
+  contextual-orchestrator-agents.json \
+  contextual-orchestrator-policy.json; do
+  evidence_file="$STRIX_EVIDENCE_DIR/$evidence_name"
+  if [ -L "$evidence_file" ] || { [ -e "$evidence_file" ] && [ ! -f "$evidence_file" ]; }; then
+    fail "sidecar evidence output must be a regular file, never a symbolic link"
+  fi
+  (umask 077; : > "$evidence_file")
+done
+
 # Require at least one of the five provider secrets so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
 # unregistered provider — matching the review gateway contract.
@@ -75,14 +99,6 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 fi
 
-if [ -L "$STRIX_EVIDENCE_DIR" ]; then
-  fail "Strix evidence directory must not be a symbolic link"
-fi
-if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
-  fail "sidecar log sanitizer must be a regular, non-symlink file"
-fi
-mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
-chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
 token_file="$ORCHESTRATOR_WORK/bearer.token"
 (
   umask 077
