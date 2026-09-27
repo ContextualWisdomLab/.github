@@ -3497,3 +3497,19 @@ authorization order, persistence boundary, model/provider policy, severity,
 timeout, or write capability changes. Exact-head hosted Strix acceptance,
 independent review, ordinary protected-main integration, and a fresh Orgmetra
 #63 consumer run remain mandatory before the false-positive gap is complete.
+
+**2026-09-27 required-context fail-closed follow-up.** Review of PR #2291 at
+head `b90d873e67860944308d5cef919a1f95243ef98f` found that the five paths above
+were selected but not required: the shared trusted-context copier treated a
+missing base path as an optional success. A Job Analysis scan could therefore
+reach Strix without the authority evidence the mapping promises. RED removed
+`auth.py` from the authenticated base, changed only the Job Analysis kernel,
+and observed exit 1 after one fake-Strix invocation. Exact source commit
+`5ee6c876da508e45d284517a3812d52e053e3728` makes those five paths mandatory
+only when that kernel trigger is in the authenticated changed-file inventory;
+missing context now exits 2 before Strix, while unrelated mapping families keep
+their prior optional-file behavior. The full Strix shell harness passes, and
+the full Python suite passes with DeprecationWarning promoted to an error
+(`3388 passed, 28 skipped, 40 subtests`). Hosted exact-head checks, qualifying
+independent review, ordinary protected-main integration, and a fresh Orgmetra
+#63 consumer run remain mandatory.
