@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import runpy
+import re
+import sys
 import subprocess
 from types import SimpleNamespace
 
@@ -607,3 +609,22 @@ def test_sidecar_uses_lock_compatible_isolated_python() -> None:
         assert 'python-version: "3.12"' in workflow[setup:call]
         assert 'update-environment: false' in workflow[setup:call]
         assert 'SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}' in workflow[setup:call]
+
+
+def test_runtime_identity_logs_only_fixed_artifact_hashes() -> None:
+    """Runtime diagnostics must not copy inherited credential values or paths."""
+    source = _read(SIDECAR).split("import faulthandler\n", 1)[1].split("import contextlib\n", 1)[0]
+    result = subprocess.run(
+        [sys.executable, "-c", "import faulthandler\n" + source],
+        env={**os.environ, "OPENAI_API_KEY": "runtime-diagnostic-private-marker"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    assert len(lines) >= 2
+    assert all(re.fullmatch(
+        r"\[contextual-orchestrator-sidecar\] runtime_identity "
+        r"kind=(python|asyncio|libpython) sha256=[0-9a-f]{64}", line
+    ) for line in lines)
+    assert "runtime-diagnostic-private-marker" not in result.stdout + result.stderr

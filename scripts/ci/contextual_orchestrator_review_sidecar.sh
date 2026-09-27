@@ -118,6 +118,23 @@ import faulthandler
 # Fatal startup diagnostics contain stack locations, never frame locals.
 faulthandler.enable()
 
+import hashlib
+import importlib.util
+from pathlib import Path
+import sys
+import sysconfig
+
+# Fixed runtime artifacts only; never print environment values or file contents.
+for kind, path in (
+    ("python", Path(sys.executable)),
+    ("asyncio", Path(importlib.util.find_spec("_asyncio").origin)),
+    ("libpython", Path(sys.base_prefix) / "lib" / sysconfig.get_config_var("LDLIBRARY")),
+):
+    if path.is_file():
+        with path.open("rb") as artifact:
+            digest = hashlib.file_digest(artifact, "sha256").hexdigest()
+        print(f"[contextual-orchestrator-sidecar] runtime_identity kind={kind} sha256={digest}", flush=True)
+
 import contextlib
 import http.client
 import io
