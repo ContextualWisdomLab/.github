@@ -520,6 +520,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
         "repos/owner/repo/actions/runs?per_page=50": [queued_current, current, unlinked],
         "repos/owner/repo/actions/runs/10/jobs?per_page=100": {"jobs": []},
+        "repos/owner/repo/actions/runs/11/jobs?per_page=100": {"jobs": []},
         "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
     }
     for status in ("in_progress", "pending", "queued", "requested", "waiting"):
@@ -821,6 +822,8 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
             payload = []
         elif path == "repos/owner/repo/actions/runs?per_page=50":
             payload = {"total_count": 2_001, "workflow_runs": []}
+        elif "/jobs?" in path:
+            payload = {"total_count": 0, "jobs": []}
         elif "/actions/runs?status=" in path:
             status = path.split("status=", 1)[1].split("&", 1)[0]
             if status == "cancelled":

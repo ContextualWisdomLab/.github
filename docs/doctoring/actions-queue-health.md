@@ -69,9 +69,14 @@ exhausting the bound while rejecting evidence that changes between partitioned
 reads. Each status read uses up to 20 pages of 50 runs, reusing the existing
 list-pagination bound. This covers an observed queue of more than 600 runs
 without truncating it at the first page. Exceeding the bound, duplicate page
-identities, and incomplete pagination still produce incomplete evidence. Current-head `in_progress` and `waiting` runs make the additional jobs
-API read needed to distinguish concrete runner assignment from an environment
-or deployment approval wait.
+identities, and incomplete pagination still produce incomplete evidence. Every
+active run makes the additional jobs API read, including obsolete or unlinked
+runs and `pending`/`requested` states. Actual job state and runner assignment
+remain visible even when the PR identity is unknown or the parent run is stale.
+On 2026-09-27, native dispatch run `36308627125` had no PR links but job
+`108600597308` was running on an assigned runner; a current-head-only read
+omitted that evidence. This change retains the unknown PR identity and does
+not authorize cancellation.
 
 Each list query uses collector-controlled GitHub API pagination with at most 20
 explicit page reads; the collector never asks GitHub CLI to download an

@@ -29,6 +29,8 @@ def test_active_queue_uses_bounded_pagination_and_rejects_overflow(count):
             payload = {"default_branch": "main"}
         elif "/pulls?" in path:
             payload = [_pull()]
+        elif "/jobs?" in path:
+            payload = {"total_count": 0, "jobs": []}
         elif "status=queued&" in path:
             page = int(path.rsplit("&page=", 1)[1]) if "&page=" in path else 1
             payload = {"total_count": count, "workflow_runs": runs[(page - 1) * 50:page * 50]}
