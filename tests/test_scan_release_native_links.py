@@ -123,6 +123,9 @@ NeededLibraries [
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, truncated, ""))
     with pytest.raises(ValueError, match="architecture differs"):
         SCAN["_links"](b"binary", "universal2-apple-darwin", "llvm-readobj")
+    assert [row["arch"] for row in SCAN["_links"](
+        b"binary", "universal2-apple-darwin", "llvm-readobj", allow_subset=True
+    )] == ["x86_64"]
 
 
 def test_link_parser_refuses_oversized_partial_wrong_format_and_malformed_output(monkeypatch):

@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import email.parser
 import hashlib
+import io
 import json
 import re
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -16,11 +18,43 @@ from typing import Any, Mapping
 
 try:
     from scripts.ci import release_dependency_gate as gate
+    from scripts.ci.scan_release_native_links import NATIVE_MAGIC, _links, _reader
     from scripts.ci.verify_release_distribution_set import _json_bytes
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
+    from scan_release_native_links import NATIVE_MAGIC, _links, _reader
     from verify_release_distribution_set import _json_bytes
+
+
+def _native_wheel_libraries(raw: bytes, target: str) -> list[dict[str, Any]]:
+    """Inspect every native member from the already authenticated wheel bytes."""
+    libraries = []
+    reader = None
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            with archive.open(entry) as stream:
+                magic = stream.read(8)
+            name = entry.filename.lower()
+            if not (magic.startswith(NATIVE_MAGIC) or name.endswith(
+                    (".so", ".pyd", ".dll", ".dylib", ".a", ".lib", ".exe", ".wasm"))):
+                continue
+            if magic.startswith((b"!<arch>\n", b"\x00asm")) or name.endswith((".a", ".lib", ".wasm")):
+                raise gate.GateError(gate.NATIVE_LINK_UNKNOWN, f"{entry.filename}: static or wasm native member needs separate review")
+            if entry.file_size > 128 * 1024 * 1024:
+                raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{entry.filename}: native member exceeds inspection limit")
+            binary = archive.read(entry)
+            try:
+                reader = reader or _reader()["path"]
+                links = _links(binary, target, reader, allow_subset=True)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                raise gate.GateError(gate.NATIVE_LINK_UNKNOWN, f"{entry.filename}: native links could not be inspected") from error
+            libraries.append({"path": entry.filename,
+                              "needed": sorted({name for row in links for name in row["needed"]}),
+                              "static_archives": []})
+    return libraries
 
 
 def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any]]:
@@ -261,14 +295,16 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                         "install_hook_sources": {name: "" for name in member_names
                                                  if name.endswith(("/setup.py", "/build.rs"))},
                         "parsed_inputs": [name for name in member_names if name.endswith(".py")],
-                        "native_libraries": [{"path": name} for name in member_names
-                                             if name.endswith((".so", ".pyd", ".dylib"))],
+                        "native_libraries": _native_wheel_libraries(raw, leg.rsplit("-py", 1)[0]),
                         "known_vulnerabilities": []}
             failures, decision, source = gate.evaluate_dependency_license(
                 evidence, key, None,
             )
             if failures:
                 raise gate.GateError(failures[0].code, f"{key}: {failures[0].detail}")
+            native_failures, native_properties = gate.evaluate_native_links(evidence, key)
+            if native_failures:
+                raise gate.GateError(native_failures[0].code, f"{key}: {native_failures[0].detail}")
             fixture_key = f"{key}/sha256/{sha}"
             fixture = gate.build_fixture(gate.Dependency("pypi", archive["name"], archive["version"]), evidence)
             fixture["id"] = fixture_key
@@ -276,6 +312,7 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                               "version": archive["version"], "source_sha256": sha,
                               "license": decision.selected, "license_source": source,
                               "license_member_sha256": bound["license_member_sha256"],
+                              "native_properties": native_properties,
                               "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
                               "legs": [leg]}
     if len(seen_legs) != 13 or "sdist" not in seen_legs or not rows:

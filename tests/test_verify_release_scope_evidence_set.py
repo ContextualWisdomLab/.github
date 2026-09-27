@@ -34,6 +34,19 @@ def _zip(members: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
+def test_runtime_native_wheel_reads_links_and_refuses_uninspected_members(monkeypatch):
+    """The archive prescreen must not infer empty links from a native path."""
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda binary, target, reader, **kwargs: [
+        {"arch": "x86_64", "needed": ["libc.so.6"]}])
+    wheel = _zip({"package/native.so": b"\x7fELFfixture"})
+    assert prescreen_module._native_wheel_libraries(wheel, "x86_64-unknown-linux-gnu") == [
+        {"path": "package/native.so", "needed": ["libc.so.6"], "static_archives": []}]
+    with pytest.raises(gate.GateError, match="static or wasm native member"):
+        prescreen_module._native_wheel_libraries(
+            _zip({"package/libnative.a": b"!<arch>\n"}), "x86_64-unknown-linux-gnu")
+
+
 def _case() -> dict:
     archives, artifacts, distributions, evidence = {}, [], [], []
     tool_assets = json.loads((Path(__file__).resolve().parents[1] /

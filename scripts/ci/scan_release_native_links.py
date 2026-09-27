@@ -54,7 +54,7 @@ def _reader() -> dict[str, str]:
     return {"path": str(reader), "version": LLVM_READER_VERSION, "sha256": reader_sha256}
 
 
-def _links(binary: bytes, target: str, reader: str) -> list[dict]:
+def _links(binary: bytes, target: str, reader: str, *, allow_subset: bool = False) -> list[dict]:
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("release native extension exceeds inspection limit")
     with tempfile.NamedTemporaryFile() as temporary:
@@ -69,7 +69,9 @@ def _links(binary: bytes, target: str, reader: str) -> list[dict]:
             or len(blocks) != len(result.stdout.split("File: ")) - 1):
         raise ValueError("native link output is incomplete")
     arches = {arch for _, arch, _ in blocks}
-    if arches != TARGET_ARCHES[target] or len(blocks) != len(arches):
+    expected_arches = TARGET_ARCHES[target]
+    if (not arches or len(blocks) != len(arches)
+            or (not arches <= expected_arches if allow_subset else arches != expected_arches)):
         raise ValueError("native extension architecture differs from release target")
     expected_format = ("elf" if "linux" in target else
                        "Mach-O" if "darwin" in target else "COFF")

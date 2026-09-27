@@ -525,6 +525,16 @@ def test_red_undeclared_dynamic_link_target(tmp_path: Path) -> None:
     assert gate.NATIVE_LINK_UNKNOWN in _codes(gate.gate(capture))
 
 
+def test_red_missing_native_link_inventory(tmp_path: Path) -> None:
+    """A native path alone cannot be treated as an empty dependency set."""
+    capture = build_capture(
+        tmp_path,
+        python_evidence=_python_evidence(native_libraries=[{"path": "greenlib/_speed.so"}]),
+    )
+    with pytest.raises(gate.GateError, match="no complete link inventory"):
+        gate.gate(capture)
+
+
 def test_declared_dynamic_link_target_is_recorded(tmp_path: Path) -> None:
     """A declared, permissive bundled library passes and is recorded in provenance."""
     capture = build_capture(

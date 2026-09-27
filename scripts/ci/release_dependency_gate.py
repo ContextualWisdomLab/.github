@@ -832,7 +832,14 @@ def evaluate_native_links(
             raise GateError(
                 EVIDENCE_INCOMPLETE, f"{subject}: native_libraries entry must be an object"
             )
-        origin = str(library.get("path", "<unknown>"))
+        origin = library.get("path")
+        if (not isinstance(origin, str) or not origin
+                or not isinstance(library.get("needed"), list)
+                or not isinstance(library.get("static_archives"), list)):
+            raise GateError(
+                EVIDENCE_INCOMPLETE,
+                f"{subject}: native library has no complete link inventory",
+            )
         for soname in _require_list(library, "needed", subject):
             allowlisted = classify_soname(str(soname))
             if allowlisted is not None:
