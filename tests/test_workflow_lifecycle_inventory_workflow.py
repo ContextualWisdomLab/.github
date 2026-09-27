@@ -31,3 +31,14 @@ def test_read_only_scanner_exports_no_write_primitive() -> None:
     assert "scripts/ci/workflow_lifecycle_operator.py" in Path(
         ".github/workflows/workflow-lifecycle-inventory-quality-ci.yml"
     ).read_text()
+
+
+def test_lifecycle_quality_coalesces_superseded_pr_heads_before_runner_admission() -> None:
+    """New PR heads replace the prior quality run at workflow admission."""
+    text = Path(".github/workflows/workflow-lifecycle-inventory-quality-ci.yml").read_text()
+    admission = text.split("\nconcurrency:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert "github.event.pull_request.base.repo.full_name || github.repository" in admission
+    assert "github.event.pull_request.number || github.run_id" in admission
+    assert "cancel-in-progress: true" in admission
+    assert "head.sha" not in admission
+    assert text.index("\nconcurrency:\n") < text.index("\njobs:\n")
