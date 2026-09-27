@@ -98,6 +98,46 @@ def _pull_request_identity_view(
     }
 
 
+def _read_terminal_runs(
+    endpoint: str, *, start: datetime, end: datetime, runner: Runner
+) -> list[dict[str, Any]]:
+    """Partition overflowing terminal history into complete, disjoint time queries."""
+    try:
+        return _list_payload(
+            github_json(endpoint, paginate=True,
+                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES, runner=runner),
+            "workflow_runs",
+            max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+        )
+    except QueueHealthError as error:
+        if not str(error).startswith("GitHub API pagination exceeds "):
+            raise
+        if start >= end:
+            raise QueueHealthError(
+                "terminal workflow history exceeds the API limit within one second"
+            ) from error
+    midpoint = datetime.fromtimestamp(
+        (int(start.timestamp()) + int(end.timestamp())) // 2, timezone.utc
+    )
+    following = datetime.fromtimestamp(int(midpoint.timestamp()) + 1, timezone.utc)
+    runs = []
+    for lower, upper in ((start, midpoint), (following, end)):
+        interval = f"{lower:%Y-%m-%dT%H:%M:%SZ}..{upper:%Y-%m-%dT%H:%M:%SZ}"
+        # Replace the previous range rather than intersecting duplicate parameters.
+        partition_endpoint = re.sub(r"&created=[^&]*", "", endpoint)
+        partition_endpoint += "&created=" + quote(interval, safe="")
+        partition = _read_terminal_runs(
+            partition_endpoint, start=lower, end=upper, runner=runner
+        )
+        if any(not lower <= parse_timestamp(run.get("created_at", "")) <= upper
+               for run in partition):
+            raise QueueHealthError("terminal workflow history escaped its time partition")
+        runs.extend(partition)
+    if len({run["id"] for run in runs}) != len(runs):
+        raise QueueHealthError("terminal workflow history contains duplicate partition identities")
+    return runs
+
+
 def collect_snapshot(
     repositories: Sequence[str],
     *,
@@ -217,19 +257,15 @@ def collect_snapshot(
             )
             for current_head_sha in current_head_shas:
                 encoded_head_sha = quote(current_head_sha, safe="")
-                workflow_runs = _list_payload(
-                    github_json(
-                        f"repos/{repository_name}/actions/runs?status=completed"
-                        f"&head_sha={encoded_head_sha}"
-                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=(
-                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
-                    ),
+                workflow_runs = _read_terminal_runs(
+                    f"repos/{repository_name}/actions/runs?status=completed"
+                    f"&head_sha={encoded_head_sha}"
+                    f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                    start=parse_timestamp(repository_metadata.get(
+                        "created_at", "1970-01-01T00:00:00Z"
+                    )),
+                    end=parse_timestamp(snapshot_timestamp).replace(microsecond=0),
+                    runner=runner,
                 )
                 for workflow_run in workflow_runs:
                     if str(workflow_run.get("conclusion") or "").lower() not in (
@@ -239,19 +275,15 @@ def collect_snapshot(
                     terminal_diagnostic_snapshot[workflow_run["id"]] = workflow_run
 
             for terminal_status in TARGET_TERMINAL_DIAGNOSTIC_STATUSES:
-                target_workflow_runs = _list_payload(
-                    github_json(
-                        f"repos/{repository_name}/actions/runs?status={terminal_status}"
-                        "&event=pull_request_target"
-                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=(
-                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
-                    ),
+                target_workflow_runs = _read_terminal_runs(
+                    f"repos/{repository_name}/actions/runs?status={terminal_status}"
+                    "&event=pull_request_target"
+                    f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                    start=parse_timestamp(repository_metadata.get(
+                        "created_at", "1970-01-01T00:00:00Z"
+                    )),
+                    end=parse_timestamp(snapshot_timestamp).replace(microsecond=0),
+                    runner=runner,
                 )
                 for workflow_run in target_workflow_runs:
                     normalized_candidate = _normalise_run(

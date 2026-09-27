@@ -73,7 +73,7 @@ identities, and incomplete pagination still produce incomplete evidence. Current
 API read needed to distinguish concrete runner assignment from an environment
 or deployment approval wait.
 
-List endpoints use collector-controlled GitHub API pagination with at most 20
+Each list query uses collector-controlled GitHub API pagination with at most 20
 explicit page reads; the collector never asks GitHub CLI to download an
 unbounded page set and never requests page 21. Pull-request and job lists use
 pages of 100 records; workflow-run lists use pages of 50 so a large Actions
@@ -132,4 +132,17 @@ Active-run pagination fixes its upper creation bound to the report's
 Runs created later belong to the next collection; they cannot shift the
 current pages. Both opposite-order sweeps use the same bound. Status changes,
 duplicate IDs, page overflow, and PR identity changes still reject incomplete
-evidence. Terminal diagnostics retain their existing head-specific queries.
+evidence. Terminal diagnostics retain their head-specific queries.
+
+The 2026-09-27 whole-allowlist collection found seven repositories whose
+cancelled `pull_request_target` history exceeded GitHub's 1,000-result search
+limit. An overflowing terminal query is now split into disjoint, inclusive
+whole-second creation ranges, bounded by repository creation and collection
+start. An overflowing declared total is rejected on the first page, before spending
+requests on pages that cannot complete the query. Every leaf retains the same
+20-page limit and complete-count validation.
+A single second exceeding that limit, escaped timestamps, duplicate identities,
+API failures, or inconsistent pages still reject the repository snapshot.
+This collects the entire selected history rather than treating the first
+1,000 runs as complete. Small terminal queries keep their existing path;
+active-run consistency checks and cancellation authority are unchanged.

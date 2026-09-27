@@ -197,6 +197,10 @@ def github_json(
         total_count = payload.get("total_count") if isinstance(payload, dict) else None
         if isinstance(payload, dict):
             values = next((value for value in payload.values() if isinstance(value, list)), None)
+        if type(total_count) is int and total_count > page_size * max_pages:
+            raise QueueHealthError(
+                f"GitHub API pagination exceeds {max_pages} pages for {path}"
+            )
         if not isinstance(values, list):
             raise QueueHealthError(f"GitHub API page has no bounded array for {page_path}")
         collected = sum(

@@ -49,3 +49,4 @@ def test_active_queue_uses_bounded_pagination_and_rejects_overflow(count):
     else:
         assert snapshot["repositories"] == []
         assert "pagination exceeds 20 pages" in snapshot["collection_errors"][0]["error"]
+        assert not any("&page=" in path for path in raw_paths)
