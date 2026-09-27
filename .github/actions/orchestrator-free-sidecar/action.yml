@@ -6,9 +6,9 @@ inputs:
     required: false
     default: "false"
   catalog_limit:
-    description: Maximum discovered route catalog size for the sidecar preflight.
+    description: Maximum discovered route catalog size for the sidecar preflight (a candidate list probed lazily to a readiness target, ADR-0029).
     required: false
-    default: "12"
+    default: "24"
   catalog_account_cap:
     description: Maximum routes admitted from one credential account.
     required: false

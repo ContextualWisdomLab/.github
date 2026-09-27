@@ -1,8 +1,16 @@
 # Org-queue-sweep review-dispatch rotation
 
+> **Superseded for queue hygiene.** The organization sweep no longer inventories
+> or cancels repository-wide queued/in-progress Actions runs. That duplicate
+> queue-hygiene path was removed by `.github#1878` (`1b65dbc35e7183722ad77894e2d80b39993be90d`),
+> and current-head coalescing was later integrated into the merge scheduler.
+> The rotation material below remains historical evidence for the former
+> review-dispatch fairness mechanism, not a description of current stale-run
+> ownership.
+
 ## Problem
 
-`org-queue-sweep` in `pr-review-merge-scheduler.yml` walks every organization
+Historically, `org-queue-sweep` in `pr-review-merge-scheduler.yml` walked every organization
 repository once per 15-minute tick and consumes bounded, organization-wide
 review-dispatch budgets across that entire walk. Default-base work uses
 `ORG_SWEEP_REVIEW_DISPATCH_LIMIT` (default `1`); stacked work uses the separate
@@ -22,6 +30,15 @@ PRs at `OpenCode review absent` even though they are the only path to their
 required review.
 
 ## Decision
+
+The current ownership boundary is:
+
+- `pr-review-merge-scheduler` owns review, merge, and branch-update state.
+- The integrated current-head coalescer owns same-PR stale-run cleanup.
+- The organization sweep does not repeat an Actions inventory per repository.
+
+The rotation decision below is retained as historical operational evidence for
+the former review-dispatch fairness implementation.
 
 Rotate the sweep's repository walk order by a rotation index before applying
 the unchanged organization-wide budgets. `rotation_offset = rotation_index %

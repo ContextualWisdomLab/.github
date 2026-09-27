@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-2e414d15ba58f28597751b625a8a2f00fc9fadcf}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-767e67fbc6b881a452761f32abb69b9971b9b03b}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -35,11 +35,12 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # finishes, letting the shell script wait for a deterministic marker instead
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
-CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
+CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 # Each KV credential is an independent account, including two credentials for
 # the same vendor or endpoint. The account cap prevents one credential from
-# consuming the bounded twelve-route preflight catalog without inventing a
-# provider-family equivalence relation.
+# consuming the bounded preflight candidate list (24 candidates, probed lazily
+# to a readiness target -- ADR-0029) without inventing a provider-family
+# equivalence relation.
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
@@ -371,6 +372,10 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  if [ "$((i % 60))" -eq 0 ]; then
+    # Only report file presence; provider content stays in sanitized artifacts.
+    log "startup pending: polls=${i} discovery=$([ -s "$discovery_report" ] && echo present || echo absent) catalog=$([ -s "$catalog_file" ] && echo present || echo absent) policy=$([ -s "$policy_report" ] && echo present || echo absent) preflight=$([ -s "$preflight_report" ] && echo present || echo absent)"
+  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then
@@ -688,4 +693,7 @@ fi
 log "policy evidence summary:"
 sed -n '1,80p' "$policy_report" || true
 log "runtime preflight summary:"
-sed -n '1,160p' "$preflight_report" || true
+# 16 probed routes at 8-10 lines each plus the header run past the old
+# 160-line cap exactly in the dead hour the summary matters most (ADR-0029);
+# the artifact copy was always complete, only the job-log echo was cut.
+sed -n '1,400p' "$preflight_report" || true

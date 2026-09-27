@@ -1,5 +1,8 @@
 """Static contracts for downstream review-agent invocation idempotency."""
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,10 +36,19 @@ def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> 
     ):
         header = text.split("\npermissions:\n", 1)[0]
         job = text.split("  validate-and-forward:\n", 1)[1]
-        concurrency = job.split("    concurrency:\n", 1)[1].split(
-            "\n    runs-on:", 1
-        )[0]
-        assert "concurrency:" not in header
+        concurrency = header.split("\nconcurrency:\n", 1)[1]
+        # 109d79b7 ("replace unsupported queue concurrency") deleted a
+        # workflow-level block that used ``queue: max``, a key GitHub Actions
+        # does not support, and parked the group on the job while it was at it.
+        # What that commit pins is the absence of ``queue:``, not the level: the
+        # group is back at workflow level because a job-level group is never
+        # evaluated while the run waits behind the organization job ceiling, so a
+        # superseded mention held its queue slot until a runner freed up. Every
+        # other queue-bearing workflow here (strix.yml, noema-review.yml,
+        # opencode-review.yml, codeql-scan-dispatch.yml,
+        # opencode-review-dispatch.yml) keys its group at workflow level too.
+        assert "queue:" not in header
+        assert "    concurrency:" not in job
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
@@ -45,7 +57,7 @@ def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> 
             f"group: {workflow_name}-${{{{ github.event.client_payload.target_repository }}}}-${{{{ github.event.client_payload.pr_number || github.run_id }}}}"
             in concurrency
         )
-        assert "cancel-in-progress: true" in concurrency
+        assert workflow_level_cancels_in_progress(text)
         assert "queue: max" not in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
@@ -117,3 +129,16 @@ def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
     coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
     assert "scripts/ci/agent_mention_router.py" in coverage_config
     assert "scripts/ci/agent_mention_sweep.py" in coverage_config
+
+
+def test_forwarders_restrict_self_hosted_admission_to_trusted_main() -> None:
+    """Branch workflows cannot select the main-only privileged runner group."""
+    for path in (NOEMA_WORKFLOW, OPENCODE_WORKFLOW):
+        text = path.read_text(encoding="utf-8")
+        selector = next(line for line in text.splitlines() if "runs-on:" in line)
+        assert "github.repository == 'ContextualWisdomLab/.github'" in selector
+        assert "endsWith(github.workflow_ref, '@refs/heads/main')" in selector
+        assert '"group":"CWL MCP remediation"' in selector
+        assert '"labels":["self-hosted","linux","x64"]' in selector
+        assert "|| fromJSON('[\"ubuntu-24.04\"]')" in selector
+        assert "actions/checkout@" not in text

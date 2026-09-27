@@ -199,8 +199,20 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
+    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
+    assert 'event_type: "noema-review"' in redispatch
+    assert "transport_retry_attempt" in redispatch
+    assert '"$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY"' in redispatch
+    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in redispatch
+    model_job, dispatch_job = workflow.split("  noema-transport-redispatch:\n", 1)
+    assert "contents: write" not in model_job.split("  noema-review:\n", 1)[1]
+    assert "contents: write" in dispatch_job
+    assert "GH_TOKEN: ${{ github.token }}" in dispatch_job
+    assert "needs.noema-review.result == 'failure'" in dispatch_job
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in dispatch_job
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
@@ -470,7 +482,9 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\n", 1)[1]
+    job = workflow.split("  noema-review:\n", 1)[1].split(
+        "  noema-transport-redispatch:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is None, (
@@ -485,3 +499,31 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
             encoding="utf-8"
         )
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
+
+
+def test_noema_review_retains_sanitized_sidecar_evidence_after_any_outcome() -> None:
+    """Retain existing sanitized evidence on success, failure and cancellation.
+
+    A forced runner shutdown can still prevent upload; this contract only
+    removes the failure-only gate without adding raw logs or new files.
+    """
+    workflow = workflow_text("noema-review.yml")
+    name = "Upload contextual-orchestrator sidecar evidence"
+    step = workflow_step(workflow, name)
+    assert "if: always() && env.PR_NUMBER != ''" in step
+    strix_pin = re.search(
+        r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
+    ).group(1)
+    assert f"actions/upload-artifact@{strix_pin}" in step
+    assert "name: noema-sidecar-evidence" in step
+    assert "strix_runs/contextual-orchestrator-sidecar.stderr.log" in step
+    assert "strix_runs/contextual-orchestrator-preflight.json" in step
+    assert "if-no-files-found: ignore" in step
+    assert "retention-days: 5" in step
+    prepare = workflow.index("      - name: Prepare Noema model verdict\n")
+    upload = workflow.index(f"      - name: {name}\n")
+    refresh = workflow.index(
+        "      - name: Refresh repository-scoped Noema GitHub App token for publication\n"
+    )
+    assert prepare < upload < refresh
+    assert workflow.count("actions/upload-artifact@") == 1

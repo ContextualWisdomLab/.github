@@ -45,3 +45,9 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert text.index("Verify immutable central policy source") < text.index(
         "Enforce Cloudflare Pingora edge policy"
     )
+
+    # issue #2193: the research/data artifact path declaration must be
+    # resolved only from the base ref the pull_request_target event already
+    # carries, never from the untrusted PR head.
+    assert "PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}" in text
+    assert "--base-ref" in text

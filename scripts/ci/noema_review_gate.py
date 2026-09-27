@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import binascii
 import hashlib
 import http.client
 import ipaddress
@@ -20,9 +21,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import PurePosixPath
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+from scripts.ci.noema_review_document import DocumentReadError, extract_review_document
 
 
 PRIMARY_REVIEW_AUTHORS = {
@@ -60,6 +63,12 @@ MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
 MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
+# ADR-0031: transport-capacity class after gateway failover (not caller retries).
+TRANSPORT_CAPACITY_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_TRANSPORT_REDISPATCH_ATTEMPTS = 2
+TRANSPORT_REDISPATCH_JITTER_MIN_SECONDS = 60
+TRANSPORT_REDISPATCH_JITTER_MAX_SECONDS = 180
+TRANSPORT_REDISPATCH_RETRY_AFTER_MAX_SECONDS = 300
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 
@@ -206,6 +215,103 @@ class NoemaModelOutputError(RuntimeError):
 class NoemaTransportError(RuntimeError):
     """Raised when the bounded review transport cannot produce usable evidence."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        capacity_unavailable: bool = False,
+        http_status: int | None = None,
+        provider_attempt_count: int | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        """Record typed transport metadata without embedding secrets in attributes."""
+        super().__init__(message)
+        self.capacity_unavailable = capacity_unavailable
+        self.http_status = http_status
+        self.provider_attempt_count = provider_attempt_count
+        self.retry_after_seconds = retry_after_seconds
+
+
+def is_provider_capacity_http_status(status: int | None) -> bool:
+    """Return whether an HTTP status is a post-failover provider-capacity class."""
+    return type(status) is int and status in TRANSPORT_CAPACITY_HTTP_STATUSES
+
+
+def parse_http_retry_after_seconds(headers: Any) -> int | None:
+    """Return a whole-seconds Retry-After delay capped for continuation scheduling.
+
+    Only the delta-seconds form is accepted. HTTP-date values and out-of-range
+    numbers record nothing so a hostile header cannot invent an unbounded wait.
+    """
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    try:
+        raw = get_header("Retry-After")
+    except Exception:  # noqa: BLE001 - hostile header mappings are not evidence
+        return None
+    if not isinstance(raw, str) or not raw.strip().isdecimal():
+        return None
+    seconds = int(raw.strip())
+    if seconds < 1 or seconds > TRANSPORT_REDISPATCH_RETRY_AFTER_MAX_SECONDS:
+        return None
+    return seconds
+
+
+def transport_redispatch_delay_seconds(
+    *,
+    transport_retry_attempt: int,
+    head_sha: str,
+    retry_after_seconds: int | None = None,
+) -> int | None:
+    """Return the post-failure scheduling delay, or None when the re-dispatch bound is spent.
+
+    ``transport_retry_attempt`` is the number of automatic capacity re-dispatches
+    already performed for this head (0 on the first failure). Prefer a capped
+    gateway ``Retry-After`` when present; otherwise use deterministic jitter in
+    ``[TRANSPORT_REDISPATCH_JITTER_MIN_SECONDS, TRANSPORT_REDISPATCH_JITTER_MAX_SECONDS]``
+    keyed by head SHA and attempt so concurrent failures do not stampede.
+    """
+    if transport_retry_attempt < 0 or transport_retry_attempt >= MAX_TRANSPORT_REDISPATCH_ATTEMPTS:
+        return None
+    if retry_after_seconds is not None:
+        if (
+            type(retry_after_seconds) is int
+            and 1 <= retry_after_seconds <= TRANSPORT_REDISPATCH_RETRY_AFTER_MAX_SECONDS
+        ):
+            return retry_after_seconds
+        return None
+    digest = hashlib.sha256(
+        f"{head_sha.strip().lower()}:{transport_retry_attempt}".encode("utf-8")
+    ).digest()
+    span = (
+        TRANSPORT_REDISPATCH_JITTER_MAX_SECONDS - TRANSPORT_REDISPATCH_JITTER_MIN_SECONDS + 1
+    )
+    offset = int.from_bytes(digest[:4], "big") % span
+    return TRANSPORT_REDISPATCH_JITTER_MIN_SECONDS + offset
+
+
+def current_transport_retry_attempt() -> int:
+    """Parse the workflow-supplied automatic re-dispatch counter, failing closed to 0."""
+    raw = (os.environ.get("NOEMA_TRANSPORT_RETRY_ATTEMPT") or "0").strip()
+    if not raw.isdecimal():
+        return 0
+    value = int(raw)
+    return value if value <= 64 else 0
+
+
+def append_github_output(values: dict[str, str]) -> None:
+    """Append allowlisted step outputs when running under GitHub Actions."""
+    path = (os.environ.get("GITHUB_OUTPUT") or "").strip()
+    if not path or not values:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                continue
+            if any(ch in value for ch in ("\n", "\r", "\0")):
+                continue
+            handle.write(f"{key}={value}\n")
 
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
@@ -736,7 +842,7 @@ def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
 
 
 def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
-    """Fetch one repository text file at an exact Git ref through GitHub."""
+    """Fetch one repository file at an exact Git ref through GitHub."""
     encoded_path = urllib.parse.quote(path, safe="/")
     encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
@@ -751,7 +857,17 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
     compact = "".join(content.split())
     if not compact:
         return ""
-    return base64.b64decode(compact).decode("utf-8", errors="replace")
+    try:
+        raw = base64.b64decode(compact, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("GitHub content response contained malformed base64") from exc
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix in {".docx", ".hwp", ".hwpx"}:
+        try:
+            return extract_review_document(path, raw)
+        except DocumentReadError as exc:
+            raise RuntimeError(f"document extraction failed: {exc}") from exc
+    return raw.decode("utf-8", errors="replace")
 
 
 def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
@@ -1353,6 +1469,7 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
     if terminal_reason is not None:
         telemetry["terminal_reason"] = terminal_reason
     if isinstance(attempts, list) and attempts and len(attempts) <= 64:
+        telemetry["provider_attempt_count"] = len(attempts)
         last_attempt = attempts[-1]
         if isinstance(last_attempt, dict):
             provider_name = _safe_model_identifier(last_attempt.get("provider_name"))
@@ -1379,6 +1496,7 @@ def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
 def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
     """Format only allowlisted scalar receipt fields for a public Actions log."""
     ordered_keys = (
+        "provider_attempt_count",
         "provider_name",
         "upstream_phase",
         "attempt_number",
@@ -1634,8 +1752,12 @@ def call_llm(
         validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         gateway_telemetry: dict[str, str | int] = {}
+        http_status: int | None = None
+        retry_after_seconds: int | None = None
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
+            http_status = exc.code if type(exc.code) is int else None
+            retry_after_seconds = parse_http_retry_after_seconds(exc.headers)
             gateway_telemetry = _extract_http_error_telemetry(exc)
             model_value = gateway_telemetry.get("served_model")
             served_model = model_value if isinstance(model_value, str) else None
@@ -1643,16 +1765,32 @@ def call_llm(
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
         gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
+        capacity_unavailable = is_provider_capacity_http_status(http_status)
+        capacity_note = (
+            " outcome=provider_capacity_unavailable"
+            if capacity_unavailable
+            else ""
+        )
         print(
             f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
             f"duration={elapsed:.1f}s served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
+            + capacity_note
             + (f" gateway {gateway_note}" if gateway_note else "")
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
             f"phase={active_phase}, served_model={model_note}"
             + (f", gateway {gateway_note}" if gateway_note else "")
+            + (
+                ", outcome=provider_capacity_unavailable"
+                if capacity_unavailable
+                else ""
+            )
+        )
+        provider_attempt_count = gateway_telemetry.get("provider_attempt_count")
+        attempt_count = (
+            provider_attempt_count if type(provider_attempt_count) is int else None
         )
         if isinstance(exc, NoemaModelOutputError):
             raise NoemaModelOutputError(
@@ -1660,7 +1798,11 @@ def call_llm(
             ) from None
         if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
             raise NoemaTransportError(
-                f"Noema gateway transport failed: {type(exc).__name__}: {current_failure}{suffix}"
+                f"Noema gateway transport failed: {type(exc).__name__}: {current_failure}{suffix}",
+                capacity_unavailable=capacity_unavailable,
+                http_status=http_status,
+                provider_attempt_count=attempt_count,
+                retry_after_seconds=retry_after_seconds,
             ) from exc
         raise RuntimeError(
             f"Noema review failed closed: {current_failure}{suffix}"
