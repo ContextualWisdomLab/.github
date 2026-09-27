@@ -407,7 +407,10 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
     assert "assert response.status == 413" in text
     assert "expected_rejection_log = io.StringIO()" in text
-    assert "with contextlib.redirect_stderr(expected_rejection_log):" in text
+    assert 'logging.getLogger("contextual_orchestrator.server")' in text
+    assert "server_logger.addHandler(capture)" in text
+    assert "server_logger.removeHandler(capture)" in text
+    assert "contextlib.redirect_stderr" not in text
     assert '"request_failed status=413 code=request_too_large"' in text
     assert "in expected_rejection_log.getvalue()" in text
     assert "return self._mock_raw(agent, endpoint, payload)" in text
