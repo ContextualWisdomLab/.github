@@ -1800,3 +1800,21 @@ def test_owned_codeql_writers_are_separate_target_scoped_credentials() -> None:
         assert f"permission-{permission}: write" in step
         assert "permission-security-events" not in step
         assert "continue-on-error: true" in step
+
+
+def test_owned_status_configuration_survives_failed_analysis_gate(tmp_path: Path) -> None:
+    """A failed gate can publish failure without minting an analysis reader."""
+    workflow = WORKFLOW_PATH.read_text()
+    config = workflow.split("        id: noema_analysis_config\n", 1)[1].split("      - name:", 1)[0]
+    assert "if: always() && steps.live_metadata.outcome == 'success'" in config
+    reader = workflow.split("        id: noema_analysis_token\n", 1)[1].split("      - name:", 1)[0]
+    assert "if: steps.gate.outcome == 'success'" in reader
+    output = tmp_path / "outputs"
+    script = _extract_run_block(workflow, "Detect optional Noema analysis-read credential")
+    result = subprocess.run(["bash"], input=script, text=True, capture_output=True,
+                            env={**os.environ, "TARGET_REPOSITORY": "ContextualWisdomLab/disksage",
+                                 "NOEMA_APP_CLIENT_ID": "synthetic-client",
+                                 "NOEMA_APP_PRIVATE_KEY": "synthetic-key",
+                                 "GITHUB_OUTPUT": str(output)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text().splitlines() == ["repository=disksage", "available=true"]

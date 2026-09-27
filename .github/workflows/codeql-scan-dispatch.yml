@@ -589,7 +589,7 @@ jobs:
 
       - name: Detect optional Noema analysis-read credential
         id: noema_analysis_config
-        if: steps.gate.outcome == 'success'
+        if: always() && steps.live_metadata.outcome == 'success'
         env:
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           NOEMA_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
