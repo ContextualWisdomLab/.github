@@ -215,7 +215,10 @@ commit file URL; the native workflow route must name that central required
 producer in the target repository. Its check-suite commit must equal the
 declared event head. Unknown sources remain unlinked; partial/error responses
 reject the repository snapshot. Normalization retains only those bounded source
-fields, including through offline report round trips. Source reads happen before
+fields, including through offline report round trips. JSON report rows export
+`workflow_source` and `reviewed_head_sha` separately from the native run-level
+`head_sha`, which can name the base. Unknown target producers export no reviewed
+head or source proof. Source reads happen before
 current-head cancelled-run filtering so consumer pre-runner cancellations remain
 visible. This read-only trace is not a Noema/OpenCode approval or cancellation
 authorization.

@@ -98,7 +98,8 @@ def _bind_required_workflow_sources(
             payload = json.loads(result.stdout)
         except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             raise QueueHealthError("required workflow source read was incomplete") from exc
-        if not isinstance(payload, dict) or payload.get("errors"):
+        if (not isinstance(payload, dict) or payload.get("errors")
+                or not isinstance(payload.get("data"), dict)):
             raise QueueHealthError("required workflow source response was incomplete")
         nodes = _list_payload(payload.get("data"), "nodes", max_items=100)
         if len(nodes) != len(batch):
@@ -555,6 +556,12 @@ def build_report(
             continue
         report_row["workflow_id"] = run_metadata["workflow_id"]
         report_row["workflow_identity"] = run_metadata["workflow_identity"]
+        report_row["workflow_source"] = run_metadata.get("workflow_source", {})
+        report_row["reviewed_head_sha"] = (
+            run_metadata["display_title"].rpartition("@")[2]
+            if run_metadata["event"] == "pull_request_target" else
+            run_metadata["head_sha"] if run_metadata["event"] == "pull_request" else ""
+        )
         report_row["run_conclusion"] = run_metadata.get("conclusion", "")
         report_row["jobs_materialized"] = bool(run_metadata["jobs"])
         matching_job = next(

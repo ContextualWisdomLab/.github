@@ -9,8 +9,8 @@ from tests.test_actions_queue_health import queue_health, pull_request, workflow
 
 
 @pytest.mark.parametrize("current", [False, True])
-@pytest.mark.parametrize("mutation", [None, "foreign_source", "file_path", "source_revision", "workflow_path", "suite_head", "run_id", "workflow_id", "suite_id", "event", "title", "shape", "commit_shape", "errors", "payload_type", "short", "null", "invalid_json", "failure", "timeout"])
-def test_required_consumer_source_binds_native_suite_and_immutable_title(current, mutation, monkeypatch):
+@pytest.mark.parametrize("mutation", [None, "foreign_source", "file_path", "source_revision", "workflow_path", "suite_head", "run_id", "workflow_id", "suite_id", "event", "title", "shape", "commit_shape", "errors", "payload_type", "data_type", "short", "null", "invalid_json", "failure", "timeout"])
+def test_required_consumer_source_binds_native_suite_and_immutable_title(current, mutation, monkeypatch, tmp_path):
     """Refreshed PR associations cannot substitute for the native event commit."""
     repository = "ContextualWisdomLab/contextual-orchestrator"
     reviewed = "e655c530e659b1875a195fa78f96d0228ccf3b68"
@@ -71,10 +71,12 @@ def test_required_consumer_source_binds_native_suite_and_immutable_title(current
             payload["data"]["nodes"] = [None]
         elif mutation == "payload_type":
             payload = []
+        elif mutation == "data_type":
+            payload["data"] = [node]
         return CompletedProcess(command, int(mutation == "failure"),
                                 "invalid" if mutation == "invalid_json" else json.dumps(payload), "")
 
-    if mutation in {"run_id", "workflow_id", "suite_id", "event", "title", "shape", "commit_shape", "errors", "payload_type", "short", "null", "invalid_json", "failure", "timeout"}:
+    if mutation in {"run_id", "workflow_id", "suite_id", "event", "title", "shape", "commit_shape", "errors", "payload_type", "data_type", "short", "null", "invalid_json", "failure", "timeout"}:
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._bind_required_workflow_sources(repository, [run], runner=runner)
         return
@@ -82,14 +84,29 @@ def test_required_consumer_source_binds_native_suite_and_immutable_title(current
     normalized = queue_health._normalise_run(repository, run, [])
     normalized = queue_health._normalise_run(repository, normalized, [])
     pr = queue_health._normalise_pull_request(pull_request(1268, live))
+    snapshot = {
+        "generated_at": "2026-09-27T19:36:00Z", "collection_errors": [],
+        "repositories": [{"full_name": repository, "pull_requests": [pr], "runs": [normalized]}],
+    }
+    input_path = tmp_path / "snapshot.json"
+    output_path = tmp_path / "report.json"
+    input_path.write_text(json.dumps(snapshot))
+    assert queue_health.main(["--snapshot", str(input_path), "--output-json", str(output_path),
+                              "--output-html", str(tmp_path / "report.html"),
+                              "--now", "2026-09-27T19:36:00Z"]) == 0
+    exported = json.loads(output_path.read_text())["runs"][0]
     if mutation:
         assert queue_health._run_identity(normalized, {1268: pr}) == ("unlinked", None)
         assert "workflow_source" not in normalized
         assert normalized["display_title"] == ""
+        assert exported["reviewed_head_sha"] == ""
+        assert exported["workflow_source"] == {}
     else:
         assert queue_health._run_identity(normalized, {1268: pr}) == (
             "current_head" if current else "obsolete", 1268)
         assert normalized["workflow_source"]["repositoryName"] == "ContextualWisdomLab/.github"
+        assert exported["reviewed_head_sha"] == reviewed
+        assert exported["workflow_source"] == normalized["workflow_source"]
         run.pop("workflow_source")
         run.update(status="completed", conclusion="cancelled")
         reads = []
