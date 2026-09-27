@@ -1011,15 +1011,16 @@ def evaluate_dependency_license(
     grants = frozenset().union(*(ids for ids in recognized_texts.values() if ids is not None))
     for filename in sorted(texts):
         recognized = recognized_texts[filename]
-        # Exact COPYING notice from checksum-verified memchr 2.8.3, termcolor
-        # 1.4.1 and winapi-util 0.1.11. This is a reference, never a grant:
-        # require BOTH independently recognized full licence texts beside it.
+        # Exact reference notices from checksum-verified memchr 2.8.3,
+        # termcolor 1.4.1, winapi-util 0.1.11 and typenum 1.20.1.
+        # A reference is never a grant; every named full grant must be present.
         normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
-        if (evidence.get("ecosystem") == "cargo"
-                and hashlib.sha256(normalized.encode()).hexdigest() ==
-                "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1"
-                and {"MIT", "Unlicense"} <= grants):
-            recognized = frozenset({"MIT", "Unlicense"})
+        references = {
+            "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1": frozenset({"MIT", "Unlicense"}),
+            "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a": frozenset({"MIT", "Apache-2.0"}),
+        }.get(hashlib.sha256(normalized.encode()).hexdigest())
+        if evidence.get("ecosystem") == "cargo" and references is not None and references <= grants:
+            recognized = references
         code = scan_license_text(str(texts[filename]))
         if code is None and decision.allowed:
             if recognized is None:
@@ -1060,6 +1061,12 @@ def evaluate_dependency_license(
                     f"bundled {filename} contains {code} license text",
                 )
             )
+    if decision.allowed and texts and not any(f.code == LICENSE_TEXT_UNVERIFIED for f in failures):
+        effective = re.sub(r"\bWITH\s+[A-Za-z0-9.+-]+", "", decision.selected)
+        missing = _declared_identifiers(effective) - grants
+        if missing:
+            failures.append(Failure(LICENSE_TEXT_MISSING, subject,
+                                    f"selected obligations lack full grant texts: {sorted(missing)}"))
     return failures, decision, source
 
 

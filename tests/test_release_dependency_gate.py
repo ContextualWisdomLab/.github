@@ -954,3 +954,32 @@ def test_copying_reference_requires_both_reviewed_full_grants(mutation):
     if mutation is not None:
         assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
     assert policy.recognize_license_text(notice) is None
+
+
+@pytest.mark.parametrize("omit", [None, "MIT", "Unicode-3.0"])
+def test_unicode_conjunction_requires_each_full_selected_grant(omit):
+    texts = {"MIT": REVIEWED_TEXTS["memchr-2.8.3-LICENSE-MIT.txt"],
+             "Unicode-3.0": REVIEWED_TEXTS["unicode-ident-1.0.26-LICENSE-UNICODE.txt"]}
+    if omit is not None:
+        del texts[omit]
+    failures, decision, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="(MIT OR Apache-2.0) AND Unicode-3.0", license_texts=texts),
+        "cargo/example@1", {"chosen": "MIT AND Unicode-3.0", "rationale": "Both grants retained"})
+    assert decision.allowed and decision.selected == "MIT AND Unicode-3.0"
+    assert (not failures) == (omit is None)
+    if omit is not None:
+        assert any(f.code == "LICENSE_TEXT_MISSING" for f in failures)
+
+
+@pytest.mark.parametrize("omit", [None, "MIT", "Apache"])
+def test_typenum_reference_requires_both_full_grants(omit):
+    texts = {"LICENSE": "MIT OR Apache-2.0", "MIT": REVIEWED_TEXTS["typenum-1.20.1-LICENSE-MIT.txt"],
+             "Apache": REVIEWED_TEXTS["typenum-1.20.1-LICENSE-APACHE.txt"]}
+    if omit is not None:
+        del texts[omit]
+    failures, _, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="MIT OR Apache-2.0", license_texts=texts),
+        "cargo/typenum@1", {"chosen": "MIT", "rationale": "Both reference targets retained"})
+    assert (not failures) == (omit is None)
+    if omit is not None:
+        assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)

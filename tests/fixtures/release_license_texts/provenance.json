@@ -1061,5 +1061,17 @@
     "normalized_sha256": "25c95a7b50ce321f537754cab2f5b1de56413ccdcbc492671d569851d62ce276",
     "identifier": "BSD-2-Clause",
     "fixture": "zerocopy-0.8.57-LICENSE-BSD.txt"
+  },
+  {
+    "package": "unicode-ident@1.0.26",
+    "ecosystem": "cargo",
+    "artifact_filename": "unicode-ident-1.0.26.crate",
+    "artifact_sha256": "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954",
+    "artifact_url": "https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.26.crate",
+    "member": "unicode-ident-1.0.26/LICENSE-UNICODE",
+    "raw_sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+    "normalized_sha256": "21b7ffe46249356209d64748a5179bf37a704880d8af02c77bd65d20800503f0",
+    "identifier": "Unicode-3.0",
+    "fixture": "unicode-ident-1.0.26-LICENSE-UNICODE.txt"
   }
 ]

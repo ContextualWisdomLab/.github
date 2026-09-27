@@ -184,6 +184,7 @@ _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
     "444399c3da8f18f32878c6f8b7348110f33985558ca7abe98d4c8ed26f013109": frozenset({"Zlib"}),
     "6533009df0e5dd56f0a2d720b4396123453b4e6d212224b755c0f9b3573754bd": frozenset({"Zlib"}),
     "25c95a7b50ce321f537754cab2f5b1de56413ccdcbc492671d569851d62ce276": frozenset({"BSD-2-Clause"}),
+    "21b7ffe46249356209d64748a5179bf37a704880d8af02c77bd65d20800503f0": frozenset({"Unicode-3.0"}),
     "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf": frozenset({"MIT"}),
     "c8f231e806990fbae26a329908ad335584ee2448af43f743e40353675841e373": frozenset({"Apache-2.0"}),
     "500e97bb9db8f7ed04ac270750cad498669224f165ed554531894f1cfb963434": frozenset({"MIT"}),
@@ -463,15 +464,17 @@ def _evaluate_node(node: Node, selections: frozenset[str]) -> LicenseDecision:
             selected=render_expression(node),
         )
     if isinstance(node, Conjunction):
+        resolved = []
         for operand in node.operands:
             decision = _evaluate_node(operand, selections)
             if not decision.allowed:
                 return decision
+            resolved.append(decision.selected)
         return LicenseDecision(
             allowed=True,
             code="LICENSE_ALLOWED",
             detail=f"every operand of {render_expression(node)} is allowed",
-            selected=render_expression(node),
+            selected=" AND ".join(resolved),
         )
 
     rendered_operands = [render_expression(operand) for operand in node.operands]
@@ -540,6 +543,7 @@ def evaluate_license_expression(
             detail=f"{normalized!r} is not a valid SPDX expression: {error}",
         )
     selections: frozenset[str] = frozenset()
+    compound_choice = None
     if selection is not None and selection.strip():
         if rationale is None or not rationale.strip():
             return LicenseDecision(
@@ -548,7 +552,16 @@ def evaluate_license_expression(
                 detail="a license selection requires a written rationale",
             )
         selections = frozenset({selection.strip()})
+        try:
+            choice = parse_license_expression(selection)
+        except SpdxParseError:
+            return LicenseDecision(False, LICENSE_SELECTION_INVALID, "selection is not an SPDX expression")
+        if isinstance(choice, Conjunction):
+            compound_choice = render_expression(choice)
+            selections |= frozenset(render_expression(item) for item in choice.operands)
     decision = _evaluate_node(node, selections)
+    if decision.allowed and compound_choice is not None and decision.selected != compound_choice:
+        return LicenseDecision(False, LICENSE_SELECTION_INVALID, "selection differs from resolved obligations")
     if decision.allowed and selections:
         return LicenseDecision(
             allowed=True,
