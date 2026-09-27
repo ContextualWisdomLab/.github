@@ -242,14 +242,16 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
 
 @pytest.mark.parametrize("mutation", [None, "changed-notice", "missing-notice", "symlink-notice",
                                       "wrong-upstream", "wrong-notice-digest", "captured-choice",
-                                      "wrong-archive", "no-source", "truncated-notice", "missing-input-grant"])
+                                      "wrong-archive", "no-source", "truncated-notice", "missing-input-grant",
+                                      "notice-bad-sha", "notice-oversized", "notice-object", "notice-no-match",
+                                      "grant-size", "grant-separator"])
 @pytest.mark.parametrize("package,version,repository,upstream_commit", [
     ("profiling", "1.0.18", "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9"),
     ("jni-sys-macros", "0.4.1", "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6"),
     ("gl_generator", "0.14.0", "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e"),
     ("spirv", "0.4.0+sdk-1.4.341.0", "gfx-rs/rspirv", "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4"),
 ])
-def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, package, version, repository, upstream_commit):
+def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, monkeypatch, mutation, package, version, repository, upstream_commit):
     import os
     import subprocess
 
@@ -304,7 +306,19 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
         choice["upstream_licenses"][0]["url"] = "https://example.invalid/LICENSE-MIT"
     elif mutation == "wrong-notice-digest":
         choice["bundled_notice"]["sha256"] = "0" * 64
-    _write(source / "docs/release-license-selections.json", [choice])
+    if mutation == "grant-separator":
+        subject = f"cargo/{package}@{version}"
+        reviewed = gate._REVIEWED_SOURCE_NOTICES[subject]
+        empty_digest = hashlib.sha256(b"").hexdigest()
+        grants = list(reviewed[-1])
+        grants[0] = (grants[0][0], 0, empty_digest)
+        choice["upstream_licenses"][0]["sha256"] = empty_digest
+        if len(grants) == 1:
+            grants.append(("extra", 0, empty_digest))
+            choice["upstream_licenses"].append({"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/extra", "sha256": empty_digest})
+        monkeypatch.setitem(gate._REVIEWED_SOURCE_NOTICES, subject, (*reviewed[:-1], tuple(grants)))
+    declared_choices = choice if mutation == "notice-object" else [] if mutation == "notice-no-match" else [choice]
+    _write(source / "docs/release-license-selections.json", declared_choices)
     (source / "Cargo.toml").write_text('[package]\nname="fast-mlsirm"\nversion="0.11.5"\n')
     lock = (capture / "cargo/Cargo.lock").read_text()
     old_checksum = __import__("tomllib").loads(lock)["package"][1]["checksum"]
@@ -323,6 +337,21 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     release = json.loads((capture / "release.json").read_text())
     release["source_sha"] = sha
     _write(capture / "release.json", release)
+    if mutation in {"notice-bad-sha", "notice-oversized", "notice-object", "notice-no-match", "grant-size", "grant-separator"}:
+        subject = f"cargo/{package}@{version}"
+        reviewed = gate._REVIEWED_SOURCE_NOTICES[subject]
+        if mutation == "notice-oversized":
+            monkeypatch.setattr(gate, "_MAX_METADATA_BYTES", 1)
+        if mutation == "grant-size":
+            grants = list(reviewed[-1])
+            name, size, digest = grants[0]
+            # Independent whole-notice and segment pins catch a trusted length typo.
+            grants[0] = (name, size - 1, digest)
+            monkeypatch.setitem(gate._REVIEWED_SOURCE_NOTICES, subject, (*reviewed[:-1], tuple(grants)))
+        with pytest.raises(gate.GateError):
+            gate._source_license_notice(source, "main" if mutation == "notice-bad-sha" else sha,
+                                        subject, {"ecosystem": "cargo", "source_sha256": archive_sha}, choice)
+        return
     gate.capture_license_selections(source, sha, capture)
     if mutation == "captured-choice":
         copied = json.loads((capture / "license-selections.json").read_text())
