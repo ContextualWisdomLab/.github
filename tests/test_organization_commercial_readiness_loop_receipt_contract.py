@@ -6,7 +6,6 @@ from scripts.ci.organization_commercial_readiness_loop import (
     is_manual_product_entrypoint,
 )
 
-
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1]
     / ".github"
