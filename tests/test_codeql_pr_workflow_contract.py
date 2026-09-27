@@ -1131,7 +1131,9 @@ def test_codeql_pr_scopes_dispatch_history_to_required_run_creation() -> None:
     script = _extract_run_block(WORKFLOW_PATH.read_text(), DISPATCH_STEP_NAME)
     assert '-f created=">=${required_created_at}"' in script
     assert '-f event=repository_dispatch' in script
-    assert '--paginate --slurp' in script
+    assert '--paginate' in script
+    assert '--slurp' not in script
+    assert '| jq -s .' in script
     assert 'select(.display_title == $title or .name == $title)' in script
 
 
