@@ -3509,3 +3509,19 @@ uncovered statements fell from 249 to 163 and partial branches from 26 to 19.
 The only remaining uncovered production owners are the Noema document reader
 successor and Rust materializer `ContextualWisdomLab/.github#2360`. Hosted-run
 identity and conclusions remain PR-body authority.
+
+The Noema document-reader continuation executes the existing fail-closed trust
+boundaries without changing production policy: unsupported and oversized
+input, bounded DOCX archive and XML structure, empty content, visible Word
+controls, ragged and escaped tables, local HWP reader configuration and process
+failure, bounded/UTF-8/non-empty adapter output, code-point-safe prompt
+truncation, and the smoke-test CLI. The focused suite is 11 passed and 2
+optional real-fixture skips; `noema_review_document.py` is 144/144 statements
+and 52/52 branches. The warnings-as-errors full exact-tree suite is 3,988
+passed, 28 skipped, and 40 subtests passed. Repository coverage stays rounded
+to 99% because the separately owned Rust materializer on
+`ContextualWisdomLab/.github#2360` retains 128 uncovered statements and one
+partial branch. That owner boundary is preserved: this PR does not duplicate
+the Rust repair. The 100% gate therefore remains RED, the PR remains Draft,
+and current hosted-run identity and conclusions remain PR-body authority after
+the next ordinary-forward update.
