@@ -43,6 +43,7 @@ def workflow_run(
     run_id: int,
     *,
     head_sha: str = "head",
+    event: str = "pull_request",
     pull_requests: list[dict] | None = None,
     status: str = "queued",
     jobs: list[dict] | None = None,
@@ -53,7 +54,7 @@ def workflow_run(
     return {
         "id": run_id,
         "name": workflow_name,
-        "event": "pull_request",
+        "event": event,
         "status": status,
         "conclusion": "",
         "head_sha": head_sha,
@@ -713,6 +714,7 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
     pull_request_target_run = workflow_run(
         70,
         head_sha="base-branch-checkout-sha",
+        event="pull_request_target",
         status="in_progress",
         pull_requests=[{"number": 1, "head": {"sha": "pr-head-sha"}}],
         jobs=[job(700, runner_id=9, runner_name="runner-9")],
@@ -1005,6 +1007,7 @@ def test_build_report_treats_pull_request_target_linked_head_as_current() -> Non
                     workflow_run(
                         50,
                         head_sha="base-branch-checkout-sha",
+                        event="pull_request_target",
                         pull_requests=[{"number": 1, "head": {"sha": "pr-head-sha"}}],
                         jobs=[job(500)],
                         workflow_name="opencode-review",

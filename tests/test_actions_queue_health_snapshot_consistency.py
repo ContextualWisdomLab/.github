@@ -194,3 +194,11 @@ def test_queue_health_workflow_does_not_grant_unused_pull_request_permission() -
     workflow = (ROOT / ".github/workflows/actions-queue-health.yml").read_text(encoding="utf-8")
     assert "\n  pull-requests: read\n" not in workflow
     assert "\n      pull-requests: read\n" not in workflow
+
+
+def test_pull_request_run_uses_immutable_head_when_rest_link_has_moved() -> None:
+    """GitHub refreshes PR links on old runs; the run head still proves the generation."""
+    run = _run(1, 501)
+    run["head_sha"] = "old-head"
+    normalized = queue_health._normalise_run("owner/repo", run, [])
+    assert queue_health._run_identity(normalized, {1: {"head_sha": "head"}}) == ("obsolete", 1)

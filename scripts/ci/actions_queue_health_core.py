@@ -379,23 +379,19 @@ def load_snapshot(path: Path) -> dict[str, Any]:
 
 
 def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]]) -> tuple[str, int | None]:
-    """Resolve one run to current-head, obsolete, or unlinked identity.
+    """Resolve one run using the event-specific reviewed head.
 
-    Compares the open pull request's head SHA against the *linked*
-    pull-request head SHA carried on the run (``run["pull_requests"][*]
-    ["head_sha"]``), never against the run-level ``head_sha``. For
-    ``pull_request_target``-triggered runs, GitHub reports the run-level
-    ``head_sha`` as the base-branch commit that was checked out, not the
-    pull request's head commit; only the linked pull-request entry carries
-    the real head SHA that was reviewed. Using the run-level value there
-    would misclassify a genuinely current, active required-workflow run as
-    ``obsolete`` and skip fetching its job evidence.
+    For ``pull_request``, the immutable run head is authoritative: GitHub
+    refreshes linked PR head fields on older runs after a push. Other events
+    retain their linked-head behavior; ``pull_request_target``'s run head is
+    the trusted base and must never be compared directly with the PR head.
     """
     links = run.get("pull_requests") or []
     for link in links:
         number = link.get("number")
         pull_request = pull_requests.get(number)
-        if pull_request and pull_request.get("head_sha") == link.get("head_sha"):
+        reviewed_head = run.get("head_sha") if run.get("event") == "pull_request" else link.get("head_sha")
+        if pull_request and pull_request.get("head_sha") == reviewed_head:
             return "current_head", number
     if links:
         return "obsolete", links[0].get("number")

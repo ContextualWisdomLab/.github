@@ -32,18 +32,19 @@ presentation data. Older/offline v1 snapshots that lack `workflow_id` retain a
 compatibility fallback of `workflow_name:<name>`. A malformed present
 `workflow_id` fails closed instead of being coerced.
 
-A run is `current_head` only when its linked open pull request and head SHA
-match. The match compares the open pull request's head SHA against the *linked*
-pull-request entry's head SHA carried on the run (`run.pull_requests[].head.sha`),
-never against the run-level `head_sha`. `pull_request_target`-triggered runs
-report the base-branch commit that was checked out as their run-level
-`head_sha`, so comparing against that value would misclassify a genuinely
-active, current required-workflow run as obsolete and skip its job evidence.
-Stale linked runs are `obsolete`; runs without a pull-request link are
-`unlinked`. Queued evidence remains incomplete even when a report is
-successfully produced. GitHub's `waiting` job status (paused on an environment
-or deployment approval) is also treated as pending evidence, distinct from a
-runner-capacity blocker.
+A run is `current_head` only when its linked open pull request and reviewed
+head SHA match. For `pull_request`, the run-level `head_sha` identifies the
+immutable generation. A live 2026-09-27 census found 17 superseded runs whose
+`pull_requests[].head.sha` had already changed to the current PR head; that
+mutable link must not turn an older run into current evidence.
+For `pull_request_target`, the run-level head is the trusted base and must
+never be compared directly with the PR head; its existing linked-head handling
+remains a limitation requiring independent event/run-name provenance before
+operational cancellation. `repository_dispatch` runs without PR links remain
+`unlinked`; this slice does not infer their target from the control-plane head.
+Stale linked runs are `obsolete`. Queued evidence remains incomplete even when
+a report is successfully produced. GitHub's `waiting` job status also remains
+pending evidence, distinct from a runner-capacity blocker.
 
 Pull-request identity is sampled before and after the bounded active-run
 sweeps. The repository snapshot is accepted only when the open pull-request
