@@ -1339,6 +1339,11 @@ Semantic Versioning where the repository publishes a release.
 - Added a dedicated fast-mlsirm hourly caller that preserves Rust-owned psychometric arithmetic while dispatching at most one exact-head, root-cause-driven repair with a two-hour same-head retry floor.
 - Added a dedicated Orgmetra hourly caller at minute 58 that targets protected `develop`, dispatches at most one exact-head repair, preserves a two-hour same-head retry floor and non-cancelling single-flight execution, and maps only the established scheduler credentials.
 - Added read-only orphan-workflow lifecycle classification with exact default-branch binding, fail-closed visibility and pagination checks, explicit case-insensitive owner-issue routing for active and disabled orphans, and no registry mutation authority.
+- Add a live, paginated organization workflow inventory with content-bound API
+  receipts, exact default-head revalidation, and a separately reviewed,
+  ledger-bound owner-issue publisher that never disables workflows.
+- Schedule the central read-only workflow-lifecycle sweep on the protected
+  default branch and retain its exact ledger and API receipts for 30 days.
 
 ### Changed
 
@@ -1371,12 +1376,7 @@ Semantic Versioning where the repository publishes a release.
   authenticated organization-wide repository totals, retries one explicit
   HTTP 5xx once, rejects every malformed Git tree member, preserves partial
   read receipts and structured failure evidence, gates completeness before
-  classification, and isolates disable/issue writes in the operator module.
-- Add a live, paginated organization workflow inventory with content-bound API
-  receipts, exact default-head revalidation, and a separately reviewed,
-  ledger-bound operator disable primitive.
-- Schedule the central read-only workflow-lifecycle sweep on the protected
-  default branch and retain its exact ledger and API receipts for 30 days.
+  classification, and isolates owner-issue writes in the operator module.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
