@@ -293,9 +293,8 @@ def _run_verdict_read(
 def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:
     """A PR-forged 'codeql-dispatch/<language>: success' status must not stand in for the real verdict.
 
-    Only a status published by codeql-scan-dispatch.yml's own app identity
-    (opencode-agent[bot], minted via the same OIDC exchange
-    opencode-review-dispatch.yml uses) may satisfy the verdict read -- matching the
+    Only a status published by the handler's explicitly trusted app identities
+    (OpenCode or the organization-owned Noema status writer) may satisfy the verdict read -- matching the
     context string alone is not enough, since anyone with statuses:write on
     the repository can publish an arbitrary context (ADR 0025, "Poll target
     cannot be spoofed by the PR author"). This proves the forged success is
@@ -1034,3 +1033,13 @@ def test_codeql_pr_scopes_dispatch_history_to_required_run_creation() -> None:
     assert '-f event=repository_dispatch' in script
     assert '--paginate --slurp' in script
     assert 'select(.display_title == $title or .name == $title)' in script
+
+
+def test_codeql_pr_accepts_organization_owned_noema_status(tmp_path: Path) -> None:
+    """The target-scoped owned publisher can deliver a real terminal verdict."""
+    dispatch, verdict = _run_verdict_read(tmp_path, statuses=[{
+        "context": "codeql-dispatch/python", "state": "success",
+        "creator": {"login": "cwl-noema-review[bot]"},
+    }])
+    assert dispatch.returncode == 0, dispatch.stderr
+    assert verdict.returncode == 0, verdict.stderr

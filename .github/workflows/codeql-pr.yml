@@ -224,6 +224,7 @@ jobs:
               | select(
                   (.creator.login // "" | ascii_downcase) as $creator
                   | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                  or $creator == "cwl-noema-review" or $creator == "cwl-noema-review[bot]"
                 )
             ]
             | first // {} | .state // empty
@@ -427,6 +428,7 @@ jobs:
                 | select(
                     (.creator.login // "" | ascii_downcase) as $creator
                     | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                    or $creator == "cwl-noema-review" or $creator == "cwl-noema-review[bot]"
                   )
               ]
               | first // {} | .state // empty

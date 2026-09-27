@@ -1694,3 +1694,58 @@ def test_codeql_scan_checkout_cleans_reused_workspace_without_persisting_token()
     assert 'persist-credentials: false' in block
     assert 'clean: true' in block
     assert 'git remote add origin' not in block
+
+
+@pytest.mark.parametrize("creator,accepted", [
+    ("cwl-noema-review[bot]", True), ("attacker", False),
+    ("opencode-agent[bot]", False),
+])
+def test_owned_codeql_status_token_checks_its_actual_creator(
+    tmp_path: Path, creator: str, accepted: bool,
+) -> None:
+    """The owned credential cannot silently publish as a different principal."""
+    publish = _extract_run_block(WORKFLOW_PATH.read_text(), "Publish CodeQL dispatch status")
+    function = publish[publish.index("post_status() {"):publish.index('if post_status')]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    response = json.dumps({"creator": {"login": creator}})
+    gh.write_text("#!/bin/bash\nprintf '%s\\n' '" + response + "'\n")
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
+           "FAKE_CREATOR": creator, "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+           "HEAD_SHA": "b" * 40, "state": "success",
+           "receipt_context": "codeql-dispatch/python", "receipt_description": "verified",
+           "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+           "GITHUB_RUN_ID": "100"}
+    result = subprocess.run(["bash"], input='set -euo pipefail\n' + function +
+                            '\npost_status noema-status-token synthetic-owned-token\n',
+                            env=env, text=True, capture_output=True)
+    assert (result.returncode == 0) == accepted, result.stdout + result.stderr
+
+
+def test_owned_codeql_wake_preserves_exact_run_wide_settlement(tmp_path: Path) -> None:
+    """The owned token follows the existing full proof before a single mutation."""
+    result, posts = _run_settlement_step(tmp_path, extra_env={
+        "NOEMA_WAKE_TOKEN": "owned-token", "TARGET_APP_WAKE_TOKEN": "foreign-token",
+        "FAKE_DENIED_TOKEN": "foreign-token", "GITHUB_WAKE_TOKEN": "",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "using noema-settlement-token" in result.stdout
+    assert posts.read_text().splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
+    ]
+
+
+def test_owned_codeql_writers_are_separate_target_scoped_credentials() -> None:
+    """Read, status and wake tokens each retain one narrow permission purpose."""
+    workflow = WORKFLOW_PATH.read_text()
+    for name,config,permission in (
+        ("Noema CodeQL status token", "noema_analysis_config", "statuses"),
+        ("Noema CodeQL settlement token", "noema_settlement_config", "actions"),
+    ):
+        step = workflow.split(f"      - name: Mint target-scoped {name}\n", 1)[1].split("      - name:", 1)[0]
+        assert f"repositories: ${{{{ steps.{config}.outputs.repository }}}}" in step
+        assert f"permission-{permission}: write" in step
+        assert "permission-security-events" not in step
+        assert "continue-on-error: true" in step
