@@ -37,3 +37,24 @@ def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):
         result = subprocess.run(['bash', '-c', shell], env=env | {'NEXT_ATTEMPT': attempt}, capture_output=True, text=True)
         assert result.returncode != 0
         assert not posted.exists()
+
+
+def test_workflow_classifier_invocation_emits_bounded_capacity(tmp_path):
+    source = Path('.github/workflows/strix.yml').read_text()
+    block = source.split('      - name: Classify all-429 Strix sidecar failure\n', 1)[1].split('      - name:', 1)[0]
+    shell = '\n'.join(line[10:] for line in block.split('        run: |\n', 1)[1].splitlines())
+    reports = tmp_path / 'strix_runs'
+    reports.mkdir()
+    report = reports / 'contextual-orchestrator-preflight.json'
+    report.write_text(json.dumps({'contract': 'strix-plain-chat-preflight-v2', 'ready_count': 0, 'probed_count': 1, 'routes': [{'status': 'rejected', 'http_status': 429}]}))
+    output = tmp_path / 'output'
+    env = dict(os.environ, TRUSTED_STRIX_SOURCE=str(Path.cwd()), GITHUB_WORKSPACE=str(tmp_path), EXPECTED_HEAD_SHA='a'*40, NOEMA_TRANSPORT_RETRY_ATTEMPT='0', GITHUB_OUTPUT=str(output))
+    result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    emitted = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert emitted['transport_capacity_unavailable'] == 'true'
+    assert emitted['transport_retry_eligible'] == 'true'
+    assert emitted['transport_retry_next_attempt'] == '1'
+    result = subprocess.run(['bash', '-c', shell], env=env | {'NOEMA_TRANSPORT_RETRY_ATTEMPT': '2', 'GITHUB_OUTPUT': str(tmp_path/'exhausted')}, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'transport_retry_eligible=false' in (tmp_path/'exhausted').read_text()

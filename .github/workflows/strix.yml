@@ -816,7 +816,7 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
         run: |
           python3 "$TRUSTED_STRIX_SOURCE/scripts/ci/noema_preflight_capacity.py" \
-            --report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json" \
+            --preflight-report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json" \
             --expected-head "$EXPECTED_HEAD_SHA"
 
       - name: Set up Python
