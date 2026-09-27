@@ -188,3 +188,23 @@ closed. Terminal pagination errors now include the native query endpoint so a
 future incomplete response can be reproduced directly. This reduces redundant
 reads; it does not claim that the shared user quota, concurrent PR movement, or
 scoped installation-token runtime has been resolved.
+
+## Immutable target-event identity
+
+A native observation of Noema run `36329401441` showed its PR association
+updated to `8f870fdef8f3b6633312b2586ad50647ebaa3e6a` after a push, while
+its protected `run-name` still bound the request to
+`e28b6978b67fd9805eaf3500d58ca8eb934c42ec`. Its native GitHub Actions
+check suite `98371086029` also remained on the older commit. The previous
+reader incorrectly classified that run as current using the refreshed link.
+
+For `pull_request_target`, the reader now accepts only the central repository's
+known Noema, OpenCode and Strix workflow paths and their exact protected producer
+prefixes, repository, native associated PR number, and lowercase full commit.
+It preserves that producer identity through collect/report normalization. Neither
+the run's base SHA nor the mutable linked head proves the reviewed commit.
+Unknown producers, arbitrary PR titles, malformed identities and missing native
+associations remain unlinked. This does not infer targets for unlinked dispatches
+or authorize cancellation. Other repositories need their own independently
+verified producer contract before their target events can become authoritative;
+a matching association alone is insufficient.

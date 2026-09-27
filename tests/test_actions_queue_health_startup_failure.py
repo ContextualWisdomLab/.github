@@ -78,6 +78,8 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
             "repository": repository_name,
             "id": 701,
             "workflow_name": "CodeQL PR",
+            "workflow_path": "",
+            "display_title": "",
             "event": "pull_request",
             "status": "COMPLETED",
             "conclusion": "STARTUP_FAILURE",

@@ -351,10 +351,12 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         if not isinstance(head, dict):
             raise QueueHealthError("workflow run pull request head must be an object")
         links.append({"number": number, "head_sha": str(head.get("sha") or "")})
-    return {
+    normalized_run = {
         "repository": repository,
         "id": run_id,
         "workflow_name": str(run.get("name") or run.get("workflow_name") or "unnamed workflow"),
+        "workflow_path": str(run.get("path") or run.get("workflow_path") or ""),
+        "display_title": str(run.get("display_title") or ""),
         "event": str(run.get("event") or "unknown"),
         "status": str(run.get("status") or "").upper(),
         "conclusion": str(run.get("conclusion") or "").upper(),
@@ -366,6 +368,9 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         "pull_requests": sorted(links, key=lambda item: item["number"]),
         "jobs": sorted((_normalise_job(job) for job in jobs), key=lambda item: item["id"]),
     }
+    if run.get("event") != "pull_request_target" or _run_identity(normalized_run, {})[0] == "unlinked":
+        normalized_run["display_title"] = ""
+    return normalized_run
 
 
 def load_snapshot(path: Path) -> dict[str, Any]:
@@ -383,11 +388,29 @@ def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]])
     """Resolve one run using the event-specific reviewed head.
 
     For ``pull_request``, the immutable run head is authoritative: GitHub
-    refreshes linked PR head fields on older runs after a push. Other events
-    retain their linked-head behavior; ``pull_request_target``'s run head is
-    the trusted base and must never be compared directly with the PR head.
+    refreshes linked PR head fields on older runs after a push. Target events
+    require the protected producer's immutable identity and a native PR number;
+    their run-level base SHA and refreshed links cannot prove the reviewed head.
     """
     links = run.get("pull_requests") or []
+    if run.get("event") == "pull_request_target":
+        # Only these protected central producers declare this immutable event
+        # identity. A PR title or a refreshed association is not head evidence.
+        prefix = {
+            ".github/workflows/noema-review.yml": "Required Noema Review",
+            ".github/workflows/opencode-review.yml": "Required OpenCode Review",
+            ".github/workflows/strix.yml": "Strix Security Scan",
+        }.get(run.get("workflow_path")) if run.get("repository") == "ContextualWisdomLab/.github" else None
+        identity = re.fullmatch(
+            rf"{re.escape(prefix or '')} ContextualWisdomLab/\.github#([1-9][0-9]*)@([0-9a-f]{{40}})",
+            str(run.get("display_title") or ""),
+        )
+        number = next((link["number"] for link in links
+                       if type(link.get("number")) is int and str(link["number"]) == identity[1]), None) if identity else None
+        if not prefix or not identity or number is None:
+            return "unlinked", None
+        pull_request = pull_requests.get(number)
+        return ("current_head" if pull_request and pull_request.get("head_sha") == identity[2] else "obsolete"), number
     for link in links:
         number = link.get("number")
         pull_request = pull_requests.get(number)

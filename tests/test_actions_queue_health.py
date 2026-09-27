@@ -898,7 +898,7 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
     this exercises the entire ``collect_snapshot`` -> ``build_report`` path
     for a ``pull_request_target``-shaped run (run-level head_sha is the base
     commit, the linked pull-request entry carries the real PR head) and
-    checks the run still resolves to ``current_head``.
+    preserves the association without inventing immutable reviewed-head proof.
     """
     pull_request_target_run = workflow_run(
         70,
@@ -933,8 +933,9 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
     snapshot = queue_health.collect_snapshot(["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z")
     report = queue_health.build_report(snapshot, now=NOW)
     row = report["runs"][0]
-    assert row["identity_state"] == "current_head"
+    assert row["identity_state"] == "unlinked"
     assert row["obsolete"] is False
+    assert snapshot["repositories"][0]["runs"][0]["pull_requests"][0]["head_sha"] == "pr-head-sha"
 
 
 def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evidence() -> None:
@@ -1179,15 +1180,70 @@ def test_build_report_classifies_exact_head_and_external_blockers() -> None:
     assert queue_health.build_report(report_snapshot(), queue_age_slo_seconds=0)["summary"]["observed_job_count"] == 7
 
 
-def test_build_report_treats_pull_request_target_linked_head_as_current() -> None:
-    """A pull_request_target run's base-commit head_sha must not look obsolete.
+@pytest.mark.parametrize("workflow,prefix", [
+    ("noema-review.yml", "Required Noema Review"),
+    ("opencode-review.yml", "Required OpenCode Review"),
+    ("strix.yml", "Strix Security Scan"),
+])
+@pytest.mark.parametrize("current", [False, True])
+def test_pull_request_target_refreshed_association_cannot_replace_event_head(workflow, prefix, current):
+    """GitHub refreshes associations after a push, but the protected producer does not."""
+    old_head = "e28b6978b67fd9805eaf3500d58ca8eb934c42ec"
+    live_head = "8f870fdef8f3b6633312b2586ad50647ebaa3e6a"
+    raw = workflow_run(36329401441, event="pull_request_target", head_sha="base-commit",
+                       pull_requests=[{"number": 2358, "head": {"sha": live_head}}])
+    reviewed_head = live_head if current else old_head
+    raw.update(path=f".github/workflows/{workflow}",
+               display_title=f"{prefix} ContextualWisdomLab/.github#2358@{reviewed_head}")
+    run = queue_health._normalise_run("ContextualWisdomLab/.github", raw, [])
+    run = queue_health._normalise_run("ContextualWisdomLab/.github", run, [])
+    pr = queue_health._normalise_pull_request(pull_request(2358, live_head))
+    assert queue_health._run_identity(run, {2358: pr}) == ("current_head" if current else "obsolete", 2358)
 
-    For a ``pull_request_target``-triggered run, GitHub reports the checked
-    out *base*-branch commit as the run-level ``head_sha``, while the run's
-    linked pull-request entry still carries the real PR head SHA. The run
-    must classify as ``current_head`` (and have its job evidence inspected)
-    whenever that linked head SHA matches the currently open pull request.
-    """
+
+@pytest.mark.parametrize("mutation", ["repository", "path", "prefix", "number", "huge_number", "head", "uppercase", "suffix", "unlinked"])
+def test_target_identity_requires_central_producer_and_native_association(mutation):
+    """User-authored titles, unknown producers and partial identifiers prove no target."""
+    repository = "ContextualWisdomLab/.github"
+    head = "a" * 40
+    raw = workflow_run(70, event="pull_request_target",
+                       pull_requests=[{"number": 1, "head": {"sha": head}}])
+    raw.update(path=".github/workflows/noema-review.yml",
+               display_title=f"Required Noema Review {repository}#1@{head}")
+    if mutation == "repository":
+        repository = "owner/repo"
+    elif mutation == "path":
+        raw["path"] = ".github/workflows/pr-authored-review.yml"
+    elif mutation == "prefix":
+        raw["display_title"] = raw["display_title"].replace("Noema", "OpenCode")
+    elif mutation == "number":
+        raw["display_title"] = raw["display_title"].replace("#1@", "#2@")
+    elif mutation == "huge_number":
+        raw["display_title"] = raw["display_title"].replace("#1@", "#" + "9" * 5000 + "@")
+    elif mutation == "head":
+        raw["display_title"] = raw["display_title"][:-1]
+    elif mutation == "uppercase":
+        raw["display_title"] = raw["display_title"].replace(head, head.upper())
+    elif mutation == "suffix":
+        raw["display_title"] += "\n"
+    else:
+        raw["pull_requests"] = []
+    run = queue_health._normalise_run(repository, raw, [])
+    pr = queue_health._normalise_pull_request(pull_request(1, head))
+    assert queue_health._run_identity(run, {1: pr}) == ("unlinked", None)
+
+
+def test_protected_target_event_for_closed_pr_is_obsolete():
+    """A declared native association to an absent live PR is not current evidence."""
+    raw = workflow_run(70, event="pull_request_target", pull_requests=[{"number": 1, "head": {"sha": "a" * 40}}])
+    raw.update(path=".github/workflows/noema-review.yml",
+               display_title="Required Noema Review ContextualWisdomLab/.github#1@" + "a" * 40)
+    run = queue_health._normalise_run("ContextualWisdomLab/.github", raw, [])
+    assert queue_health._run_identity(run, {}) == ("obsolete", 1)
+
+
+def test_build_report_does_not_treat_refreshed_target_link_as_head_proof() -> None:
+    """An unknown producer's base SHA and mutable association prove no review head."""
     snapshot = {
         "generated_at": "2026-08-19T11:00:00Z",
         "repositories": [
@@ -1209,7 +1265,7 @@ def test_build_report_treats_pull_request_target_linked_head_as_current() -> Non
     }
     report = queue_health.build_report(snapshot, now=NOW)
     row = report["runs"][0]
-    assert row["identity_state"] == "current_head"
+    assert row["identity_state"] == "unlinked"
     assert row["obsolete"] is False
     assert row["blocker"] != "obsolete_run_requires_identity_confirmed_cleanup"
 
