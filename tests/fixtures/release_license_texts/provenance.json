@@ -209,5 +209,101 @@
     "normalized_sha256": "c25311c4c60e634637fe8148151c9fc62b749205a8c83ad0bd02baeaf71c3209",
     "identifier": "MIT",
     "fixture": "bitflags-2.13.2-LICENSE-MIT.txt"
+  },
+  {
+    "package": "futures-core@0.3.34",
+    "ecosystem": "cargo",
+    "artifact_filename": "futures-core-0.3.34.crate",
+    "artifact_sha256": "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e",
+    "artifact_url": "https://static.crates.io/crates/futures-core/futures-core-0.3.34.crate",
+    "member": "futures-core-0.3.34/LICENSE-MIT",
+    "raw_sha256": "6652c868f35dfe5e8ef636810a4e576b9d663f3a17fb0f5613ad73583e1b88fd",
+    "normalized_sha256": "be1847dc49ef1ef89acc076d21a0499c7dd8131db9b5322a2a0333f4a16c1c64",
+    "identifier": "MIT",
+    "fixture": "futures-core-0.3.34-LICENSE-MIT.txt"
+  },
+  {
+    "package": "lock_api@0.4.14",
+    "ecosystem": "cargo",
+    "artifact_filename": "lock_api-0.4.14.crate",
+    "artifact_sha256": "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965",
+    "artifact_url": "https://static.crates.io/crates/lock_api/lock_api-0.4.14.crate",
+    "member": "lock_api-0.4.14/LICENSE-MIT",
+    "raw_sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
+    "normalized_sha256": "2810737fc58c4fa01c84559aa0b48db577fb0d7e0f871a2459b2551976b9a446",
+    "identifier": "MIT",
+    "fixture": "lock_api-0.4.14-LICENSE-MIT.txt"
+  },
+  {
+    "package": "time@0.3.55",
+    "ecosystem": "cargo",
+    "artifact_filename": "time-0.3.55.crate",
+    "artifact_sha256": "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134",
+    "artifact_url": "https://static.crates.io/crates/time/time-0.3.55.crate",
+    "member": "time-0.3.55/LICENSE-MIT",
+    "raw_sha256": "2537228d9a1b44a5dc595241349cae7090b326c8de165aaf89bfddef4a00d0fc",
+    "normalized_sha256": "a8f60d2a6461811c1f38b179a651379ea28ec38b6158314a957e372a3b93f91a",
+    "identifier": "MIT",
+    "fixture": "time-0.3.55-LICENSE-MIT.txt"
+  },
+  {
+    "package": "bytemuck@1.25.2",
+    "ecosystem": "cargo",
+    "artifact_filename": "bytemuck-1.25.2.crate",
+    "artifact_sha256": "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797",
+    "artifact_url": "https://static.crates.io/crates/bytemuck/bytemuck-1.25.2.crate",
+    "member": "bytemuck-1.25.2/LICENSE-MIT",
+    "raw_sha256": "9df9ba60a11af705f2e451b53762686e615d86f76b169cf075c3237730dbd7e2",
+    "normalized_sha256": "bbb0c7a72cdfa383f0a62db4e19033942ed3f909eac4e865334e22e1c0a17c92",
+    "identifier": "MIT",
+    "fixture": "bytemuck-1.25.2-LICENSE-MIT.txt"
+  },
+  {
+    "package": "hashbrown@0.16.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "hashbrown-0.16.1.crate",
+    "artifact_sha256": "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100",
+    "artifact_url": "https://static.crates.io/crates/hashbrown/hashbrown-0.16.1.crate",
+    "member": "hashbrown-0.16.1/LICENSE-MIT",
+    "raw_sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+    "normalized_sha256": "7e1f7cb813ec8afdb27afbb7162b48874c3f6c5b55f2affcbc5f4c132d8861c4",
+    "identifier": "MIT",
+    "fixture": "hashbrown-0.16.1-LICENSE-MIT.txt"
+  },
+  {
+    "package": "heck@0.5.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "heck-0.5.0.crate",
+    "artifact_sha256": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea",
+    "artifact_url": "https://static.crates.io/crates/heck/heck-0.5.0.crate",
+    "member": "heck-0.5.0/LICENSE-MIT",
+    "raw_sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+    "normalized_sha256": "d1442c3bc874608ba5ed80a044a1f7aa115565c30214e2e4ef8563acf0309d39",
+    "identifier": "MIT",
+    "fixture": "heck-0.5.0-LICENSE-MIT.txt"
+  },
+  {
+    "package": "jni-sys@0.3.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "jni-sys-0.3.1.crate",
+    "artifact_sha256": "41a652e1f9b6e0275df1f15b32661cf0d4b78d4d87ddec5e0c3c20f097433258",
+    "artifact_url": "https://static.crates.io/crates/jni-sys/jni-sys-0.3.1.crate",
+    "member": "jni-sys-0.3.1/LICENSE-MIT",
+    "raw_sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
+    "normalized_sha256": "f416d58a13d825df923c71e898567758b3f595c706a9b5da23abfbd94737dcc7",
+    "identifier": "MIT",
+    "fixture": "jni-sys-0.3.1-LICENSE-MIT.txt"
+  },
+  {
+    "package": "memchr@2.8.3",
+    "ecosystem": "cargo",
+    "artifact_filename": "memchr-2.8.3.crate",
+    "artifact_sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
+    "artifact_url": "https://static.crates.io/crates/memchr/memchr-2.8.3.crate",
+    "member": "memchr-2.8.3/LICENSE-MIT",
+    "raw_sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+    "normalized_sha256": "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf",
+    "identifier": "MIT",
+    "fixture": "memchr-2.8.3-LICENSE-MIT.txt"
   }
 ]
