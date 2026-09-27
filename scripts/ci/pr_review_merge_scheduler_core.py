@@ -1105,9 +1105,12 @@ def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) ->
         return
 
     max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(prs))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
         for _ in executor.map(complete, prs):
             pass
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def complete_paginated_pr_contexts(repo: str, pr: dict[str, Any]) -> None:
@@ -1444,11 +1447,14 @@ def fetch_open_prs_rest(
         prs.extend(rest_pr_node(repo, pr) for pr in selected_prs)  # pragma: no cover
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(selected_prs))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             # Keep original API sort order while hydrating only the selected window.
             prs.extend(
                 list(executor.map(lambda pr: rest_pr_node(repo, pr), selected_prs))
             )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     return prs
 
 
@@ -1594,9 +1600,12 @@ def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
         return
 
     max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(mergeable_candidates))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
         for _ in executor.map(enrich, mergeable_candidates):
             pass
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def effective_merge_state(pr: dict[str, Any]) -> str:
@@ -2044,8 +2053,11 @@ def resolve_outdated_review_threads(pr: dict[str, Any], *, dry_run: bool) -> int
             resolve_review_thread(thread_id)  # pragma: no cover
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(thread_ids))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             list(executor.map(resolve_review_thread, thread_ids))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     return len(thread_ids)
 
 
@@ -3439,8 +3451,11 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
         results = [cancel_one(str(run_ids[0]))]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_ids))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # A cancelled run is no longer queued/in_progress; drop any cached
     # active_workflow_runs snapshot so the next read (this same PR's later
@@ -3566,8 +3581,11 @@ def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> lis
         results = [cancel_one(run_id) for run_id in candidates]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(candidates))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             results = list(executor.map(cancel_one, candidates))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     return [run_id for run_id in results if run_id is not None]
 
 
@@ -3593,8 +3611,11 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
         results = [cancel_one(run_ref) for run_ref in stale_refs]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(stale_refs))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             results = list(executor.map(cancel_one, stale_refs))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     return [run_id for run_id in results if run_id is not None]
 
 
@@ -3682,8 +3703,11 @@ def _cancel_revalidated_review_run_refs(
         outcomes = [cancel_one(run_refs[0])]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_refs))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             outcomes = list(executor.map(cancel_one, run_refs))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     preserved = [run_ref for state, run_ref in outcomes if state == "preserved"]
     cancelled = [run_ref for state, run_ref in outcomes if state == "cancelled"]
     return preserved, cancelled

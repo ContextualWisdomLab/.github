@@ -1659,6 +1659,9 @@ def test_enrich_rest_mergeable_states_uses_bounded_executor_for_multiple_prs(mon
         def map(self, func, items):
             return [func(item) for item in items]
 
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
+
     monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
     monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
     monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
@@ -1700,6 +1703,9 @@ def test_enrich_rest_mergeable_states_enriches_only_non_draft_prs_in_mixed_batch
         def map(self, func, items):
             return [func(item) for item in items]
 
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
+
     monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
     monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
     monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
@@ -1734,6 +1740,9 @@ def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_thre
 
         def map(self, func, items):
             return [func(item) for item in items]
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
 
     monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
     resolved = []
@@ -1771,6 +1780,9 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
 
         def map(self, func, items):
             return [func(item) for item in items]
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
 
     monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
     monkeypatch.setattr(
