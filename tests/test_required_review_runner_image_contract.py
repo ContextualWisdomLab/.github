@@ -36,6 +36,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Require every Noema Review job to use explicit Ubuntu 24.04."""
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')"), 5)
         self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 5)
         self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 5)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
@@ -70,6 +71,7 @@ if __name__ == "__main__":
 def test_codeql_pr_routes_only_explicit_repositories_to_existing_trusted_group() -> None:
     """Central and gateway callers reuse workers; every other caller keeps hosted access."""
     workflow = Path(".github/workflows/codeql-pr.yml").read_text()
+    assert workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')") == 3
     assert workflow.count('"group":"CWL MCP remediation"') == 3
     assert workflow.count("github.repository == 'ContextualWisdomLab/.github'") == 3
     assert workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'") == 3
