@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "767e67fbc6b881a452761f32abb69b9971b9b03b"
+ORCH_PIN_SHA = "01bf92a3ec67a0e1f9b68978eb16b60301e985fd"
 
 
 def _read(path: Path) -> str:
@@ -397,6 +397,9 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     """The exact vendored SHA must enforce the review limit at its HTTP boundary."""
     text = _read(SIDECAR)
+    assert text.index("faulthandler.enable()") < text.index(
+        "from contextual_orchestrator.server import SecurityConfig, build_server"
+    )
     assert "from contextual_orchestrator.server import SecurityConfig, build_server" in text
     assert '"POST",' in text
     assert '"/v1/chat/completions",' in text
@@ -437,7 +440,7 @@ def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
     assert f'"model": "{GATEWAY_MODEL}"' in config
     assert f'"small_model": "{GATEWAY_MODEL}"' in config
     assert '"enabled_providers": ["contextual-orchestrator"' in config
-    assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in config
+    assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1"' in config
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
     assert '"orchestrator/free": {' in config
 
@@ -585,3 +588,49 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
         "Provision contextual-orchestrator Strix sidecar"
     )
     assert "STRIX_FALLBACK_MODELS: \"\"" in workflow
+
+
+def test_sidecar_uses_lock_compatible_isolated_python() -> None:
+    """Every entry point provisions the wheel ABI before an isolated installation."""
+    text = _read(SIDECAR)
+    guard = text.index('sys.version_info[:2] == (3, 12)')
+    venv = text.index('"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"')
+    select = text.index('sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"')
+    install = text.index('"$sidecar_python" -m pip install')
+    assert guard < venv < select < install
+    for path in (STRIX_WORKFLOW, NOEMA_WORKFLOW, OPENCODE_DISPATCH_WORKFLOW,
+                 AUTOFIX_WORKFLOW, _ORG_REPO_ROOT / ".github/actions/orchestrator-free-sidecar/action.yml"):
+        workflow = _read(path)
+        setup = workflow.index("Set up lock-compatible sidecar Python")
+        call = workflow.index("contextual_orchestrator_review_sidecar.sh")
+        assert setup < call
+        assert 'python-version: "3.12"' in workflow[setup:call]
+        assert 'update-environment: false' in workflow[setup:call]
+        assert 'SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}' in workflow[setup:call]
+
+
+def test_sidecar_selects_matching_shared_python_library(tmp_path) -> None:
+    """A stale consumer library path must not select another CPython runtime."""
+    selected = tmp_path / "selected"
+    executable = selected / "bin" / "python"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    link = tmp_path / "python"
+    link.symlink_to(executable)
+    library = selected / "lib"
+    library.mkdir()
+    shared = library / "libpython3.12.so.1.0"
+    text = _read(SIDECAR)
+    prefix = text[text.index('sidecar_python="'):text.index("\nlog()")]
+    for present in (False, True):
+        if present:
+            shared.touch()
+        result = subprocess.run(
+            ["bash", "-c", prefix + '\nprintf "%s" "$LD_LIBRARY_PATH"'],
+            env={"PATH": os.environ["PATH"], "SIDECAR_PYTHON": str(link),
+                 "LD_LIBRARY_PATH": "/consumer/python/lib"},
+            text=True, capture_output=True, check=True,
+        )
+        expected = f"{library}:/consumer/python/lib" if present else "/consumer/python/lib"
+        assert result.stdout == expected
