@@ -118,6 +118,9 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
     "e4d81631c40aa04e87d3aea8b865656c1df7492065b8bb5e554e970bb554369b": frozenset({"MIT-Khronos-old"}),
+    "8f72d5c064d14be72fec620de870829302a49c0e09bb39e7c96780abfe63b307": frozenset({"MIT"}),
+    "3205929a91448102764fa620a252e25abb6993e9afe7cb6bd4caed8895e13aae": frozenset({"MIT"}),
+    "105203a621bb4c0886ffcff5770891778376d1e6b0aefb349d9043fc7021064c": frozenset({"MIT"}),
     "1834e4a70e47109cc013a1fa4f34cb0e5b32753be1247a116ec1f1357b87115f": frozenset({"MIT"}),
     "31ce8f08175a050da22857e3025c81328801ade3d9240b55ab6f963741d839fa": frozenset({"Unicode-DFS-2016"}),
     "721c9cd49fb542eae9ebe064ff9dfdf54a85072c40ca18a3e19b8d35182c8ead": frozenset({"MIT"}),

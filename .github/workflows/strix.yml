@@ -192,16 +192,88 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write
     outputs:
       admitted: ${{ steps.admission.outputs.admitted }}
       target_repository: ${{ steps.admission.outputs.target_repository }}
       pr_number: ${{ steps.admission.outputs.pr_number }}
     steps:
+      - name: Exchange OpenCode app token for Strix target repository metadata reads
+        id: metadata_read_app_token
+        if: >-
+          github.event_name == 'repository_dispatch'
+          && github.event.client_payload.target_repository != ''
+          && github.event.client_payload.target_repository != github.repository
+          && startsWith(github.event.client_payload.target_repository, format('{0}/', github.repository_owner))
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! oidc_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].value | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$oidc_response")"; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! app_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].token | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$token_response")"; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Verify event metadata against the live pull request
         id: admission
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_REPOSITORY_OWNER: ${{ github.repository_owner }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
           TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number || github.event.pull_request.number }}
           EXPECTED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || github.event.pull_request.base.ref }}
@@ -225,6 +297,11 @@ jobs:
             [[ ! "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Strix event metadata is incomplete or malformed."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "repository_dispatch" ] &&
+            [ "${TARGET_REPOSITORY%%/*}" != "$EXPECTED_REPOSITORY_OWNER" ]; then
+            echo "::error::Strix dispatch target is outside the workflow repository owner."
             exit 1
           fi
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"

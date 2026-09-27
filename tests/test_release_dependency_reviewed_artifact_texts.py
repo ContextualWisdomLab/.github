@@ -84,17 +84,17 @@ def test_allocator_dual_licence_uses_both_actual_archive_texts():
 
 
 @pytest.mark.parametrize("row", [r for r in json.loads((ROOT / "reference_provenance.json").read_text())
-                                  if r["package"].startswith("android_system_properties@")],
+                                  if r["package"].startswith(("android_system_properties@", "shlex@"))],
                          ids=lambda row: row["package"])
 @pytest.mark.parametrize("mutation", [None, "no-mit", "notice-only", "changed-notice",
                                       "apache-choice", "pypi", "and-expression", "no-choice"])
-def test_android_apache_notice_does_not_supply_a_full_grant(row, mutation):
+def test_apache_notice_does_not_supply_a_full_grant(row, mutation):
     text = TEXTS[row["fixture"]]
     assert hashlib.sha256(text.encode()).hexdigest() == row["raw_sha256"]
     normalized = re.sub(r"[ \t\r\n]+", " ", text).strip(" \t\r\n")
     assert hashlib.sha256(normalized.encode()).hexdigest() == row["normalized_sha256"]
     assert policy.recognize_license_text(text) is None
-    texts = {"LICENSE-MIT": TEXTS["android_system_properties-0.1.6-LICENSE-MIT.txt"],
+    texts = {"LICENSE-MIT": TEXTS[row.get("required_grant_fixture", "android_system_properties-0.1.6-LICENSE-MIT.txt")],
              "LICENSE-APACHE": text}
     if mutation in {"no-mit", "notice-only"}:
         del texts["LICENSE-MIT"]
