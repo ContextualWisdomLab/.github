@@ -1,9 +1,10 @@
 """Actual artifact license bytes exercise the same dependency consumer."""
 
+import base64
 import hashlib
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
@@ -188,7 +189,7 @@ def test_regex_unicode_grant_remains_an_independent_obligation(mutation):
                                       "missing-bsd", "missing-mit-source", "changed-source", "changed-package",
                                       "checksum", "subject", "pypi", "extra-denied"])
 def test_libm_complete_source_members_preserve_independent_notices(mutation):
-    raw = (ROOT / "libm-0.2.16.crate").read_bytes()
+    raw = base64.b64decode((ROOT / "libm-0.2.16.crate").with_suffix(".crate.b64").read_bytes().strip(), validate=True)
     assert hashlib.sha256(raw).hexdigest() == "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
     evidence = gate.archive_license_evidence(raw, "cargo")
     evidence.update(ecosystem="cargo", license="MIT")
@@ -251,10 +252,15 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
 def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, package, version, repository, upstream_commit):
     import os
     import subprocess
-    from tests.test_release_dependency_gate import build_capture, _cargo_evidence, _write
+
+    from tests.test_release_dependency_gate import (
+        _cargo_evidence,
+        _write,
+        build_capture,
+    )
 
     capture = build_capture(tmp_path / "capture")
-    raw = (ROOT / f"{package}-{version}.crate").read_bytes()
+    raw = base64.b64decode((ROOT / f"{package}-{version}.crate").with_suffix(".crate.b64").read_bytes().strip(), validate=True)
     archive_sha = hashlib.sha256(raw).hexdigest()
     source = (tmp_path / "source").resolve()
     source.mkdir()
@@ -347,7 +353,7 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
 @pytest.mark.parametrize("mutation", [None, "apache-only", "missing-input-grant", "changed-input-grant"])
 def test_spirv_generated_input_obligation_is_independent(mutation):
     """A complete Apache grant cannot replace the generated-input grant."""
-    raw = (ROOT / "spirv-0.4.0+sdk-1.4.341.0.crate").read_bytes()
+    raw = base64.b64decode((ROOT / "spirv-0.4.0+sdk-1.4.341.0.crate").with_suffix(".crate.b64").read_bytes().strip(), validate=True)
     evidence = {**gate.archive_license_evidence(raw, "cargo"), "ecosystem": "cargo", "license": "Apache-2.0"}
     evidence["license_texts"] = {"upstream/Apache": TEXTS["spirv-upstream-APACHE.txt"],
                                "upstream/Khronos": TEXTS["spirv-Khronos-applicable-grant.txt"]}

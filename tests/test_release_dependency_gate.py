@@ -7,6 +7,7 @@ stable machine-readable codes, never on prose.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -1213,7 +1214,7 @@ def test_rust_source_candidate_requires_explicit_license_declaration(declared):
     ("6.0.0", "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"),
 ])
 def test_actual_r_efi_authors_is_hash_bound_and_denied(version, digest):
-    raw = (Path(__file__).parent / "fixtures/release_license_texts" / f"r-efi-{version}.crate").read_bytes()
+    raw = base64.b64decode((Path(__file__).parent / "fixtures/release_license_texts" / f"r-efi-{version}.crate").with_suffix(".crate.b64").read_bytes().strip(), validate=True)
     assert hashlib.sha256(raw).hexdigest() == digest
     evidence = gate.archive_license_evidence(raw, "cargo")
     member = f"r-efi-{version}/AUTHORS"
