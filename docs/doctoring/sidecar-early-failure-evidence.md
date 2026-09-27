@@ -26,8 +26,14 @@ occurred before log/preflight initialization and could leave older discovery,
 catalog, policy, and log files in a reused self-hosted workspace.
 
 Only these producer-owned outputs and staging reports are reset. Unrelated workspace files are
-preserved, symbolic links or non-regular output paths fail closed, and file creation
-keeps the private umask inside a subshell. Empty reports mean unavailable
+preserved, linked workspaces and symbolic links or non-regular output paths
+fail closed before directory creation or permission changes. Each reset creates
+a private temporary file in the output's directory and uses GNU `mv -fT` to
+replace the path atomically. Existing hard links retain their previous inode;
+resetting evidence cannot truncate their other targets. A link substituted after
+validation is replaced rather than followed. Failed replacement removes the
+temporary file and fails closed. File creation keeps the private umask inside a
+subshell. Empty reports mean unavailable
 current evidence; they are not successful readiness or model evidence.
 No provider route, model deadline, credential authority, or runner policy changes.
 
@@ -37,8 +43,11 @@ No provider route, model deadline, credential authority, or runner policy change
 pre-seeded older outputs. Credential failure and dependency failure must leave
 all six outputs and three staging reports empty. Launcher failure must not
 re-publish older staging data. Linked evidence outputs, staging reports, or
-work directories must fail without modifying their targets; unrelated files
-must survive. The credential, dependency, and launcher cases failed before
+work directories and workspace roots must fail without modifying their targets;
+unrelated files must survive. Hard-linked evidence and staging outputs must be
+replaced without changing the outside file. A controlled link substitution
+between validation and replacement proves the real GNU move does not follow it.
+The credential, dependency, and launcher cases failed before
 the staging repair and pass afterward.
 
 ## Standard-library log-filter startup

@@ -1,6 +1,7 @@
 """Early sidecar failures cannot publish a previous job's evidence."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ OWNED = (
 )
 
 
-@pytest.mark.parametrize("failure", ["credentials", "dependencies", "launcher", "symlink", "staging-symlink", "work-symlink"])
+@pytest.mark.parametrize("failure", ["credentials", "dependencies", "launcher", "symlink", "staging-symlink", "work-symlink", "workspace-symlink", "hardlink", "staging-hardlink", "replacement-symlink", "replacement-directory"])
 def test_early_failure_resets_owned_evidence_without_touching_other_files(tmp_path, failure):
     """Run the real shell, preserve an unrelated file and reject linked outputs."""
     workspace = tmp_path / "workspace"
@@ -33,6 +34,13 @@ def test_early_failure_resets_owned_evidence_without_touching_other_files(tmp_pa
     if failure == "symlink":
         (evidence / OWNED[0]).unlink()
         (evidence / OWNED[0]).symlink_to(outside)
+    if failure == "hardlink":
+        (evidence / OWNED[0]).unlink()
+        (evidence / OWNED[0]).hardlink_to(outside)
+    if failure == "workspace-symlink":
+        linked = tmp_path / "linked-workspace"
+        workspace.rename(linked)
+        workspace.symlink_to(linked, target_is_directory=True)
     staging = tmp_path / "temp" / "contextual-orchestrator-review"
     staging.mkdir(parents=True)
     staging_names = ("discovery-free.json", "agents.review.json", "policy-report.json")
@@ -41,6 +49,9 @@ def test_early_failure_resets_owned_evidence_without_touching_other_files(tmp_pa
     if failure == "staging-symlink":
         (staging / staging_names[0]).unlink()
         (staging / staging_names[0]).symlink_to(outside)
+    if failure == "staging-hardlink":
+        (staging / staging_names[0]).unlink()
+        (staging / staging_names[0]).hardlink_to(outside)
     if failure == "work-symlink":
         linked = tmp_path / "linked-work"
         staging.rename(linked)
@@ -61,6 +72,20 @@ elif [ "$3" = "rev-parse" ]; then
 fi
 ''',
     }
+    # The production runner is Linux; use installed GNU mv for its -T contract.
+    native_mv = shutil.which("gmv") or shutil.which("mv")
+    scripts["mv"] = f'#!/bin/sh\nexec "{native_mv}" "$@"\n'
+    if failure in {"replacement-symlink", "replacement-directory"}:
+        substitute = f'ln -s "{outside}" "$target"' if failure == "replacement-symlink" else 'mkdir "$target"'
+        scripts["mv"] = f'''#!/bin/sh
+for target; do :; done
+if [ "$target" = "{evidence / OWNED[0]}" ]; then
+  rm -f "$target"
+  {substitute}
+  touch "{tmp_path / 'replacement-race'}"
+fi
+exec "{native_mv}" "$@"
+'''
     if failure == "launcher":
         scripts["python3"] = f'''#!/bin/sh
 case "$1" in
@@ -95,17 +120,35 @@ exit 0
         (bin_dir / "sitecustomize.py").write_text(
             f"from pathlib import Path; Path({str(startup_marker)!r}).write_text('unexpected site startup')\n")
         env["PYTHONPATH"] = str(bin_dir)
+    directory_modes = {directory: directory.stat().st_mode for directory in (workspace, evidence, staging)}
     result = subprocess.run(["bash", str(ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh")],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
     assert sentinel.read_text() == "preserve me"
     assert outside.read_text() == "outside data"
-    if "symlink" in failure:
+    if failure == "replacement-directory":
+        assert "cannot replace sidecar evidence output" in result.stderr
+        assert result.returncode == 1
+        assert (tmp_path / "replacement-race").exists()
+        assert (evidence / OWNED[0]).is_dir()
+        assert all((evidence / name).read_text() == "previous job evidence" for name in OWNED[1:])
+        assert not list(evidence.glob(".*.??????"))
+    elif "symlink" in failure and failure != "replacement-symlink":
         assert "symbolic link" in result.stderr
+        if failure in {"work-symlink", "workspace-symlink"}:
+            assert all(directory.stat().st_mode == mode for directory, mode in directory_modes.items())
+        if failure == "workspace-symlink":
+            assert all((evidence / name).read_text() == "previous job evidence" for name in OWNED)
+            assert all((staging / name).read_text() == "previous job evidence" for name in staging_names)
     else:
         assert all((evidence / name).read_text() == "" for name in OWNED)
         assert all((staging / name).read_text() == "" for name in staging_names)
-        assert result.returncode == (37 if failure == "dependencies" else 1)
+        assert all((evidence / name).stat().st_mode & 0o777 == 0o600 for name in OWNED)
+        assert not list(evidence.glob(".*.??????"))
+        assert not list(staging.glob(".*.??????"))
+        if failure == "replacement-symlink":
+            assert (tmp_path / "replacement-race").exists()
+        assert result.returncode == (1 if failure in {"credentials", "launcher"} else 37)
         if failure == "launcher":
             assert "sidecar exited before healthz (status 37)" in result.stderr
             assert not startup_marker.exists()

@@ -58,6 +58,9 @@ fail() { log "error: $*" >&2; exit 1; }
 if [ -L "$ORCHESTRATOR_WORK" ]; then
   fail "sidecar work directory must not be a symbolic link"
 fi
+if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -L "$GITHUB_WORKSPACE" ]; then
+  fail "sidecar workspace must not be a symbolic link"
+fi
 if [ -L "$STRIX_EVIDENCE_DIR" ]; then
   fail "Strix evidence directory must not be a symbolic link"
 fi
@@ -82,7 +85,12 @@ for evidence_file in \
   if [ -L "$evidence_file" ] || { [ -e "$evidence_file" ] && [ ! -f "$evidence_file" ]; }; then
     fail "sidecar evidence output must be a regular file, never a symbolic link"
   fi
-  (umask 077; : > "$evidence_file")
+  evidence_tmp="$(umask 077; mktemp "${evidence_file%/*}/.${evidence_file##*/}.XXXXXX")" ||
+    fail "cannot prepare sidecar evidence output"
+  if ! mv -fT -- "$evidence_tmp" "$evidence_file"; then
+    rm -f -- "$evidence_tmp"
+    fail "cannot replace sidecar evidence output"
+  fi
 done
 
 # Require at least one of the five provider secrets so we never boot an empty
