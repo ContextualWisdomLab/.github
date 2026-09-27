@@ -607,3 +607,30 @@ def test_sidecar_uses_lock_compatible_isolated_python() -> None:
         assert 'python-version: "3.12"' in workflow[setup:call]
         assert 'update-environment: false' in workflow[setup:call]
         assert 'SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}' in workflow[setup:call]
+
+
+def test_sidecar_selects_matching_shared_python_library(tmp_path) -> None:
+    """A stale consumer library path must not select another CPython runtime."""
+    selected = tmp_path / "selected"
+    executable = selected / "bin" / "python"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    link = tmp_path / "python"
+    link.symlink_to(executable)
+    library = selected / "lib"
+    library.mkdir()
+    shared = library / "libpython3.12.so.1.0"
+    text = _read(SIDECAR)
+    prefix = text[text.index('sidecar_python="'):text.index("\nlog()")]
+    for present in (False, True):
+        if present:
+            shared.touch()
+        result = subprocess.run(
+            ["bash", "-c", prefix + '\nprintf "%s" "$LD_LIBRARY_PATH"'],
+            env={"PATH": os.environ["PATH"], "SIDECAR_PYTHON": str(link),
+                 "LD_LIBRARY_PATH": "/consumer/python/lib"},
+            text=True, capture_output=True, check=True,
+        )
+        expected = f"{library}:/consumer/python/lib" if present else "/consumer/python/lib"
+        assert result.stdout == expected
