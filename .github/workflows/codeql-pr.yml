@@ -153,6 +153,7 @@ jobs:
     # closed PRs need no required check.
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     permissions:
+      actions: read
       contents: read
       id-token: write
       pull-requests: read
@@ -237,7 +238,13 @@ jobs:
 
           expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
           expected_job="CodeQL dispatch scan (${LANGUAGE})"
-          runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
+          # A dispatch bound to this required run cannot predate its creation.
+          required_created_at="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}" --jq .created_at)"
+          if ! [[ "$required_created_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::error::Could not validate required run creation time before CodeQL verdict lookup."
+            exit 1
+          fi
+          runs_json="$(gh api --method GET --paginate --slurp -f per_page=100 -f event=repository_dispatch -f created=">=${required_created_at}" "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
           run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
             [
               .[] | .workflow_runs[]
