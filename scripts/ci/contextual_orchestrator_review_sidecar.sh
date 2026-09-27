@@ -43,7 +43,7 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 # equivalence relation.
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
-sidecar_python="$(command -v python3)"
+sidecar_python="${SIDECAR_PYTHON:-$(command -v python3)}"
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
@@ -101,6 +101,10 @@ requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
 if [ ! -f "$requirements_lock" ]; then
   fail "vendored orchestrator is missing its hash-pinned requirements.lock"
 fi
+# The pinned lock includes CPython 3.12 wheels; isolate them from consumer runtimes.
+"$sidecar_python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else "sidecar requires Python 3.12 for its pinned wheel hashes")'
+"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"
+sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   --require-hashes \
