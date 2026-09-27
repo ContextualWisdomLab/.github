@@ -49,7 +49,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
         self.assertEqual(workflow.count('"cwlab-control"'), 4)
-        review = workflow.split("\n  noema-review:\n", 1)[1].split("\n  noema-transport-redispatch:\n", 1)[0]
+        review = workflow.split("\n  noema-review:\n", 1)[1].split("\n  continue-noema-transport:\n", 1)[0]
         self.assertNotIn("cwlab-control", review)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:

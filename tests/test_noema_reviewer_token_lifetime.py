@@ -16,9 +16,9 @@ def _step_block(text: str, name: str) -> str:
     marker = f"      - name: {name}\n"
     start = text.index(marker)
     next_step = text.find("\n      - name: ", start + len(marker))
-    next_job = text.find("\n  noema-transport-redispatch:\n", start + len(marker))
-    end = min((pos for pos in (next_step, next_job) if pos >= 0), default=len(text))
-    return text[start:end]
+    next_job = text.find("\n  continue-noema-transport:\n", start + len(marker))
+    ends = [end for end in (next_step, next_job) if end >= 0]
+    return text[start:min(ends)] if ends else text[start:]
 
 
 def test_noema_remints_repository_scoped_app_token_after_model_before_publication() -> None:
