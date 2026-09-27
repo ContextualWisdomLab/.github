@@ -89,6 +89,25 @@ the existing review, or merges until a new exact-head OpenCode approval exists.
 
 ## Do-not-merge and DIRTY / CONFLICTING repair
 
+## Zero-diff cleanup requires lineage evidence
+
+The scheduler does not close a non-draft pull request solely because the fresh
+base-to-head comparison reports zero changed files. Before that destructive
+cleanup, it reads the complete pull-request commit lineage and each commit's
+changed-file list. Missing, truncated, malformed, or non-empty lineage fails
+closed to a wait decision. This preserves a valid unmerged delta when a later
+forward commit reverted it without a verified successor inheriting the work.
+
+## Strix findings require source-tree location evidence
+
+Strix vulnerability findings are not authoritative merely because a report
+contains a non-zero count. Every cited `path:start-end` range must resolve to a
+regular file in the scanned tree and remain within that file's line count. If
+all reported ranges are out of range, the gate records typed model
+inconsistency and remains non-passing so the configured fallback can run. A
+report mixing valid and invalid ranges remains a blocking security result; no
+finding is silently discarded.
+
 The `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs. GitHub cannot synthesize a safe conflict resolution for
 the author, so the merge scheduler must give the author a repair path instead
