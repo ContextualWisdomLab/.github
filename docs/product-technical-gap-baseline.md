@@ -3545,3 +3545,20 @@ passed; all 17,144 production statements and 6,982 branches are covered. This
 closes the repository coverage Gap but is not merge authorization: the release
 stack remains Draft/Proposed until fresh exact-head hosted Checks reach terminal
 success and a qualifying independent review approves the unchanged head.
+
+The subsequent native-inspection continuation exposed a new exact-tree
+coverage Gap rather than inheriting predecessor evidence. Runtime wheels and
+build-interpreter snapshots now pass every admitted native member through the
+pinned `llvm-readobj-18` boundary, but the first full run on that source left
+six prescreener statements/four partial branches and one release-gate
+statement/one partial branch uncovered. The RED suite still passed 4,033 tests,
+8 skips, and 40 subtests, while `coverage report --fail-under=100` correctly
+failed at 99%. The repair adds fail-closed cases for directory members,
+analyzer reuse/failure, oversized native files, receipt omissions, unknown
+runtime dynamic links, and malformed static-link records. The exact repaired
+tree is 4,037 passed, 8 skipped, and 40 subtests passed with all 17,186
+production statements and 7,000 branches covered. Context Map ownership stays
+in the central release-control gate; consumer repositories receive only its
+immutable released workflow contract. Status remains Proposed/Draft and release
+admission remains HOLD until fresh exact-head hosted Checks and a qualifying
+independent approval complete.

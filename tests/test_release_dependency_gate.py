@@ -535,6 +535,24 @@ def test_red_missing_native_link_inventory(tmp_path: Path) -> None:
         gate.gate(capture)
 
 
+def test_red_malformed_static_archive_inventory(tmp_path: Path) -> None:
+    """A static-link entry must be a structured, attributable license record."""
+    capture = build_capture(
+        tmp_path,
+        python_evidence=_python_evidence(
+            native_libraries=[
+                {
+                    "path": "greenlib/_speed.so",
+                    "needed": [],
+                    "static_archives": ["libunknown.a"],
+                }
+            ]
+        ),
+    )
+    with pytest.raises(gate.GateError, match="static_archives entry must be an object"):
+        gate.gate(capture)
+
+
 def test_declared_dynamic_link_target_is_recorded(tmp_path: Path) -> None:
     """A declared, permissive bundled library passes and is recorded in provenance."""
     capture = build_capture(
