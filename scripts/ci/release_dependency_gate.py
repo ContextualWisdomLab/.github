@@ -1812,6 +1812,7 @@ def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
             raise GateError(CAPTURE_INCOMPLETE, "Cargo source checkout cannot be bound") from error
 
     def source_blob(path: Path) -> bytes:
+        """Read a regular Cargo declaration matching the selected Git commit."""
         try:
             relative = path.relative_to(bound_root)
             if any((bound_root / parent).is_symlink() for parent in (relative, *relative.parents)):
@@ -2093,6 +2094,7 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
         raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
 
     def blob(path: str) -> bytes:
+        """Read a size-bounded, regular notice blob from the selected Git commit."""
         entry = subprocess.check_output(
             ["git", "-C", str(source), "ls-tree", source_sha, "--", path], text=True)
         if not entry.startswith("100644 blob "):
