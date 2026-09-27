@@ -17,13 +17,15 @@ from typing import Any, Mapping
 
 try:
     from scripts.ci import release_dependency_gate as gate
-    from scripts.ci.scan_release_native_links import NATIVE_MAGIC, _links, _reader
-    from scripts.ci.verify_release_distribution_set import _json_bytes
+    from scripts.ci.scan_release_native_links import NATIVE_MAGIC, TARGET_ARCHES, _links, _reader
+    from scripts.ci.verify_release_distribution_set import _json_bytes, DistributionSetError
+    from scripts.ci.verify_release_scope_evidence_set import _runtime_target_architecture
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
-    from scan_release_native_links import NATIVE_MAGIC, _links, _reader
-    from verify_release_distribution_set import _json_bytes
+    from scan_release_native_links import NATIVE_MAGIC, TARGET_ARCHES, _links, _reader
+    from verify_release_distribution_set import _json_bytes, DistributionSetError
+    from verify_release_scope_evidence_set import _runtime_target_architecture
 
 
 def _native_wheel_libraries(
@@ -83,7 +85,15 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
     if not isinstance(packages, list) or not packages:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: build packages are missing")
     target = "x86_64-unknown-linux-gnu" if leg == "sdist" else leg.rsplit("-py", 1)[0]
-    native_rows = _native_wheel_libraries(snapshot_bytes, target)
+    if target == "universal2-apple-darwin":
+        build_env = receipt.get("build_env")
+        architecture = {"ARM64": "aarch64", "X64": "x86_64"}.get(
+            build_env.rsplit("/", 1)[-1] if isinstance(build_env, str) else "")
+        if architecture is None:
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: build interpreter architecture is missing")
+    else:
+        architecture = next(iter(TARGET_ARCHES[target]))
+    native_rows = _native_wheel_libraries(snapshot_bytes, target, required_architecture=architecture)
     listed_native = {f"{package['name']}/{file['path']}" for package in packages
                      for file in package["files"]}
     if any(row["path"] not in listed_native for row in native_rows):
@@ -290,7 +300,22 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                 or not isinstance(item.get("archives"), list)):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
         leg = item["leg"]
-        variant_architecture = str(item["arch"]) if variant else None
+        if leg != "sdist" and leg.rpartition("-py")[0] not in TARGET_ARCHES:
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
+        runtime_architecture = None
+        if leg != "sdist":
+            runtime_name = f"{leg}.runtime.json"
+            runtime_path = gate._require_regular_file(root / item["artifact_name"] / runtime_name,
+                                                      gate.SCOPE_UNVERIFIABLE)
+            if runtime_path.stat().st_size > 1024 * 1024:
+                raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: runtime receipt is oversized")
+            runtime_bytes = runtime_path.read_bytes()
+            if item.get("members", {}).get(runtime_name) != hashlib.sha256(runtime_bytes).hexdigest():
+                raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: runtime receipt changed after transport")
+            try:
+                runtime_architecture = _runtime_target_architecture(_json_bytes(runtime_bytes), leg, intel=variant)
+            except DistributionSetError as error:
+                raise gate.GateError(gate.SCOPE_UNVERIFIABLE, str(error)) from error
         if variant:
             seen_variants.add(leg)
         else:
@@ -331,13 +356,9 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
             bound = gate.archive_license_evidence(raw, "pypi")
             if bound["source_sha256"] != sha:
                 raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{key}: licence evidence changed")
-            variant_native_libraries = None
-            if variant:
-                variant_native_libraries = _native_wheel_libraries(
-                    raw,
-                    leg.rsplit("-py", 1)[0],
-                    required_architecture=variant_architecture,
-                )
+            native_libraries = _native_wheel_libraries(
+                raw, leg.rsplit("-py", 1)[0], required_architecture=runtime_architecture,
+            )
             if identity in rows:
                 if leg not in rows[identity]["legs"]:
                     rows[identity]["legs"].append(leg)
@@ -345,9 +366,6 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
             declared = gate.distribution_declared_metadata(path, archive["name"], archive["version"])
             member_names = [member["name"] for member in bound["archive_members"]
                             if member["type"] == "file"]
-            native_libraries = variant_native_libraries
-            if native_libraries is None:
-                native_libraries = _native_wheel_libraries(raw, leg.rsplit("-py", 1)[0])
             evidence = {**declared, **bound,
                         "install_hook_sources": {name: "" for name in member_names
                                                  if name.endswith(("/setup.py", "/build.rs"))},

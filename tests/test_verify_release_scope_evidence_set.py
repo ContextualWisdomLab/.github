@@ -147,8 +147,12 @@ def _case() -> dict:
                           f"package-{index}.dist-info/licenses/LICENSE": MIT_TEXT.encode()})
             runtime = {"source_sha": SOURCE, "leg": leg, "file": distribution["file"],
                        "sha256": distribution["sha256"],
-                       "uv_version": "uv 0.12.5", "python_version": "3.12",
-                       "implementation": "cpython", "sys_platform": "linux", "machine": "x86_64",
+                       "uv_version": "uv 0.12.5", "python_version": leg.rsplit("-py", 1)[1],
+                       "implementation": "cpython",
+                       "sys_platform": {"x86_64-unknown-linux-gnu": "linux", "aarch64-unknown-linux-gnu": "linux",
+                                        "universal2-apple-darwin": "darwin", "x86_64-pc-windows-msvc": "win32"}[target],
+                       "machine": {"x86_64-unknown-linux-gnu": "x86_64", "aarch64-unknown-linux-gnu": "aarch64",
+                                   "universal2-apple-darwin": "arm64", "x86_64-pc-windows-msvc": "AMD64"}[target],
                        "requirements_sha256": "a" * 64, "uv_lock_sha256": "b" * 64,
                        "locked_dependencies": [{"name": "package", "version": str(index)}],
                        "installed": [{"name": "fast-mlsirm", "version": "0.11.4"}],
@@ -272,7 +276,12 @@ def _scope_with_variants(rows: list[dict], root: Path) -> dict:
         name = f"repro-macos-x86-{row['leg']}"
         if not (root / name).exists():
             shutil.copytree(root / row["artifact_name"], root / name)
-        variants.append({**row, "arch": "x86_64", "artifact_name": name})
+        runtime_path = root / name / f"{row['leg']}.runtime.json"
+        runtime = json.loads(runtime_path.read_text())
+        runtime["machine"] = "x86_64"
+        runtime_path.write_text(json.dumps(runtime))
+        members = {**row["members"], runtime_path.name: hashlib.sha256(runtime_path.read_bytes()).hexdigest()}
+        variants.append({**row, "arch": "x86_64", "artifact_name": name, "members": members})
     return {"verified_scope_evidence": rows, "verified_runtime_variants": variants}
 
 
@@ -568,7 +577,7 @@ def test_build_snapshot_refuses_unlisted_native_file(tmp_path: Path, monkeypatch
     receipt = json.loads((folder / f"{leg}.build-first.json").read_text())
     _rewrite_build_snapshot(row, root, members, receipt)
     monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
-    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [])
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": "x86_64", "needed": []}])
 
     with pytest.raises(gate.GateError, match="unlisted native build file"):
         _build_packages(row, folder)
@@ -1490,3 +1499,69 @@ def test_scope_main_refuses_malformed_distribution_report(
 
     with pytest.raises(DistributionSetError, match="distribution report is malformed"):
         scope_module.main()
+
+
+@pytest.mark.parametrize("index,wrong_arch", [(1, "aarch64"), (4, "x86_64"), (7, "x86_64"), (10, "aarch64")])
+def test_primary_native_archives_must_match_runtime_before_credentials(tmp_path, monkeypatch, index, wrong_arch):
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][index])) as artifact:
+        members = {name: artifact.read(name) for name in artifact.namelist()}
+    wheel_name = f"package-{index}.whl"
+    with zipfile.ZipFile(io.BytesIO(members[wheel_name])) as wheel:
+        files = {name: wheel.read(name) for name in wheel.namelist()}
+    raw = _zip({**files, "package/native.so": b"\x7fELFsynthetic"})
+    receipt_name = next(name for name in members if name.endswith(".runtime.json"))
+    receipt = json.loads(members[receipt_name])
+    receipt["archives"][0].update(size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    members[receipt_name] = json.dumps(receipt).encode()
+    members[wheel_name] = raw
+    _repack_scope(case, members, index)
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": wrong_arch, "needed": []}])
+    with pytest.raises(gate.GateError, match="requires .* architecture"):
+        prescreen(_scope_with_variants(selected, root), root)
+
+
+def test_primary_interpreter_cannot_hide_missing_arm_coverage(tmp_path):
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][7])) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    name = next(name for name in members if name.endswith(".runtime.json"))
+    runtime = json.loads(members[name])
+    runtime["machine"] = "x86_64"
+    members[name] = json.dumps(runtime).encode()
+    consumer_name = next(name for name in members if name.endswith(".consumer.json"))
+    consumer = json.loads(members[consumer_name])
+    consumer["installation"]["machine"] = "x86_64"
+    members[consumer_name] = json.dumps(consumer).encode()
+    _repack_scope(case, members, 7)
+    with pytest.raises(DistributionSetError, match="required target architecture"):
+        _verify(case, tmp_path / "scope")
+
+
+@pytest.mark.parametrize("index,correct_arch,wrong_arch", [(4, "aarch64", "x86_64"), (7, "aarch64", "x86_64")])
+def test_build_native_packages_require_the_build_interpreter_architecture(tmp_path, monkeypatch, index, correct_arch, wrong_arch):
+    root, rows = _prescreen_case(tmp_path)
+    row = rows[index - 1]
+    folder = root / row["artifact_name"]
+    snapshot_name = f"{row['leg']}.build-python.zip"
+    with zipfile.ZipFile(folder / snapshot_name) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    binary = b"\x7fELFsynthetic"
+    receipt = json.loads((folder / f"{row['leg']}.build-first.json").read_text())
+    receipt["python_packages"][0]["files"].append(
+        {"path": "pip/native.so", "size": len(binary), "sha256": hashlib.sha256(binary).hexdigest()})
+    receipt["python_packages"][0]["files"].sort(key=lambda file: file["path"])
+    _rewrite_build_snapshot(row, root, {**files, "pip/pip/native.so": binary}, receipt)
+    for build_pass in ("first", "second"):
+        name = f"{row['leg']}.build-{build_pass}.json"
+        (folder / name).write_text(json.dumps(receipt | {"pass": build_pass}))
+        row["members"][name] = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": correct_arch, "needed": []}])
+    assert _build_packages(row, folder)
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": wrong_arch, "needed": []}])
+    with pytest.raises(gate.GateError, match="requires aarch64 architecture"):
+        _build_packages(row, folder)

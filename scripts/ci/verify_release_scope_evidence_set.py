@@ -204,14 +204,33 @@ def _consumer_wheel_evidence(path: Path) -> tuple[dict[str, str], dict[str, str]
     return metadata, extension
 
 
+
+def _runtime_target_architecture(runtime: Any, leg: str, *, intel: bool = False) -> str:
+    """Require the target interpreter, including separate ARM and Intel macOS coverage."""
+    target, separator, python = leg.rpartition("-py")
+    platforms = {"x86_64-unknown-linux-gnu": ("linux", {"x86_64"}),
+                 "aarch64-unknown-linux-gnu": ("linux", {"aarch64"}),
+                 "universal2-apple-darwin": ("darwin", {"x86_64"} if intel else {"arm64"}),
+                 "x86_64-pc-windows-msvc": ("win32", {"AMD64", "x86_64"})}
+    if (not isinstance(runtime, Mapping) or not separator or python not in {"3.12", "3.13", "3.14"}
+            or target not in platforms or intel and target != "universal2-apple-darwin"
+            or runtime.get("implementation") != "cpython" or runtime.get("python_version") != python
+            or runtime.get("sys_platform") != platforms[target][0]
+            or not isinstance(runtime.get("machine"), str)
+            or runtime["machine"] not in platforms[target][1]):
+        raise DistributionSetError(f"{leg}: runtime interpreter differs from required target architecture")
+    return "aarch64" if runtime["machine"] in {"arm64", "aarch64"} else "x86_64"
+
+
 def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Mapping[str, Any],
-                      members: Mapping[str, str]) -> list[dict[str, Any]]:
+                      members: Mapping[str, str], *, intel: bool = False) -> list[dict[str, Any]]:
     runtime = _json_bytes((folder / f"{leg}.runtime.json").read_bytes())
     if (not isinstance(runtime, Mapping) or runtime.get("source_sha") != source_sha
             or runtime.get("leg") != leg
             or runtime.get("file") != distribution.get("file")
             or runtime.get("sha256") != distribution.get("sha256")):
         raise DistributionSetError(f"{leg}: runtime receipt differs from distribution")
+    _runtime_target_architecture(runtime, leg, intel=intel)
     archives = runtime.get("archives")
     expected = {name for name in members if name.endswith(".whl")
                 and name != f"{leg}.consumer.whl"}
@@ -321,7 +340,7 @@ def verify_macos_x86_runtime_set(
                     or runtime.get("uv_version") != "uv 0.12.5"
                     or runtime.get("requirements_sha256") != members[f"{leg}.runtime-requirements.txt"]):
                 raise DistributionSetError(f"{leg}: Intel runtime receipt differs from selected wheel")
-            archives = _runtime_archives(folder, leg, source_sha, row, members)
+            archives = _runtime_archives(folder, leg, source_sha, row, members, intel=True)
             folder.rename(output_dir / name)
         selected.append({"leg": leg, "arch": "x86_64", "artifact_id": artifact_id,
                          "artifact_name": name, "artifact_digest": digest,
