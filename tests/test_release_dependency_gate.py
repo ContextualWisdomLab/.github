@@ -900,7 +900,7 @@ def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path,
     assert not capture.exists()
 
 
-@pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT"])
+@pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"])
 def test_cargo_legacy_pair_keeps_choice_and_text_checks(expression: str) -> None:
     evidence = _cargo_evidence(license_expression=expression)
     subject = "cargo/greencrate@0.1.0"
@@ -920,7 +920,8 @@ def test_cargo_legacy_pair_keeps_choice_and_text_checks(expression: str) -> None
 
 
 @pytest.mark.parametrize("ecosystem,expression", [
-    ("pypi", "MIT/Apache-2.0"), ("cargo", "MIT//Apache-2.0"),
+    ("pypi", "MIT/Apache-2.0"), ("pypi", "Apache-2.0 / MIT"),
+    ("cargo", "MIT//Apache-2.0"),
     ("cargo", "MIT/GPL-3.0-only"), ("cargo", "MIT/Apache-2.0 AND BSD-3-Clause"),
 ])
 def test_legacy_pair_does_not_relax_other_expressions(ecosystem: str, expression: str) -> None:

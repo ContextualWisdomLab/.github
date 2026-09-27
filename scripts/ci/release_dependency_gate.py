@@ -983,7 +983,7 @@ def evaluate_dependency_license(
     # https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields
     # Only this reviewed legacy pair is adapted; SPDX parsing remains strict.
     if evidence.get("ecosystem") == "cargo" and expression in {
-        "MIT/Apache-2.0", "Apache-2.0/MIT"
+        "MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"
     }:
         expression = "MIT OR Apache-2.0"
         source = "Cargo legacy licence pair"
