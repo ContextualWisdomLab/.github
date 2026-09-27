@@ -64,6 +64,12 @@ fi
     if failure == "launcher":
         scripts["python3"] = f'''#!/bin/sh
 case "$1" in
+  -m)
+    if [ "$2" = venv ]; then
+      mkdir -p "$3/bin"
+      cp "$0" "$3/bin/python"
+    fi
+    ;;
   -u) exec "{sys.executable}" "$@" ;;
   */launch_sidecar.py) exit 37 ;;
   -) cat >/dev/null ;;
@@ -95,5 +101,7 @@ exit 0
         assert all((evidence / name).read_text() == "" for name in OWNED)
         assert all((staging / name).read_text() == "" for name in staging_names)
         assert result.returncode == (37 if failure == "dependencies" else 1)
+        if failure == "launcher":
+            assert "sidecar exited before healthz (status 37)" in result.stderr
         if failure == "launcher":
             assert "sidecar exited before healthz (status 37)" in result.stderr
