@@ -3306,6 +3306,11 @@ run_gate_case() {
 	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
 	local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"
 	materialize_trusted_gate_fixture "$trusted_script_dir"
+	if [ "$scenario" = "pr-changed-scope-includes-ci-dependency" ]; then
+		# Consumer source under scan; execution still uses the separate trusted runtime.
+		cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+		cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	fi
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'

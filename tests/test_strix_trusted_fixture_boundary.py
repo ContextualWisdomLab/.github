@@ -21,7 +21,8 @@ def _consumer_root_materialization_owners(source: str) -> tuple[str, ...]:
         if stripped.endswith("() {"):
             current_function = stripped.removesuffix("() {").strip()
         if (CONSUMER_ROOT_MATERIALIZATION in raw_line
-                or 'cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"' in raw_line):
+                or ('cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"' in raw_line
+                    and current_function != "run_gate_case")):
             owners.append(current_function)
     return tuple(owners)
 
@@ -36,3 +37,14 @@ def test_specialized_strix_fixtures_keep_trusted_runtime_outside_consumer() -> N
         "repo_root_dir; consumer-root materialization remains in: "
         + ", ".join(offenders)
     )
+
+
+def test_base_fixture_executes_trusted_runtime_when_consumer_source_is_retained() -> None:
+    """A source file under scan must never select the runtime being executed."""
+    source = HARNESS_PATH.read_text(encoding="utf-8")
+    fixture = source.split("\nrun_gate_case() {", 1)[1].split(
+        "\nrun_gate_case_with_provider_signal_mode() {", 1)[0]
+    assert 'local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"' in fixture
+    assert 'materialize_trusted_gate_fixture "$trusted_script_dir"' in fixture
+    assert 'STRIX_REPO_ROOT="$repo_root_dir" bash "$gate_under_test"' in fixture
+    assert 'bash "./scripts/ci/strix_quick_gate.sh"' not in fixture
