@@ -714,8 +714,44 @@ jobs:
               ;;
           esac
 
-      - name: Provision contextual-orchestrator review sidecar
+      - name: Check live pull request draft state before sidecar provisioning
+        # two_phase.py's verdict preparation already reads the live PR and
+        # skips a draft ("PR is draft; Noema verdict preparation skipped."),
+        # but only after the 10-13 minute contextual-orchestrator sidecar
+        # provisioning below has held a runner (e.g. newsdom-api job
+        # 108077744310, .github job 106665379126). This moves that same
+        # runtime decision ahead of provisioning; it deliberately reads the
+        # live PR instead of the event payload's draft flag, because the
+        # organization ruleset runs this workflow in other repositories only
+        # on opened/synchronize/reopened, so the event snapshot is not the
+        # authority. Fails OPEN: an unreadable or malformed live PR yields
+        # live_draft=false and keeps today's full review path, where
+        # two_phase.py still performs its own draft check. A draft conclusion
+        # skips the model steps, leaves noema_prepare's outputs unset (the
+        # same "publication skipped" state a draft produced before), and the
+        # job still succeeds.
         if: env.PR_NUMBER != ''
+        id: live_draft
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          set -uo pipefail
+          live_draft=false
+          if pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" 2>/tmp/noema-live-draft-error)"; then
+            if [ "$(jq -r '.draft == true' <<<"$pull_request_json" 2>/dev/null)" = "true" ]; then
+              live_draft=true
+            fi
+          else
+            echo "::warning::Noema could not read the live pull request draft state; continuing with the model review."
+            sed 's/^/  /' /tmp/noema-live-draft-error >&2 || true
+          fi
+          echo "live_draft=${live_draft}" >>"$GITHUB_OUTPUT"
+          if [ "$live_draft" = "true" ]; then
+            echo "::notice::PR is draft; Noema model review skipped before sidecar provisioning."
+          fi
+
+      - name: Provision contextual-orchestrator review sidecar
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -728,7 +764,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Provision local reviewed HWP document reader
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
         run: |
@@ -756,7 +792,7 @@ jobs:
           echo "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" >>"$GITHUB_ENV"
 
       - name: Prepare Noema model verdict
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
