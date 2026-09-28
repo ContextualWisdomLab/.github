@@ -1003,9 +1003,11 @@ jobs:
           mkdir -p /work/.opencode-sandbox-home/.cargo
           cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/
           if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
-            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+            install -m 0644 /opt/base-rust-dependencies/cargo-config.toml \
               /work/.opencode-sandbox-home/.cargo/config.toml
           fi
+          printf '\n[net]\noffline = true\n' >>/work/.opencode-sandbox-home/.cargo/config.toml
+          chmod 0444 /work/.opencode-sandbox-home/.cargo/config.toml
           chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
@@ -1079,7 +1081,6 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              CARGO_NET_OFFLINE=true \
               PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
@@ -1202,7 +1203,6 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              CARGO_NET_OFFLINE=true \
               PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?

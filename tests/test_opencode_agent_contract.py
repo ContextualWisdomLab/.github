@@ -841,7 +841,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
-    assert measure_step.count("CARGO_NET_OFFLINE=true \\") == 2
+    assert "printf '\\n[net]\\noffline = true\\n' >>/work/.opencode-sandbox-home/.cargo/config.toml" in measure_step
+    assert "CARGO_NET_OFFLINE=true \\" not in measure_step
     assert measure_step.index('rm -rf -- /work/.opencode-sandbox-home') < measure_step.index(
         'cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/'
     )
