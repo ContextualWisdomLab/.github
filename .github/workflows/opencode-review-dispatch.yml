@@ -2389,6 +2389,19 @@ jobs:
             exit 1
           fi
 
+      - name: Clean up coverage runner resources
+        if: always()
+        env:
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # The sandbox writes as uid 65532; the runner cannot remove its files.
+          sudo rm -rf -- "$COVERAGE_SOURCE_WORKDIR"
+          coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker image inspect "$coverage_tool_image" >/dev/null 2>&1; then
+            docker image rm "$coverage_tool_image"
+          fi
+
   opencode-review-target:
     name: opencode-review
     needs: [validate-pr-metadata, coverage-evidence]
