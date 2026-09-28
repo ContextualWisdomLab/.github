@@ -50,6 +50,7 @@ CLASSIFICATIONS = (
     "unresolved",
 )
 KNOWN_OWNER_ISSUES = {
+    ".github": "ContextualWisdomLab/.github#945",
     "appguardrail": "ContextualWisdomLab/appguardrail#929",
     "bandscope": "ContextualWisdomLab/bandscope#847",
     "clearfolio": "ContextualWisdomLab/clearfolio#423",
@@ -62,13 +63,16 @@ KNOWN_OWNER_ISSUES = {
     "four-pillars": "ContextualWisdomLab/four-pillars#33",
     "inkspan": "ContextualWisdomLab/inkspan#278",
     "keyverse": "ContextualWisdomLab/keyverse#99",
+    "life-os": "ContextualWisdomLab/life-os#202",
     "naruon": "ContextualWisdomLab/naruon#1324",
     "newsdom-api": "ContextualWisdomLab/newsdom-api#604",
     "noema": "ContextualWisdomLab/noema#226",
     "OriginWeave": "ContextualWisdomLab/OriginWeave#123",
     "pg-erd-cloud": "ContextualWisdomLab/pg-erd-cloud#865",
+    "pg-llm-batch": "ContextualWisdomLab/pg-llm-batch#158",
     "RankWeave": "ContextualWisdomLab/RankWeave#38",
     "saju-caldav": "ContextualWisdomLab/saju-caldav#33",
+    "scopeweave": "ContextualWisdomLab/scopeweave#478",
     "ThreadWeave": "ContextualWisdomLab/ThreadWeave#31",
 }
 FORBIDDEN_TOKENS = frozenset({"COPILOT_GITHUB_TOKEN"})
