@@ -154,6 +154,8 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
         def value_binding(self, value: ast.AST) -> frozenset[str]:
             if isinstance(value, ast.Name):
                 return self.bindings.get(value.id, other)
+            if isinstance(value, ast.IfExp):
+                return self.value_binding(value.body) | self.value_binding(value.orelse)
             if isinstance(value, ast.Attribute) and value.attr in BOOTSTRAP_NAMES:
                 root = value.value
                 while isinstance(root, ast.Attribute):
@@ -191,6 +193,8 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
                 self.findings.append((node.lineno, name.id))
             elif isinstance(name, ast.NamedExpr) and "direct" in self.value_binding(name.value):
                 self.findings.append((node.lineno, name.target.id))
+            elif isinstance(name, ast.IfExp) and "direct" in self.value_binding(name):
+                self.findings.append((node.lineno, "conditional factory"))
             elif isinstance(name, ast.Attribute) and name.attr in BOOTSTRAP_NAMES:
                 root = name.value
                 while isinstance(root, ast.Attribute):

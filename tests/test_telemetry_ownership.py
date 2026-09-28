@@ -145,6 +145,16 @@ selected()
     assert scan_source(source) == ((6, "trace_factory"), (7, "metric_factory"), (14, "selected"))
 
 
+def test_conditional_factory_cannot_hide_product_owned_provider() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider as Provider
+selected = Provider if enabled else object
+selected()
+(Provider if enabled else object)()
+'''
+    assert scan_source(source) == ((4, "selected"), (5, "conditional factory"))
+
+
 def test_method_does_not_inherit_class_import() -> None:
     source = '''
 class Owner:
