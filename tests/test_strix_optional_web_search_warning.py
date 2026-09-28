@@ -124,6 +124,42 @@ class StrixOptionalWebSearchWarningTests(unittest.TestCase):
         self.assertIn(unknown, remaining)
         self.assertTrue(signal)
 
+    def test_pty_notice_does_not_trigger_console_infrastructure_error(self) -> None:
+        gate_source = STRIX_GATE.read_text(encoding="utf-8")
+        blocks = [
+            _function_block(gate_source, name)
+            for name in (
+                "sanitize_known_strix_report_warnings",
+                "has_detected_infrastructure_error",
+            )
+        ]
+        with tempfile.TemporaryDirectory(prefix="strix-pty-console-") as temp_dir:
+            log_path = Path(temp_dir) / "console.log"
+            script = "\n".join(
+                (
+                    "set -uo pipefail",
+                    'STRIX_LOG="$1"',
+                    'LLM_PROVIDER_ONLY_REGEX="__never__"',
+                    "for name in is_timeout_error is_rate_limit_error is_llm_token_limit_error is_midstream_fallback_error is_llm_api_connection_error is_llm_service_unavailable_error is_nvidia_nim_not_found_error is_model_behavior_error is_caido_bootstrap_timing_error; do eval \"$name() { return 1; }\"; done",
+                    *blocks,
+                    'sanitize_known_strix_report_warnings "$STRIX_LOG"',
+                    'if has_detected_infrastructure_error; then echo signal=1; else echo signal=0; fi',
+                )
+            )
+            for notice, expected in (
+                ("PTY process count reached warning threshold: 60 active sessions\n", False),
+                ("PTY process count reached warning threshold: unknown active sessions\n", True),
+            ):
+                log_path.write_text(notice + COMPLETION_LINE, encoding="utf-8")
+                completed = subprocess.run(
+                    ["bash", "-c", script, "strix-pty-console", str(log_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual("signal=1" in completed.stdout, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
