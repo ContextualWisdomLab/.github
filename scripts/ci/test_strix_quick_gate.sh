@@ -7061,6 +7061,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 scoped_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if [[ " $* " != *" --instruction For this pull request scan, name at least one repository-relative changed file that you actually inspected"* ]]; then
+	echo "Error: PR scan did not request source-specific report evidence" >&2
+	exit 69
+fi
 if [ ! -f "$scoped_file" ]; then
 	echo "Error: PR head scoped file missing ($scoped_file)" >&2
 	exit 61
