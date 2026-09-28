@@ -1728,3 +1728,182 @@ def test_owner_issue_marker_requires_trusted_author(
     assert [path for path, _ in client.writes] == (
         [f"{root}/41/comments"] if trusted else [root, f"{root}/77/comments"]
     )
+
+
+def _orphan(repository: str = "new-product") -> dict[str, Any]:
+    return {
+        "repository": repository,
+        "workflow_id": 9,
+        "path": ".github/workflows/gone.yml",
+        "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+
+
+def test_existing_evidence_lookup_fails_closed_and_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence lookup needs an open issue and complete, bounded comment pages."""
+    issue = "/repos/ContextualWisdomLab/app/issues/7"
+    comments = f"{issue}/comments?per_page=100&page="
+    closed = _LiveClient({issue: {"state": "closed"}})
+    with pytest.raises(inventory.InventoryError, match="closed"):
+        operator.issue_already_has_evidence(closed, "app", 7, "b")
+    same_body = _LiveClient({issue: {"state": "open", "body": "b"}})
+    assert operator.issue_already_has_evidence(same_body, "app", 7, "b")
+    torn = _LiveClient({issue: {"state": "open"}, f"{comments}1": [1]})
+    with pytest.raises(inventory.InventoryError, match="incomplete"):
+        operator.issue_already_has_evidence(torn, "app", 7, "b")
+    full = [{"body": "x"}] * 100
+    second = _LiveClient(
+        {issue: {"state": "open"}, f"{comments}1": full, f"{comments}2": [{"body": "b"}]}
+    )
+    assert operator.issue_already_has_evidence(second, "app", 7, "b")
+    monkeypatch.setattr(operator, "MAX_PAGES", 1)
+    endless = _LiveClient({issue: {"state": "open"}, f"{comments}1": full})
+    with pytest.raises(inventory.InventoryError, match="pagination"):
+        operator.issue_already_has_evidence(endless, "app", 7, "b")
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"workflow_id": True}, "workflow evidence is malformed"),
+        ({"path": "gone.yml"}, "workflow evidence is malformed"),
+    ],
+)
+def test_owner_issue_rejects_malformed_workflow_evidence(
+    change: dict[str, Any], reason: str
+) -> None:
+    """Malformed ledger evidence stops before any live request."""
+    record = {**_orphan(), **change}
+    client = _LiveClient({})
+    with pytest.raises(inventory.InventoryError, match=reason):
+        operator.publish_owner_issue(client, record, ledger={"records": [record]})
+    assert client.calls == []
+
+
+@pytest.mark.parametrize(
+    "repo_change",
+    [{"archived": True}, {"default_branch": ""}, {"_moved": True}],
+)
+def test_owner_issue_rejects_repository_drift_before_post(
+    repo_change: dict[str, Any],
+) -> None:
+    """Archive, missing default branch, or a moved head all refuse publication."""
+    record = _orphan()
+    responses = _owner_live_responses(record)
+    repo = "/repos/ContextualWisdomLab/new-product"
+    if repo_change.pop("_moved", False):
+        responses[f"{repo}/commits/main"] = [{"sha": SHA_B}]
+    responses[repo] = {**responses[repo], **repo_change}
+    client = _LiveClient(responses)
+    with pytest.raises(inventory.InventoryError, match="failed closed"):
+        operator.publish_owner_issue(client, record, ledger={"records": [record]})
+    assert client.writes == []
+
+
+def test_owner_issue_inventory_shape_pagination_and_ambiguity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue discovery refuses torn pages, runaway paging, and duplicate owners."""
+    record = _orphan()
+    repo = "/repos/ContextualWisdomLab/new-product"
+    listing = f"{repo}/issues?state=all&per_page=100&page=1"
+    owner = {
+        "number": 41,
+        "state": "open",
+        "author_association": "MEMBER",
+        "body": "<!-- cwl-workflow-lifecycle owner=ContextualWisdomLab/new-product -->",
+    }
+    ledger = {"records": [record]}
+    torn = _LiveClient({**_owner_live_responses(record), listing: {}})
+    with pytest.raises(inventory.InventoryError, match="failed closed"):
+        operator.publish_owner_issue(torn, record, ledger=ledger)
+    twice = _LiveClient(
+        {**_owner_live_responses(record), listing: [owner, {**owner, "number": 42}]}
+    )
+    with pytest.raises(inventory.InventoryError, match="failed closed"):
+        operator.publish_owner_issue(twice, record, ledger=ledger)
+    assert twice.writes == []
+    ledger_sha256 = hashlib.sha256(inventory.write_ledger(ledger, None).encode()).hexdigest()
+    evidence = (
+        "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->\n"
+        f"Exact workflow registry evidence: `9` / `.github/workflows/gone.yml` at `{SHA}`.\n"
+        f"Ledger SHA-256: `{ledger_sha256}`.\n"
+    )
+    retried = _LiveClient(
+        {
+            **_owner_live_responses(record),
+            listing: [owner],
+            f"{repo}/issues/41": owner,
+            f"{repo}/issues/41/comments?per_page=100&page=1": [{"body": evidence}],
+        }
+    )
+    assert operator.publish_owner_issue(retried, record, ledger=ledger).endswith("#41")
+    assert retried.writes == []
+    monkeypatch.setattr(operator, "MAX_PAGES", 1)
+    endless = _LiveClient(
+        {**_owner_live_responses(record), listing: [{"number": 1}] * 100}
+    )
+    with pytest.raises(inventory.InventoryError, match="failed closed"):
+        operator.publish_owner_issue(endless, record, ledger=ledger)
+
+
+def test_owner_issue_discovery_consumes_second_page() -> None:
+    """A full first issue page continues to the next page before creating."""
+    record = _orphan()
+    repo = "/repos/ContextualWisdomLab/new-product"
+    client = _LiveClient(
+        {
+            **_owner_live_responses(record),
+            f"{repo}/issues?state=all&per_page=100&page=1": [{"number": 1}] * 100,
+            f"{repo}/issues?state=all&per_page=100&page=2": [],
+            f"{repo}/issues": {"number": 43},
+            f"{repo}/issues/43/comments": {},
+        }
+    )
+    assert operator.publish_owner_issue(
+        client, record, ledger={"records": [record]}
+    ).endswith("#43")
+
+
+def test_owner_issue_cli_refuses_malformed_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every malformed operator input exits 2 before any credential is read."""
+    from scripts.ci.organization_commercial_readiness_loop import GitHubClient
+
+    ledger_path = tmp_path / "ledger.json"
+
+    def run(raw: bytes, *, digest: str | None = None, repo: str = "app") -> int:
+        ledger_path.write_bytes(raw)
+        return operator.main(
+            [
+                "--ledger", str(ledger_path),
+                "--expected-ledger-sha256",
+                digest or hashlib.sha256(raw).hexdigest(),
+                "--repository", repo,
+                "--workflow-id", "9",
+            ]
+        )
+
+    def unavailable() -> Any:
+        raise RuntimeError("no token")
+
+    monkeypatch.setattr(GitHubClient, "from_environment", unavailable)
+    complete = {
+        "schema_version": "1",
+        "capability": inventory.CAPABILITY,
+        "organization": "ContextualWisdomLab",
+        "repository_inventory_complete": True,
+    }
+    assert run(b"{}", digest="NOT-HEX") == 2
+    assert run(b"{}", repo="bad name") == 2
+    assert run(b"") == 2
+    assert run(b'{"n": NaN}') == 2
+    assert run(b'{"records": []}') == 2
+    assert run(inventory.write_ledger({**complete, "records": {}}, None).encode()) == 2
+    record = {**_orphan("app"), "workflow_id": 9}
+    ledger = inventory.write_ledger({**complete, "records": [record]}, None).encode()
+    assert run(ledger) == 2

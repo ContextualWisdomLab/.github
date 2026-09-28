@@ -53,6 +53,6 @@ jobs:
           coverage run --branch -m pytest --import-mode=importlib \
             tests/test_inventory_orphaned_workflows.py \
             tests/test_workflow_lifecycle_inventory_workflow.py -q
-          coverage report --include='scripts/ci/inventory_orphaned_workflows.py' --show-missing --fail-under=100
-          python -m compileall -q scripts/ci/inventory_orphaned_workflows.py tests/test_inventory_orphaned_workflows.py
+          coverage report --include='scripts/ci/inventory_orphaned_workflows.py,scripts/ci/workflow_lifecycle_operator.py' --show-missing --fail-under=100
+          python -m compileall -q scripts/ci/inventory_orphaned_workflows.py scripts/ci/workflow_lifecycle_operator.py tests/test_inventory_orphaned_workflows.py
           git diff --exit-code

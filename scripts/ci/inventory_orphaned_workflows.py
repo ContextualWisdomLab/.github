@@ -125,6 +125,7 @@ def collect_live_organization(
     receipts = [] if receipts is None else receipts
 
     def list_repositories() -> list[Mapping[str, Any]]:
+        """Read every organization repository page within the page bound."""
         found: list[Mapping[str, Any]] = []
         page = 1
         while True:
@@ -166,6 +167,7 @@ def collect_live_organization(
         )
 
     def identities(items: list[Mapping[str, Any]]) -> set[tuple[object, ...]]:
+        """Project repositories to identity tuples for scan-drift comparison."""
         try:
             return {
                 (
