@@ -58,7 +58,7 @@ on:
         required: true
         type: string
       control_plane_commit:
-        description: "Protected default-branch commit that selected this publication workflow"
+        description: "Control-plane commit that dispatched this publication workflow. Not production-branch authority."
         required: true
         type: string
       packaging_backend:

@@ -12,7 +12,7 @@ that `fast-mlsirm` developed into ContextualWisdomLab/.github as
 | Concern | release-tag.yml | publish-pypi.yml |
 | --- | --- | --- |
 | Trigger | `workflow_dispatch` (version + commit) | `workflow_dispatch` (tag + commit + control_plane) |
-| Provenance | default-branch ref, 40-char SHA, ancestry, pyproject match, exactly one CHANGELOG section, parent version-cut, optional fragment `--check` | control_plane == `github.sha`, default-branch ref, tag→commit, tag == `v{version}` |
+| Provenance | default-branch dispatch as the control plane, 40-char SHA, ancestry on the protected production branch (`main`/`master`), pyproject match, exactly one CHANGELOG section, parent version-cut, optional fragment `--check` | control_plane == `github.sha` (dispatch SHA, not production authority), default-branch ref, tag→commit, tag == `v{version}` |
 | Notes | CHANGELOG section → `release_notes.md`, 120k body cap with CHANGELOG link fallback | n/a |
 | Tag/release | refuse existing release; resume tag only if SHA matches; atomic ref create; `gh release create --verify-tag` | attach assets unless release `.immutable` |
 | Publish | `gh workflow run publish-pypi.yml` with control_plane HEAD | maturin sdist + wheel matrix; PyPI via `pypi` env + `pypa/gh-action-pypi-publish` (`skip-existing`) |
@@ -83,7 +83,22 @@ not a silent drift.
 | --- | --- |
 | `release_tag` | Required. Immutable tag (for example `v0.9.0`). |
 | `release_commit` | Required. Full lowercase SHA-1 matching the tag. |
-| `control_plane_commit` | Required. Protected default-branch SHA that selected publication (`github.sha` of the dispatch). |
+| `control_plane_commit` | Required. Control-plane SHA that selected publication (`github.sha` of the dispatch). Not production-branch authority. |
+| `production_branch` | Release-tag only. Empty when the default branch is protected `main` or `master`. Required as `main` or `master` when the default branch is not. |
+
+## Production lineage is not the default branch
+
+`release-tag` admits `release_commit` only through
+`scripts/ci/release_branch_authority.py`. The default branch is where GitHub
+dispatches the thin caller. GitHub Flow (protected default `main` or
+`master`) can omit `production_branch`. Git Flow (default `develop`) must
+pass `production_branch: main` or `master`, and that branch must be
+protected. A commit that is only on `develop` is rejected. Package
+publication still receives `control_plane_commit` so it can prove the
+dispatch SHA did not move; that field does not re-check or replace
+production ancestry. Callers pin `uses:` and `central_workflows_ref` to the
+same exact SHA. They do not copy the branch classification into the product
+repository.
 | `packaging_backend` | Default `maturin`; alternate `pure-python`. |
 | `publish_to_pypi` / `pypi_environment` | Default true / `pypi`. |
 | `PIPY_TOKEN` | Optional secret; prefer OIDC trusted publishing. |

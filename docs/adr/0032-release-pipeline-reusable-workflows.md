@@ -59,6 +59,21 @@ an exact commit SHA.
 - Adopters must pin `uses:` to a commit SHA (never `@main`) and pass the
   same SHA as `central_workflows_ref` on release-tag (ADR-0033).
 - Semver bumps are decided by Noema under ADR-0033 before the tag is cut.
+
+## Amendment (2026-09-28): production lineage is not the default branch
+
+The default branch remains the control plane that dispatches the caller
+workflow. It is production authority only when it is protected `main` or
+`master` (GitHub Flow). When the default branch is anything else, including
+`develop`, release admission requires an explicit protected production branch
+named `main` or `master`, and `release_commit` must be an ancestor of that
+branch tip.
+Develop-only ancestry is rejected. An unprotected production branch fails
+closed. `control_plane_commit` on package publication is the dispatch SHA,
+not production-branch authority. Product repositories do not copy this
+classification; they call the central workflow at an exact SHA and pass
+`production_branch` only when their default branch is not already `main` or
+`master`.
 - Next adoption candidates after fast-mlsirm e2e success: other maturin /
   PyPI packages in the org (survey at adoption time; do not assume from this
   ADR alone).

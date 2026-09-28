@@ -41,7 +41,10 @@ required.
    closed until fast-mlsirm publishes the calibrated decision receipt and
    contextual-orchestrator publishes the immutable gateway client/schema.
    The active path requires an explicit `release_version`. Missing evidence
-   is never replaced by a synthesized API-surface pack.
+   is never replaced by a synthesized API-surface pack. Caller inputs
+   `evidence_path` (default `release-evidence.json`) and `min_confidence`
+   (documented threshold `0.7`) stay on the adoption surface and do not
+   authorize an automatic decision while calibration is unfinished.
 4. Contract tests cover recorded happy / unavailable / low-confidence /
    breaking-conflict paths under `tests/fixtures/noema_semver/`, and the
    sibling-caller pin contract pins the workflow input names and defaults.

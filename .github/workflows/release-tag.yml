@@ -9,8 +9,10 @@
 # also be the thing GitHub triggers directly on workflow_dispatch.
 #
 # Keeps every fail-closed check from the fast-mlsirm original:
-# default-branch dispatch, 40-char lowercase release_commit, ancestry on the
-# default-branch lineage, pyproject version match, exactly one CHANGELOG
+# default-branch dispatch as the control plane, 40-char lowercase
+# release_commit, ancestry on the protected production branch (main or
+# master; required explicitly when the default branch is neither), pyproject
+# version match, exactly one CHANGELOG
 # section, version-cut transition vs parent, optional fragment→aggregate
 # drift check, size-capped release notes, refuse overwrite of an existing
 # release, resume existing immutable tag only when it already points at
@@ -66,6 +68,15 @@ on:
         description: "Release source commit reviewed for this version (full lowercase SHA-1)"
         required: true
         type: string
+      production_branch:
+        description: >-
+          Protected production branch that must contain release_commit.
+          Empty is accepted only when the default branch is main or master.
+          A develop default must pass main or master. This input is production
+          authority, not the control-plane branch that dispatches the caller.
+        required: false
+        type: string
+        default: ""
       decide_version_with_noema:
         description: >-
           Reserved for the future calibrated Noema path. True currently fails
@@ -157,10 +168,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ inputs.release_commit }}
-      - name: Verify the release source is on the current default-branch lineage
+      - name: Verify the release source is on the protected production branch
         env:
-          DISPATCH_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PRODUCTION_BRANCH: ${{ inputs.production_branch }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CENTRAL_WORKFLOWS_REF: ${{ inputs.central_workflows_ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           checked_out_commit="$(git rev-parse HEAD)"
@@ -168,14 +182,45 @@ jobs:
             echo "checked-out release source does not match release_commit" >&2
             exit 1
           fi
-          if ! git cat-file -e "$DISPATCH_SHA^{commit}"; then
-            echo "default-branch dispatch commit is unavailable for ancestry verification" >&2
+          if ! printf '%s' "$CENTRAL_WORKFLOWS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "central_workflows_ref must be the exact 40-char SHA matching uses: pin" >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$DISPATCH_SHA"; then
-            echo "release commit must be an ancestor of the default branch" >&2
-            exit 1
-          fi
+          rm -rf .cwl-release-authority
+          git clone --depth 1 \
+            "https://github.com/ContextualWisdomLab/.github.git" \
+            .cwl-release-authority
+          git -C .cwl-release-authority fetch --depth 1 origin "$CENTRAL_WORKFLOWS_REF"
+          git -C .cwl-release-authority checkout --force "$CENTRAL_WORKFLOWS_REF"
+          resolved="$(
+            python3 .cwl-release-authority/scripts/ci/release_branch_authority.py \
+              --resolve-only \
+              --default-branch "$DEFAULT_BRANCH" \
+              --production-branch "$PRODUCTION_BRANCH"
+          )"
+          case "$resolved" in
+            main|master) ;;
+            *)
+              echo "refusing unresolved production branch" >&2
+              exit 1
+              ;;
+          esac
+          git fetch --no-tags origin "$resolved"
+          protected="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${resolved}" --jq '.protected')"
+          case "$protected" in
+            true|false) ;;
+            *)
+              echo "production branch protection status is unavailable" >&2
+              exit 1
+              ;;
+          esac
+          python3 .cwl-release-authority/scripts/ci/release_branch_authority.py \
+            --repo . \
+            --default-branch "$DEFAULT_BRANCH" \
+            --production-branch "$PRODUCTION_BRANCH" \
+            --release-commit "$RELEASE_COMMIT" \
+            --protected "$protected"
+          rm -rf .cwl-release-authority
       - name: Resolve release_version (Noema semver gate or required input)
         id: semver
         env:
@@ -623,10 +668,8 @@ jobs:
             echo "default-branch HEAD is unavailable for package publication dispatch" >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" "$CONTROL_PLANE_COMMIT"; then
-            echo "release commit must be an ancestor of the current default branch" >&2
-            exit 1
-          fi
+          # control_plane_commit selects the caller workflow file. Production
+          # lineage was admitted earlier and is not this default-branch SHA.
           gh workflow run "$PUBLISH_WORKFLOW" \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$DEFAULT_BRANCH" \

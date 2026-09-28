@@ -97,7 +97,7 @@ def test_release_tag_declares_required_version_and_commit_inputs() -> None:
         "decide_version_with_noema:",
         "central_workflows_ref:",
         "evidence_path:",
-        "min_confidence:",
+        "production_branch:",
         "publish_workflow:",
         "run_changelog_fragment_check:",
         "pyproject_path:",
@@ -106,7 +106,6 @@ def test_release_tag_declares_required_version_and_commit_inputs() -> None:
         assert name in workflow
     assert 'default: "publish-pypi.yml"' in workflow
     assert 'default: "release-evidence.json"' in workflow
-    assert 'default: "0.7"' in workflow
     assert "decide_version_with_noema:" in workflow
     assert "noema_semver_bump.py" in workflow
 
@@ -125,7 +124,7 @@ def test_release_tag_keeps_fail_closed_provenance_checks() -> None:
     markers = [
         "release dispatch must target",
         "release_commit must be a canonical 40-character lowercase SHA-1",
-        "release commit must be an ancestor of the default branch",
+        "scripts/ci/release_branch_authority.py",
         "expected exactly one CHANGELOG section",
         "parent project version already equals requested release version",
         "parent CHANGELOG already contains requested release section",
@@ -149,6 +148,25 @@ def test_release_tag_action_pins_match_release_validated_set() -> None:
     """Checkout pin stays the release-validated SHA, not an unpinned tag."""
     workflow = _release_text()
     assert f"actions/checkout@{_CHECKOUT_PIN}" in workflow
+
+
+def test_release_authority_is_not_the_default_branch() -> None:
+    """Production lineage and the dispatch control plane stay separate."""
+
+    workflow = _release_text()
+    publish = _publish_text()
+    doctoring = _doctoring_text()
+    adr = _adr_0032_text()
+    authority = Path("scripts/ci/release_branch_authority.py").read_text(encoding="utf-8")
+    assert "scripts/ci/release_branch_authority.py" in workflow
+    assert "refusing unresolved production branch" in workflow
+    assert "release commit must be an ancestor of the protected production branch" in authority
+    assert "ancestor of the default branch" not in workflow
+    assert "ancestor of the current default branch" not in workflow
+    assert "Not production-branch authority" in publish
+    assert "Protected default-branch" not in publish
+    assert "Production lineage is not the default branch" in doctoring
+    assert "protected production branch" in adr
 
 
 def test_release_tag_dispatch_of_publish_is_skippable() -> None:
@@ -180,6 +198,7 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
         "central_workflows_ref",
         "decide_version_with_noema",
         "release_commit",
+        "production_branch",
         "evidence_path",
         "min_confidence",
         "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
