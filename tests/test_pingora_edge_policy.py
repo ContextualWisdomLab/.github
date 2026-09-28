@@ -65,7 +65,12 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     sample = fixture_text()
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
-    assert policy.scan_content("nginx/LICENSE-THIRD-PARTY", sample)
+    assert policy.scan_content("LICENSE-THIRD-PARTY", sample) == ()
+    assert any(
+        item.rule == "nginx_runtime_artifact"
+        for item in policy.scan_content("nginx/LICENSE-THIRD-PARTY", sample)
+    )
+    assert policy.scan_content("license-third-party", sample)
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
@@ -302,7 +307,7 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
 
 
 def test_evaluate_pull_request_admits_generated_third_party_license_without_fetch() -> None:
-    """A root license notice does not need GitHub's unavailable inline body."""
+    """The exact root license notice is admitted without fetching its body."""
 
     def opener(url: str, _token: str) -> object:
         assert "/pulls/10/files" in url
@@ -1080,7 +1085,7 @@ def test_patchless_large_text_uses_exact_head_verified_blob(tail: bytes, expecte
     def opener(url: str, _token: str) -> object:
         seen.append(url)
         if "/pulls/17/files" in url:
-            return [{"filename": "LICENSE-THIRD-PARTY", "status": "added"}]
+            return [{"filename": "oversized-notes.txt", "status": "added"}]
         return {"type": "file", "encoding": "none", "size": len(raw), "sha": blob_sha}
 
     def raw_opener(url: str, _token: str, limit: int) -> bytes:
