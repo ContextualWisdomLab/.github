@@ -3365,12 +3365,19 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 fi
 
 target_path=""
+instruction_file=""
 while [ "$#" -gt 0 ]; do
-	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
-		target_path="$2"
-		break
-	fi
-	shift
+	case "$1" in
+	-t)
+		target_path="${2:?}"
+		shift 2
+		;;
+	--instruction-file)
+		instruction_file="${2:?}"
+		shift 2
+		;;
+	*) shift ;;
+	esac
 done
 if [ "$target_path" = "." ]; then
 	target_path="$PWD"
@@ -5302,6 +5309,13 @@ EOS
 		esac
 		;;
 	pr-changed-scope-bounded)
+		if [ ! -f "$instruction_file" ] ||
+			! grep -Fq 'Review the changed source paths' "$instruction_file" ||
+			! grep -Fq 'sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java' "$instruction_file" ||
+			grep -Fq 'JwtUtil.java' "$instruction_file"; then
+			echo "Error: PR instruction file does not focus on changed source" >&2
+			exit 44
+		fi
 		if [ -z "$target_path" ]; then
 			echo "Error: target path missing" >&2
 			exit 41
@@ -6170,6 +6184,15 @@ run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
 		return 0
+		;;
+	pr-changed-scope-bounded)
+		run_gate_case "pr-changed-scope-bounded" \
+			"openai/gpt-4o-mini" "" "0" \
+			"scan ok with bounded changed-file scope" "1" \
+			"openai/gpt-4o-mini" "https://example.invalid" \
+			"vertex_ai" "__DEFAULT__" "" "0" "CRITICAL" "0" \
+			"" "" "1200" "0" "pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
 		;;
 	success)
 		run_gate_case "success" \
