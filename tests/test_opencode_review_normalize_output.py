@@ -769,6 +769,11 @@ def test_runtime_boundaries_are_compiled_once_and_slugs_stay_stable() -> None:
     assert "sub" not in norm.runtime_tool_slug.__code__.co_names
     assert isinstance(norm.CLAUSE_BOUNDARY_PATTERN, norm.re.Pattern)
     assert norm.CLAUSE_BOUNDARY_PATTERN.pattern == r"[,;]|\bbut\b|\bhowever\b"
+    assert norm.CLAUSE_BOUNDARY_PATTERN.flags & norm.re.IGNORECASE
+    assert (
+        norm.CLAUSE_BOUNDARY_PATTERN.split("installed, BUT verified")[-1]
+        == " verified"
+    )
     assert isinstance(norm.SENTENCE_BOUNDARY_PATTERN, norm.re.Pattern)
     assert norm.SENTENCE_BOUNDARY_PATTERN.pattern == r"[.;\n]"
     assert (
