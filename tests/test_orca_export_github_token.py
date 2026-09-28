@@ -26,6 +26,41 @@ def test_doctoring_record_invokes_the_script_and_forbids_sourcing() -> None:
     assert "Do not source it" in doctoring
 
 
+def test_sourcing_returns_without_replacing_the_caller(tmp_path: Path) -> None:
+    """Sourcing must return to the caller and must not export a token."""
+    worker_dir = tmp_path / "workers"
+    worker_dir.mkdir()
+    marker_path = tmp_path / "after-source.txt"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ORCA_WORKERS_DIR": str(worker_dir),
+            "ORCA_APP_TOKEN_FILE": str(worker_dir / "gh-token-app"),
+            "ORCA_APP_META_FILE": str(worker_dir / "gh-token-app.meta.json"),
+            "ORCA_PAT_TOKEN_FILE": str(worker_dir / "gh-token"),
+            "ORCA_RATE_LIMIT_FILE": str(worker_dir / "rate-limit.json"),
+            "ORCA_GH_CACHE_DIR": str(worker_dir / "cache"),
+        }
+    )
+    completed_process = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set +e; source \"$1\"; status=$?; printf 'after:%s:%s' \"$status\" \"${GH_TOKEN-unset}\" >\"$2\"",
+            "bash",
+            str(SCRIPT_PATH),
+            str(marker_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed_process.returncode == 0, completed_process.stderr
+    assert marker_path.read_text(encoding="utf-8") == "after:1:unset"
+
+
 def _write_executable(script_path: Path, script_body: str) -> None:
     """Write one executable test double."""
     script_path.write_text(script_body, encoding="utf-8")

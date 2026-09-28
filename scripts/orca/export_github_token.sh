@@ -2,6 +2,11 @@
 # Fail-closed GitHub token export for Orca workers.
 # Prefers a local App installation token, then falls back to the shared PAT.
 # Never prints token values. Secrets stay under ~/.config/orca-workers/.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  printf '%s\n' "error: do not source scripts/orca/export_github_token.sh" >&2
+  return 1
+fi
+
 set -euo pipefail
 
 ORCA_WORKERS_DIR="${ORCA_WORKERS_DIR:-${HOME}/.config/orca-workers}"
