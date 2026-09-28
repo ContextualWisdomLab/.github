@@ -32,8 +32,8 @@ def test_literal_source_pin_and_sibling_scope(filename, destination):
     pin, tree = _pin_and_tree(script)
     if filename == "release-dependency-license-strix-gate.yml":
         assert (pin, tree) == (
-            "5a29e0a5f487799c68f788c42cdc243df27315b8",
-            "88f38292ed543660de94eee44a110fe47a9a5974",
+            "e45f1b144aef900d734ff4c900f9e0010fd5a32d",
+            "7f902df89a925f89c4fae69a842508406cd0207c",
         )
     assert f"ref: {pin}" in checkout
     assert "repository: ContextualWisdomLab/.github" in checkout

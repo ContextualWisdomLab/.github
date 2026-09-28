@@ -243,5 +243,19 @@
     },
     "basis": "Complete original crate COPYRIGHT explicitly points to bundled complete grants.",
     "limitation": "Reference alone supplies no full grant; all named licence bodies are required, including the LLVM exception where named."
+  },
+  {
+    "package": "shlex@2.0.1",
+    "ecosystem": "cargo",
+    "artifact_filename": "shlex-2.0.1.crate",
+    "artifact_sha256": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+    "member": "shlex-2.0.1/LICENSE-APACHE",
+    "raw_sha256": "553fffcd9b1cb158bc3e9edc35da85ca5c3b3d7d2e61c883ebcfa8a65814b583",
+    "normalized_sha256": "f948b7ed8898bb7a9f3df677b41f6bb55e39edbf59455a430b57a21ee2f0d709",
+    "fixture": "shlex-2.0.1-LICENSE-APACHE-reference.txt",
+    "reference_only": true,
+    "required_grant_fixture": "shlex-2.0.1-MIT.txt",
+    "basis": "https://www.apache.org/licenses/LICENSE-2.0.txt Appendix application notice",
+    "limitation": "Reference is not a full Apache grant; MIT alternative needs an independent complete MIT grant."
   }
 ]

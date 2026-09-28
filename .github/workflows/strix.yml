@@ -192,16 +192,88 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write
     outputs:
       admitted: ${{ steps.admission.outputs.admitted }}
       target_repository: ${{ steps.admission.outputs.target_repository }}
       pr_number: ${{ steps.admission.outputs.pr_number }}
     steps:
+      - name: Exchange OpenCode app token for Strix target repository metadata reads
+        id: metadata_read_app_token
+        if: >-
+          github.event_name == 'repository_dispatch'
+          && github.event.client_payload.target_repository != ''
+          && github.event.client_payload.target_repository != github.repository
+          && startsWith(github.event.client_payload.target_repository, format('{0}/', github.repository_owner))
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! oidc_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].value | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$oidc_response")"; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! app_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].token | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$token_response")"; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Verify event metadata against the live pull request
         id: admission
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_REPOSITORY_OWNER: ${{ github.repository_owner }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
           TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number || github.event.pull_request.number }}
           EXPECTED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || github.event.pull_request.base.ref }}
@@ -225,6 +297,11 @@ jobs:
             [[ ! "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Strix event metadata is incomplete or malformed."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "repository_dispatch" ] &&
+            [ "${TARGET_REPOSITORY%%/*}" != "$EXPECTED_REPOSITORY_OWNER" ]; then
+            echo "::error::Strix dispatch target is outside the workflow repository owner."
             exit 1
           fi
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
@@ -368,10 +445,10 @@ jobs:
 
   strix:
     outputs:
-      transport_capacity_unavailable: ${{ steps.strix_sidecar_failure.outputs.transport_capacity_unavailable }}
-      transport_retry_eligible: ${{ steps.strix_sidecar_failure.outputs.transport_retry_eligible }}
-      transport_retry_delay_seconds: ${{ steps.strix_sidecar_failure.outputs.transport_retry_delay_seconds }}
-      transport_retry_next_attempt: ${{ steps.strix_sidecar_failure.outputs.transport_retry_next_attempt }}
+      transport_capacity_unavailable: ${{ steps.strix_scan.outputs.transport_capacity_unavailable || steps.strix_sidecar_failure.outputs.transport_capacity_unavailable }}
+      transport_retry_eligible: ${{ steps.strix_scan.outputs.transport_retry_eligible || steps.strix_sidecar_failure.outputs.transport_retry_eligible }}
+      transport_retry_delay_seconds: ${{ steps.strix_scan.outputs.transport_retry_delay_seconds || steps.strix_sidecar_failure.outputs.transport_retry_delay_seconds }}
+      transport_retry_next_attempt: ${{ steps.strix_scan.outputs.transport_retry_next_attempt || steps.strix_sidecar_failure.outputs.transport_retry_next_attempt }}
       provider_attempt_count: ${{ steps.strix_sidecar_failure.outputs.provider_attempt_count }}
       transport_http_status: ${{ steps.strix_sidecar_failure.outputs.transport_http_status }}
     needs: [changed-scope, admit-current-head]
@@ -964,6 +1041,7 @@ jobs:
           echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
       - name: Run Strix (quick)
+        id: strix_scan
         if: steps.gate.outputs.enabled == 'true'
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
@@ -1001,6 +1079,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
         run: |
           export LLM_TIMEOUT=0
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
@@ -1011,6 +1090,9 @@ jobs:
           # Defined before the gate loop so the bounded retry decision below
           # can classify outcomes without duplicating the patterns later.
           backend_unavailable_signal='STRIX_PROVIDER_UNAVAILABLE|RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*500[^[:cntrl:]]*internal_error|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
+          # Only explicit connection/rate-limit failures qualify for a new
+          # attempt; scanner defects and sandbox bootstrap failures do not.
+          runtime_transport_signal='LLM CONNECTION FAILED|Could not establish connection to the language model|RateLimitError|Too many requests\. For more on scraping GitHub'
           # Scanner tooling breakage (Caido GraphQL query/cursor errors) is
           # not a provider outcome. It can occur while providers are healthy
           # and it can coexist with genuine provider rate limits, so it gets
@@ -1081,6 +1163,11 @@ jobs:
             || grep -Eq "$model_behavior_error_signal" "$strix_neutralization_scope_log" ) \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
             echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
+            if grep -Eiq "$runtime_transport_signal" "$strix_neutralization_scope_log" \
+              && ! grep -Eq "$tooling_error_signal" "$strix_neutralization_scope_log" \
+              && ! grep -Fq 'STRIX_SANDBOX_UNAVAILABLE' "$strix_neutralization_scope_log"; then
+              PYTHONPATH="$TRUSTED_STRIX_SOURCE" python3 -m scripts.ci.strix_runtime_capacity --expected-head "$PR_HEAD_SHA"
+            fi
             exit "$strix_rc"
           fi
 

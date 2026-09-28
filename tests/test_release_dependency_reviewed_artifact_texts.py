@@ -84,17 +84,17 @@ def test_allocator_dual_licence_uses_both_actual_archive_texts():
 
 
 @pytest.mark.parametrize("row", [r for r in json.loads((ROOT / "reference_provenance.json").read_text())
-                                  if r["package"].startswith("android_system_properties@")],
+                                  if r["package"].startswith(("android_system_properties@", "shlex@"))],
                          ids=lambda row: row["package"])
 @pytest.mark.parametrize("mutation", [None, "no-mit", "notice-only", "changed-notice",
                                       "apache-choice", "pypi", "and-expression", "no-choice"])
-def test_android_apache_notice_does_not_supply_a_full_grant(row, mutation):
+def test_apache_notice_does_not_supply_a_full_grant(row, mutation):
     text = TEXTS[row["fixture"]]
     assert hashlib.sha256(text.encode()).hexdigest() == row["raw_sha256"]
     normalized = re.sub(r"[ \t\r\n]+", " ", text).strip(" \t\r\n")
     assert hashlib.sha256(normalized.encode()).hexdigest() == row["normalized_sha256"]
     assert policy.recognize_license_text(text) is None
-    texts = {"LICENSE-MIT": TEXTS["android_system_properties-0.1.6-LICENSE-MIT.txt"],
+    texts = {"LICENSE-MIT": TEXTS[row.get("required_grant_fixture", "android_system_properties-0.1.6-LICENSE-MIT.txt")],
              "LICENSE-APACHE": text}
     if mutation in {"no-mit", "notice-only"}:
         del texts["LICENSE-MIT"]
@@ -244,6 +244,7 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
                                       "wrong-upstream", "wrong-notice-digest", "captured-choice",
                                       "wrong-archive", "no-source", "truncated-notice", "missing-input-grant"])
 @pytest.mark.parametrize("package,version,repository,upstream_commit", [
+    ("libfuzzer-sys", "0.4.13", "rust-fuzz/libfuzzer", "719e4efb9b8857ebaa782ae59376c8cbb78fed0f"),
     ("profiling", "1.0.18", "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9"),
     ("jni-sys-macros", "0.4.1", "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6"),
     ("gl_generator", "0.14.0", "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e"),
@@ -264,11 +265,17 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     archive_sha = hashlib.sha256(raw).hexdigest()
     source = (tmp_path / "source").resolve()
     source.mkdir()
-    chosen = ("Apache-2.0 AND MIT-Khronos-old" if package == "spirv" else
+    chosen = ("MIT AND NCSA AND Apache-2.0 WITH LLVM-exception" if package == "libfuzzer-sys" else
+              "Apache-2.0 AND MIT-Khronos-old" if package == "spirv" else
               "Apache-2.0" if package == "gl_generator" else "MIT")
-    expression = "Apache-2.0" if package in {"gl_generator", "spirv"} else "MIT OR Apache-2.0"
+    expression = ("(MIT OR Apache-2.0) AND NCSA" if package == "libfuzzer-sys" else
+                  "Apache-2.0" if package in {"gl_generator", "spirv"} else "MIT OR Apache-2.0")
     names = ("LICENSE",) if package == "gl_generator" else ("LICENSE-MIT", "LICENSE-APACHE")
-    if package == "spirv":
+    if package == "libfuzzer-sys":
+        proof = json.loads((ROOT / "libfuzzer-source-provenance.json").read_text())
+        grant_content = b"\n\n".join((ROOT / row["fixture"]).read_bytes() for row in proof["grant_files"])
+        upstream = [{"url": row["url"], "sha256": row["sha256"]} for row in proof["grant_files"]]
+    elif package == "spirv":
         grant_content = TEXTS["spirv-upstream-APACHE.txt"].encode()
         upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/LICENSE",
                      "sha256": hashlib.sha256(grant_content).hexdigest()},
@@ -345,7 +352,7 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     assert report.passed == (mutation is None), report.to_json()
     if mutation is None:
         row = next(r for r in report.dependencies if r["key"] == dependency.key)
-        assert row["license_member_sha256"] == {}
+        assert row["license_member_sha256"] == gate.archive_license_evidence(raw, "cargo")["license_member_sha256"]
         assert row["source_license_notice"]["source_sha"] == sha
         assert row["source_license_notice"]["upstream_licenses"] == choice["upstream_licenses"]
 
@@ -414,3 +421,81 @@ def test_copyright_llvm_reference_requires_complete_exception(package):
         "cargo/" + package, {"chosen": "MIT", "rationale": "Negative test: exception body is absent."})
     assert decision.allowed
     assert policy.LICENSE_TEXT_UNVERIFIED in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize(
+    "mutation", [None, "wrapper-only", "no-llvm", "changed-llvm", "exception-removed", "other-package"]
+)
+def test_libfuzzer_vendored_obligation_requires_complete_llvm_terms(mutation):
+    """Actual archive wrapper election cannot erase the pinned vendored grant."""
+    raw = base64.b64decode(
+        (ROOT / "libfuzzer-sys-0.4.13.crate.b64").read_bytes().strip(), validate=True
+    )
+    evidence = gate.archive_license_evidence(raw, "cargo")
+    evidence.update(
+        ecosystem="cargo",
+        license="(MIT OR Apache-2.0) AND NCSA",
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    text = (ROOT / "libfuzzer-compiler-rt-LICENSE.TXT").read_text()
+    if mutation == "changed-llvm":
+        text += "Commercial redistribution prohibited."
+    elif mutation == "exception-removed":
+        text = text.replace("LLVM Exceptions", "Exceptions removed")
+    if mutation != "no-llvm":
+        evidence["license_texts"]["upstream/LLVM"] = text
+    selected = (
+        "MIT AND NCSA"
+        if mutation in {"wrapper-only", "other-package"}
+        else "MIT AND NCSA AND Apache-2.0 WITH LLVM-exception"
+    )
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence,
+        "cargo/unreviewed@0.4.13" if mutation == "other-package" else "cargo/libfuzzer-sys@0.4.13",
+        {
+            "chosen": selected,
+            "rationale": "Retain wrapper, legacy and modern vendored obligations.",
+        },
+    )
+    assert (decision.allowed and not failures) == (mutation is None)
+    # The full mixed-scope LLVM body cannot clear unrelated MIT declarations.
+    assert policy.recognize_license_text(text) is None
+
+
+def test_libfuzzer_archive_members_equal_pinned_source_proof():
+    """All vendored bytes and complete grant fixtures match immutable receipts."""
+    import io
+    import tarfile
+
+    proof = json.loads((ROOT / "libfuzzer-source-provenance.json").read_text())
+    raw = base64.b64decode(
+        (ROOT / "libfuzzer-sys-0.4.13.crate.b64").read_bytes().strip(), validate=True
+    )
+    assert hashlib.sha256(raw).hexdigest() == proof["crate_sha256"]
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        members = {
+            m.name
+            for m in archive.getmembers()
+            if m.isfile() and "/libfuzzer/" in m.name
+        }
+        assert members == {row["member"] for row in proof["rows"]}
+        assert len(members) == 56
+        modern_headers = 0
+        for row in proof["rows"]:
+            data = archive.extractfile(row["member"]).read()
+            modern_headers += (
+                b"SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception" in data
+            )
+            assert len(data) == row["bytes"]
+            assert (
+                hashlib.sha256(data).hexdigest() == row["sha256"] == row["llvm_sha256"]
+            )
+            assert (
+                row["url"]
+                == f"https://raw.githubusercontent.com/llvm/llvm-project/{proof['llvm_commit']}/{row['llvm_path']}"
+            )
+        assert modern_headers == 55
+    for row in proof["grant_files"]:
+        data = (ROOT / row["fixture"]).read_bytes()
+        assert len(data) == row["bytes"]
+        assert hashlib.sha256(data).hexdigest() == row["sha256"]

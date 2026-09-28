@@ -479,11 +479,11 @@ jobs:
       - name: Prepare pull request merge tree for coverage measurement
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          rm -rf "$COVERAGE_SOURCE_WORKDIR"
-          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
+          # Each attempt owns a fresh tree; never delete another job's checkout.
+          mkdir "$COVERAGE_SOURCE_WORKDIR"
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
@@ -533,7 +533,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -568,7 +568,7 @@ jobs:
       - name: Enforce changed-file syntax gate
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           # Deterministic per-file syntax check on the PR's changed files. The
@@ -600,7 +600,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Apply wheel-only resolution in the same step that consumes
           # pull-request dependency metadata. A value on an earlier step does
           # not cross the GitHub Actions step boundary.
@@ -675,6 +675,20 @@ jobs:
               "$coverage_build_dir/install-base-python-locks.py"
             install -m 0755 "$trusted_vcs_import_root_resolver" \
               "$coverage_build_dir/resolve-opencode-base-vcs-import-root.sh"
+            trusted_cargo_fixture="${GITHUB_WORKSPACE}/tests/fixtures/coverage-cargo"
+            if [ -L "$trusted_cargo_fixture" ] || [ -L "$trusted_cargo_fixture/src" ]; then
+              echo "::error::Trusted Cargo coverage fixture directories must not be symlinks."
+              exit 1
+            fi
+            for fixture_file in Cargo.toml Cargo.lock src/lib.rs; do
+              if [ ! -f "$trusted_cargo_fixture/$fixture_file" ] ||
+                [ -L "$trusted_cargo_fixture/$fixture_file" ]; then
+                echo "::error::Trusted Cargo coverage fixture is missing or not a regular file."
+                exit 1
+              fi
+              install -D -m 0644 "$trusted_cargo_fixture/$fixture_file" \
+                "$coverage_build_dir/coverage-cargo-fixtures/$fixture_file"
+            done
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -733,10 +747,30 @@ jobs:
             # the generic Python coverage path failed at collection with `ImportError: cannot
             # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
             # even when the pull request itself introduced no regression.
+            rust_lock_args=()
+            rust_change_files="${RUNNER_TEMP}/opencode-rust-change-files"
+            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --no-renames --name-only -z \
+              "$PR_BASE_SHA" "$PR_HEAD_SHA" >"$rust_change_files"; then
+              echo "::error::Could not classify exact-head Cargo changes." >&2
+              exit 1
+            fi
+            rust_lock_changed=0
+            rust_manifest_changed=0
+            while IFS= read -r -d '' changed_path; do
+              case "${changed_path##*/}" in
+                Cargo.lock) rust_lock_changed=1 ;;
+                Cargo.toml) rust_manifest_changed=1 ;;
+              esac
+            done <"$rust_change_files"
+            if [ "$rust_lock_changed" -eq 1 ] && [ "$rust_manifest_changed" -eq 0 ]; then
+              # The trusted materializer still rejects non-base pins and changed graphs.
+              rust_lock_args=(--head-sha "$PR_HEAD_SHA")
+            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
               --output-dir "$coverage_build_dir/base-rust-dependencies" \
+              "${rust_lock_args[@]}" \
               --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
@@ -763,6 +797,11 @@ jobs:
               vulkan-tools \
               xz-utils \
             && rm -rf /var/lib/apt/lists/*
+          COPY coverage-cargo-fixtures /tmp/coverage-cargo-fixtures
+          RUN CARGO_HOME=/opt/coverage-cargo-home cargo fetch --locked \
+                --manifest-path /tmp/coverage-cargo-fixtures/Cargo.toml \
+            && rm -rf /tmp/coverage-cargo-fixtures \
+            && chmod -R a+rX /opt/coverage-cargo-home
           ENV LLVM_COV=/usr/bin/llvm-cov-19
           ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
           ENV COREPACK_HOME=/opt/corepack
@@ -953,6 +992,7 @@ jobs:
             chown -R root:root /work/.git
             chmod -R go-w /work/.git
           fi
+          rm -rf -- /work/.opencode-sandbox-home
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
@@ -960,12 +1000,15 @@ jobs:
           # the read-only image -- so the baked offline vendor config from
           # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
           # copied there explicitly rather than set as an image ENV default.
+          mkdir -p /work/.opencode-sandbox-home/.cargo
+          cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/
           if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
-            mkdir -p /work/.opencode-sandbox-home/.cargo
-            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+            install -m 0644 /opt/base-rust-dependencies/cargo-config.toml \
               /work/.opencode-sandbox-home/.cargo/config.toml
-            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           fi
+          printf '\n[net]\noffline = true\n' >>/work/.opencode-sandbox-home/.cargo/config.toml
+          chmod 0444 /work/.opencode-sandbox-home/.cargo/config.toml
+          chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"

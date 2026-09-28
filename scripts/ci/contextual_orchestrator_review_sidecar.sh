@@ -44,6 +44,12 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="${SIDECAR_PYTHON:-$(command -v python3)}"
+# setup-python with update-environment=false leaves the consumer's library path.
+# Bind this process to the selected interpreter's matching shared runtime.
+sidecar_python_lib="$(dirname "$(dirname "$(realpath "$(command -v "$sidecar_python")")")")/lib"
+if [ -f "$sidecar_python_lib/libpython3.12.so.1.0" ]; then
+  export LD_LIBRARY_PATH="$sidecar_python_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
@@ -113,10 +119,15 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
-import contextlib
+import faulthandler
+
+# Fatal startup diagnostics contain stack locations, never frame locals.
+faulthandler.enable()
+
 import http.client
 import io
 import json
+import logging
 import threading
 
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
@@ -155,7 +166,10 @@ thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
     expected_rejection_log = io.StringIO()
-    with contextlib.redirect_stderr(expected_rejection_log):
+    capture = logging.StreamHandler(expected_rejection_log)
+    server_logger = logging.getLogger("contextual_orchestrator.server")
+    server_logger.addHandler(capture)
+    try:
         connection.request(
             "POST",
             "/v1/chat/completions",
@@ -169,6 +183,8 @@ try:
         response = connection.getresponse()
         assert response.status == 413, response.status
         response.read()
+    finally:
+        server_logger.removeHandler(capture)
     assert (
         "request_failed status=413 code=request_too_large"
         in expected_rejection_log.getvalue()
