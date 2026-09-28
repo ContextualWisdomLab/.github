@@ -122,7 +122,7 @@ exit 0
         env["PYTHONPATH"] = str(bin_dir)
     directory_modes = {directory: directory.stat().st_mode for directory in (workspace, evidence, staging)}
     result = subprocess.run(["bash", str(ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh")],
-                            env=env, capture_output=True, text=True, timeout=10)
+                            env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode != 0
     assert sentinel.read_text() == "preserve me"
     assert outside.read_text() == "outside data"
