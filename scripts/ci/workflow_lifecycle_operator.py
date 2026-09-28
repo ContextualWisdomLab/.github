@@ -141,6 +141,9 @@ def publish_owner_issue(
         marker = (
             f"<!-- cwl-workflow-lifecycle workflow_id={workflow_id} path={path} -->"
         )
+        owner_marker = (
+            f"<!-- cwl-workflow-lifecycle owner=ContextualWisdomLab/{repository} -->"
+        )
         body = (
             f"{marker}\n"
             f"Exact workflow registry evidence: `{workflow_id}` / "
@@ -168,7 +171,7 @@ def publish_owner_issue(
                 item
                 for item in existing
                 if isinstance(item, Mapping)
-                and marker in str(item.get("body") or "")
+                and owner_marker in str(item.get("body") or "")
                 and "pull_request" not in item
                 and (
                     item.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -200,8 +203,8 @@ def publish_owner_issue(
             f"/repos/ContextualWisdomLab/{repository}/issues",
             method="POST",
             payload={
-                "title": "Disable orphaned workflow registry identity",
-                "body": body,
+                "title": "Review orphaned GitHub Actions workflows",
+                "body": f"{owner_marker}\nReview each revalidated workflow ID below before disabling it.",
             },
         )
     except Exception as exc:
@@ -211,6 +214,16 @@ def publish_owner_issue(
     number = created.get("number") if isinstance(created, Mapping) else None
     if not isinstance(number, int) or number <= 0:
         raise InventoryError("owner issue creation returned no issue number")
+    try:
+        client.request(
+            f"{repo_path}/issues/{number}/comments",
+            method="POST",
+            payload={"body": body},
+        )
+    except Exception as exc:
+        raise InventoryError(
+            f"owner issue publication failed closed: {type(exc).__name__}"
+        ) from exc
     return f"ContextualWisdomLab/{repository}#{number}"
 
 

@@ -1108,6 +1108,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         **_owner_live_responses(unknown),
         list_path: [],
         create_path: {"number": 41},
+        f"{create_path}/41/comments": {},
     })
     assert operator.publish_owner_issue(
         creator, unknown, ledger={"records": [unknown]}
@@ -1118,7 +1119,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         "number": 41,
         "state": "open",
         "author_association": "OWNER",
-        "body": "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->",
+        "body": "<!-- cwl-workflow-lifecycle owner=ContextualWisdomLab/new-product -->",
     }
     repeated = _LiveClient(
         {
@@ -1133,6 +1134,21 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         repeated, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
     assert all(not path.endswith("/issues") for path in repeated.calls)
+    other = {**unknown, "workflow_id": 10, "path": ".github/workflows/other.yml"}
+    distinct = _LiveClient({
+        **_owner_live_responses(other),
+        list_path: [prior],
+        "/repos/ContextualWisdomLab/new-product/issues/41": prior,
+        "/repos/ContextualWisdomLab/new-product/issues/41/comments?per_page=100&page=1": [],
+        "/repos/ContextualWisdomLab/new-product/issues/41/comments": {},
+    })
+    assert operator.publish_owner_issue(
+        distinct, other, ledger={"records": [unknown, other]}
+    ).endswith("#41")
+    assert [path for path, _ in distinct.writes] == [
+        "/repos/ContextualWisdomLab/new-product/issues/41/comments"
+    ]
+    assert "workflow_id=10" in distinct.writes[0][1]["body"]
 
 
 def test_owner_issue_dedupes_exact_comment_and_keeps_workflows_distinct() -> None:
@@ -1385,6 +1401,23 @@ def test_live_transport_and_mutation_failures_are_redacted_by_type() -> None:
     with pytest.raises(inventory.InventoryError, match="no issue number"):
         operator.publish_owner_issue(
             bad_create,
+            {**record, "repository": "new-product"},
+            ledger={"records": [{**record, "repository": "new-product"}]},
+        )
+    class BadComment(_LiveClient):
+        def request(self, path: str, *, method: str = "GET", payload: Any = None) -> Any:
+            if method == "POST" and path.endswith("/comments"):
+                raise RuntimeError("secret detail")
+            return super().request(path, method=method, payload=payload)
+
+    bad_comment = BadComment({
+        **_owner_live_responses({**record, "repository": "new-product"}),
+        "/repos/ContextualWisdomLab/new-product/issues?state=all&per_page=100&page=1": [],
+        "/repos/ContextualWisdomLab/new-product/issues": {"number": 41},
+    })
+    with pytest.raises(inventory.InventoryError, match="publication failed closed"):
+        operator.publish_owner_issue(
+            bad_comment,
             {**record, "repository": "new-product"},
             ledger={"records": [{**record, "repository": "new-product"}]},
         )
@@ -1672,7 +1705,7 @@ def test_owner_issue_marker_requires_trusted_author(
     prior = {
         "number": 41, "state": "open", "author_association": association,
         "user": {"login": login, "type": kind},
-        "body": "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->",
+        "body": "<!-- cwl-workflow-lifecycle owner=ContextualWisdomLab/new-product -->",
     }
     # Two forged matches must not turn the ambiguity guard into a denial of service.
     candidates = [prior] if trusted else [prior, {**prior, "number": 42}]
@@ -1683,8 +1716,10 @@ def test_owner_issue_marker_requires_trusted_author(
         f"{root}/41": prior,
         f"{root}/41/comments?per_page=100&page=1": [],
         f"{root}/41/comments": {},
+        f"{root}/77/comments": {},
     })
     result = operator.publish_owner_issue(client, record, ledger={"records": [record]})
     assert result.endswith("#41" if trusted else "#77")
-    assert len(client.writes) == 1
-    assert client.writes[0][0] == (f"{root}/41/comments" if trusted else root)
+    assert [path for path, _ in client.writes] == (
+        [f"{root}/41/comments"] if trusted else [root, f"{root}/77/comments"]
+    )
