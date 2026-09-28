@@ -397,6 +397,9 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     """The exact vendored SHA must enforce the review limit at its HTTP boundary."""
     text = _read(SIDECAR)
+    assert text.index("faulthandler.enable()") < text.index(
+        "from contextual_orchestrator.server import SecurityConfig, build_server"
+    )
     assert "from contextual_orchestrator.server import SecurityConfig, build_server" in text
     assert '"POST",' in text
     assert '"/v1/chat/completions",' in text
@@ -404,7 +407,10 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
     assert "assert response.status == 413" in text
     assert "expected_rejection_log = io.StringIO()" in text
-    assert "with contextlib.redirect_stderr(expected_rejection_log):" in text
+    assert 'logging.getLogger("contextual_orchestrator.server")' in text
+    assert "server_logger.addHandler(capture)" in text
+    assert "server_logger.removeHandler(capture)" in text
+    assert "contextlib.redirect_stderr" not in text
     assert '"request_failed status=413 code=request_too_large"' in text
     assert "in expected_rejection_log.getvalue()" in text
     assert "return self._mock_raw(agent, endpoint, payload)" in text
@@ -604,3 +610,30 @@ def test_sidecar_uses_lock_compatible_isolated_python() -> None:
         assert 'python-version: "3.12"' in workflow[setup:call]
         assert 'update-environment: false' in workflow[setup:call]
         assert 'SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}' in workflow[setup:call]
+
+
+def test_sidecar_selects_matching_shared_python_library(tmp_path) -> None:
+    """A stale consumer library path must not select another CPython runtime."""
+    selected = tmp_path / "selected"
+    executable = selected / "bin" / "python"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    link = tmp_path / "python"
+    link.symlink_to(executable)
+    library = selected / "lib"
+    library.mkdir()
+    shared = library / "libpython3.12.so.1.0"
+    text = _read(SIDECAR)
+    prefix = text[text.index('sidecar_python="'):text.index("\nlog()")]
+    for present in (False, True):
+        if present:
+            shared.touch()
+        result = subprocess.run(
+            ["bash", "-c", prefix + '\nprintf "%s" "$LD_LIBRARY_PATH"'],
+            env={"PATH": os.environ["PATH"], "SIDECAR_PYTHON": str(link),
+                 "LD_LIBRARY_PATH": "/consumer/python/lib"},
+            text=True, capture_output=True, check=True,
+        )
+        expected = f"{library}:/consumer/python/lib" if present else "/consumer/python/lib"
+        assert result.stdout == expected

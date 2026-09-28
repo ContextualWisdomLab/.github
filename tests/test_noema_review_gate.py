@@ -1323,11 +1323,11 @@ def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path
                 for path in ("src/a.py", "README.md", "empty.txt")
             ) + "\n"
         if "contents/src/a.py" in target:
-            return encoded
+            return json.dumps({"content": encoded, "encoding": "base64", "size": 15})
         if "contents/README.md" in target:
             raise RuntimeError("Command failed: token secret")
         if "contents/empty.txt" in target:
-            return ""
+            return json.dumps({"content": "", "encoding": "base64", "size": 0})
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
@@ -2864,3 +2864,39 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_fetch_file_content_at_ref_refuses_malformed_base64(monkeypatch):
+    """A content response that is not valid base64 must fail, not decode partially.
+
+    GitHub returns file contents base64-encoded. Decoding without `validate=True`
+    would silently discard non-alphabet characters and hand the gate a truncated
+    file, which would then be reviewed as if it were the real one. The decode is
+    strict, so a malformed response is a RuntimeError naming the cause.
+    """
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps({"content": "not*valid*base64!!", "encoding": "base64", "size": 1}))
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+
+
+@pytest.mark.parametrize("payload,reason", [
+    ({"content": "", "encoding": "none", "size": 1048577}, "API omitted"),
+    ({"content": "", "encoding": "base64", "size": 1}, "nonempty file"),
+    ({}, "response was malformed"),
+    ({"content": "YQ==", "encoding": "base64", "size": 2}, "size did not match"),
+])
+def test_fetch_file_content_at_ref_refuses_omitted_content(monkeypatch, payload, reason):
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(payload))
+    with pytest.raises(RuntimeError, match=reason):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+    context = noema.changed_file_context(
+        "owner/repo", 7, "deadbeef", changed_files=[("docs/a.md", "modified")]
+    )
+    assert "Unavailable from head content API" in context
+
+
+def test_fetch_file_content_at_ref_returns_empty_for_a_zero_byte_file(monkeypatch):
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(
+        {"content": "", "encoding": "base64", "size": 0}
+    ))
+    assert noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef") == ""

@@ -50,13 +50,51 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
     steps:
+      - name: Select native Noema credential for metadata reads
+        if: env.PR_NUMBER != ''
+        id: noema_metadata_credential
+        env:
+          METADATA_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
+            exit 1
+          fi
+          echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          if [ -n "${METADATA_TOKEN:-}" ]; then
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          else
+            echo "source=workflow" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint read-only native Noema GitHub App token
+        if: env.PR_NUMBER != '' && steps.noema_metadata_credential.outputs.source == 'github-app'
+        id: noema_metadata_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
       - name: Admit only the exact live Noema head
         id: live_head
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
@@ -368,12 +406,12 @@ jobs:
       id-token: write
       pull-requests: read
     outputs:
-      transport_capacity_unavailable: ${{ steps.noema_prepare.outputs.transport_capacity_unavailable }}
-      transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible }}
-      transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
-      transport_retry_next_attempt: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
-      provider_attempt_count: ${{ steps.noema_prepare.outputs.provider_attempt_count }}
-      transport_http_status: ${{ steps.noema_prepare.outputs.transport_http_status }}
+      transport_capacity_unavailable: ${{ steps.noema_prepare.outputs.transport_capacity_unavailable || steps.noema_sidecar_failure.outputs.transport_capacity_unavailable }}
+      transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible || steps.noema_sidecar_failure.outputs.transport_retry_eligible }}
+      transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds || steps.noema_sidecar_failure.outputs.transport_retry_delay_seconds }}
+      transport_retry_next_attempt: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt || steps.noema_sidecar_failure.outputs.transport_retry_next_attempt }}
+      provider_attempt_count: ${{ steps.noema_prepare.outputs.provider_attempt_count || steps.noema_sidecar_failure.outputs.provider_attempt_count }}
+      transport_http_status: ${{ steps.noema_prepare.outputs.transport_http_status || steps.noema_sidecar_failure.outputs.transport_http_status }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
@@ -462,10 +500,47 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
+      - name: Select native Noema credential for metadata reads
+        if: env.PR_NUMBER != ''
+        id: noema_metadata_credential
+        env:
+          METADATA_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
+            exit 1
+          fi
+          echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          if [ -n "${METADATA_TOKEN:-}" ]; then
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          else
+            echo "source=workflow" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint read-only native Noema GitHub App token
+        if: env.PR_NUMBER != '' && steps.noema_metadata_credential.outputs.source == 'github-app'
+        id: noema_metadata_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
       - name: Reject a stale trigger before credential or model setup
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -728,14 +803,50 @@ jobs:
               ;;
           esac
 
-      - name: Provision pinned Node.js for Noema document review
+      - name: Check live pull request draft state before sidecar provisioning
+        # two_phase.py's verdict preparation already reads the live PR and
+        # skips a draft ("PR is draft; Noema verdict preparation skipped."),
+        # but only after the 10-13 minute contextual-orchestrator sidecar
+        # provisioning below has held a runner (e.g. newsdom-api job
+        # 108077744310, .github job 106665379126). This moves that same
+        # runtime decision ahead of provisioning; it deliberately reads the
+        # live PR instead of the event payload's draft flag, because the
+        # organization ruleset runs this workflow in other repositories only
+        # on opened/synchronize/reopened, so the event snapshot is not the
+        # authority. Fails OPEN: an unreadable or malformed live PR yields
+        # live_draft=false and keeps today's full review path, where
+        # two_phase.py still performs its own draft check. A draft conclusion
+        # skips the model steps, leaves noema_prepare's outputs unset (the
+        # same "publication skipped" state a draft produced before), and the
+        # job still succeeds.
         if: env.PR_NUMBER != ''
+        id: live_draft
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          set -uo pipefail
+          live_draft=false
+          if pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" 2>/tmp/noema-live-draft-error)"; then
+            if jq -e -s 'length == 1 and (.[0] | type == "object" and .draft == true)' <<<"$pull_request_json" >/dev/null 2>&1; then
+              live_draft=true
+            fi
+          else
+            echo "::warning::Noema could not read the live pull request draft state; continuing with the model review."
+            sed 's/^/  /' /tmp/noema-live-draft-error >&2 || true
+          fi
+          echo "live_draft=${live_draft}" >>"$GITHUB_OUTPUT"
+          if [ "$live_draft" = "true" ]; then
+            echo "::notice::PR is draft; Noema model review skipped before sidecar provisioning."
+          fi
+
+      - name: Provision pinned Node.js for Noema document review
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22.23.3"
 
       - name: Set up lock-compatible sidecar Python
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         id: sidecar_python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -743,7 +854,8 @@ jobs:
           update-environment: false
 
       - name: Provision contextual-orchestrator review sidecar
-        if: env.PR_NUMBER != ''
+        id: noema_sidecar
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -754,10 +866,22 @@ jobs:
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
           set -euo pipefail
+          test ! -L "$GITHUB_WORKSPACE/strix_runs"
+          rm -f "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
+      - name: Classify sidecar provider-capacity failure
+        id: noema_sidecar_failure
+        if: failure() && steps.noema_sidecar.outcome == 'failure'
+        env:
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ci/noema_preflight_capacity.py" \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --preflight-report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
+
       - name: Provision local reviewed HWP document reader
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
         run: |
@@ -785,7 +909,7 @@ jobs:
           echo "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" >>"$GITHUB_ENV"
 
       - name: Prepare Noema model verdict
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}

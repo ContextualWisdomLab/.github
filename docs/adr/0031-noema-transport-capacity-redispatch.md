@@ -75,3 +75,22 @@ model-failure verdict or restoring fixed model-path attempt ceilings.
 - **Rely only on the merge scheduler's next tick.** Deferred as a complementary path;
   it does not give the Noema workflow its own bounded, evidence-typed recovery when the
   scheduler is not looking at that head.
+
+## Proposed Strix startup extension — 2026-09-27
+
+- **Status:** Proposed; deployment and independent review remain unverified.
+- **Context:** Strix all-429 preflight fails before its model gate can retry;
+  late-life-anxiety-reanalysis #257/#269 have exact-job evidence of this path.
+- **Decision:** Reuse the bounded classifier in a separate post-failure dispatch
+  job, with live repository/head/base/ref/Ready validation and the same two-attempt
+  ceiling. Retain the failed scan and status; never infer approval from recovery.
+- **Consequences:** Automatic recovery can enter a healthier provider window and
+  uses up to two additional scan admissions. Persistent capacity failure still
+  requires operator action. Consumer execution needs the existing central
+  dispatch credential; its absence remains visible and fail-closed.
+- **Alternatives:** Model-gate retries cannot run before successful startup;
+  in-job startup loops hold a scan runner; unbounded dispatch amplifies capacity
+  pressure; neutral/success status would weaken the required security gate.
+
+See `../doctoring/strix-preflight-capacity-continuation-20260927.md` for evidence
+and the local-versus-hosted verification boundary.
