@@ -387,6 +387,12 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
 
 
+def test_launcher_reserves_capacity_for_parallel_strix_agents() -> None:
+    """Strix may send more than eight simultaneous requests to one sidecar."""
+    text = _read(LAUNCHER)
+    assert "max_concurrent_runs=16" in text
+
+
 def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
     """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)

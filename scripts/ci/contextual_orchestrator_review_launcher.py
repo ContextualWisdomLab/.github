@@ -1383,6 +1383,9 @@ def main(argv: list[str] | None = None) -> int:
         security=SecurityConfig(
             auth_token=auth_token,
             max_body_bytes=REVIEW_MAX_BODY_BYTES,
+            # Strix exhausted the generic eight-slot limit on PR #1227 while
+            # its parallel agents were still making successful provider calls.
+            max_concurrent_runs=16,
         ),
     )
     return 0
