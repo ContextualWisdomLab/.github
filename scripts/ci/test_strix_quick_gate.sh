@@ -5311,6 +5311,7 @@ EOS
 	pr-changed-scope-bounded)
 		if [ ! -f "$instruction_file" ] ||
 			! grep -Fq 'Review the changed source paths' "$instruction_file" ||
+			! grep -Fq 'final report must name each inspected file by its exact repository-relative path' "$instruction_file" ||
 			! grep -Fq 'sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java' "$instruction_file" ||
 			grep -Fq 'JwtUtil.java' "$instruction_file"; then
 			echo "Error: PR instruction file does not focus on changed source" >&2
