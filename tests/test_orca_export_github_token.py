@@ -12,8 +12,18 @@ import pytest
 
 
 SCRIPT_PATH = Path("scripts/orca/export_github_token.sh")
+DOCTORING_PATH = Path("docs/doctoring/orca-worker-github-token-bootstrap.md")
 APP_TOKEN = "synthetic-app-token-sentinel"
 PAT_TOKEN = "synthetic-pat-token-sentinel"
+
+
+def test_doctoring_record_invokes_the_script_and_forbids_sourcing() -> None:
+    """Operators must invoke the script; sourcing would exit their shell."""
+    doctoring = DOCTORING_PATH.read_text(encoding="utf-8")
+
+    assert "scripts/orca/export_github_token.sh" in doctoring
+    assert "or source it" not in doctoring
+    assert "Do not source it" in doctoring
 
 
 def _write_executable(script_path: Path, script_body: str) -> None:

@@ -81,7 +81,7 @@ capability path such as `~/.config/orca-workers/noema-app.pem` — never in git)
 # to gh-token-app.meta.json. Rotate before expiry.
 ```
 
-Workers then run `scripts/orca/export_github_token.sh` (or source it) which:
+Workers invoke `scripts/orca/export_github_token.sh` as a command. Do not source it: the script exits or replaces the process after it selects a token. It:
 
 1. Prefers a non-expired `gh-token-app`.
 2. Otherwise falls back to `gh-token` only after recording a warning.
