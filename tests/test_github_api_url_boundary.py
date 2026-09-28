@@ -178,9 +178,10 @@ def test_codeql_identity_client_never_constructs_redirect_request_with_bearer_to
     )
     handler = identity._RejectRedirects()
 
-    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+    from urllib.error import HTTPError
+    with pytest.raises(HTTPError, match="HTTP Error 302: Found"):
+        handler.redirect_request(request, None, 302, "Found", {}, target)
 
-    assert redirected is None
     assert request.get_header("Authorization") == "Bearer test-token"
 
 
@@ -195,9 +196,10 @@ def test_strix_evidence_client_never_constructs_redirect_request_with_bearer_tok
     )
     handler = binding._RejectRedirects()
 
-    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+    from urllib.error import HTTPError
+    with pytest.raises(HTTPError, match="HTTP Error 302: Found"):
+        handler.redirect_request(request, None, 302, "Found", {}, target)
 
-    assert redirected is None
     assert request.get_header("Authorization") == "Bearer test-token"
 
 
