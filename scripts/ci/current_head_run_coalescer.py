@@ -11,6 +11,8 @@ and candidate state are re-fetched immediately before cancellation.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import functools
 import json
 import os
 import re
@@ -421,7 +423,16 @@ def _associated_prs(
         if (number := _association_number(association)) is not None
         and number != current_pr_number
     }
-    return {number: _fetch_pr(repo, number) for number in sorted(numbers)}
+    if len(numbers) <= 1:
+        return {number: _fetch_pr(repo, number) for number in sorted(numbers)}
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(numbers)))
+    try:
+        fetch_pr_for_repo = functools.partial(_fetch_pr, repo)
+        results = executor.map(fetch_pr_for_repo, sorted(numbers))
+        return dict(zip(sorted(numbers), results))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)  # pragma: no cover
 
 
 def _refresh_siblings(
@@ -457,7 +468,15 @@ def _refresh_siblings(
         and (sibling_run_id := _positive_int(run_data.get("id"))) is not None
         and sibling_run_id != candidate_run_id
     )
-    return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
+    if len(sibling_ids) <= 1:
+        return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(sibling_ids)))
+    try:
+        fetch_run_for_repo = functools.partial(_fetch_run, repo)
+        return list(executor.map(fetch_run_for_repo, sibling_ids))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)  # pragma: no cover
 
 
 def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expected_head: str) -> list[int]:
