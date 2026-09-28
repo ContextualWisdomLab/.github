@@ -25,6 +25,31 @@ The directive is recorded verbatim (Korean, as authored) in the nine sections be
 English heading for navigability. Do not paraphrase or shorten these sections when copying them
 elsewhere; link to this file instead.
 
+## Long-term product outcome (2026-09-28 goal reset)
+
+Make naruon a production-ready, customer-controlled email workspace where a
+person can find the message that matters, see the current truth of a schedule
+that changed across messages, and inspect the source and change history before
+acting. The platform must keep customer data under the customer's control and
+leave organizational decisions with the person. Reusable components serve
+those jobs through their documented product boundaries; they are not goals in
+themselves. This outcome follows [the master context](CWL-MASTER-CONTEXT.md)
+and the [platform specification](https://github.com/ContextualWisdomLab/naruon/pull/974).
+
+Measure progress with direct, reproducible customer-task evidence: successful
+email retrieval and current-schedule identification on representative changing
+threads, traceable source and correction history, and verified customer data
+boundaries. Record the baseline and an agreed target before claiming an
+improvement; do not invent availability, latency, or adoption percentages.
+For each production capability, require a named owner, a released and pinned
+artifact, deployment evidence, failure-and-recovery evidence, and protected
+current-head review and checks. The [telemetry owner issue](https://github.com/ContextualWisdomLab/.github/issues/1565)
+is an enabling milestone: its SDK, Collector, security-event destination,
+retention, and consumer adoption must be verified in operation before it is
+called complete. Continue the review, repair, merge, and customer-gap loop in
+section 1 after that milestone closes; the live [Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1)
+orders the next work.
+
 ## 1. Execution goal and continuous loop
 
 > 실행 목표와 지속 Loop 열린 PR마다 별도 중간 보고 없이 리뷰 확인→수정→GitHub Checks 재검증→병합→다음 개발을 반복하라. PRD를 읽고 Loop·Goal을 자율 생성·수정·제거해 PR을 병합 또는 0개로 만들며 상용화하라. 200억 달러에 판매할 자신이 있을 품질과 구매자가 체감할 제품 Gap 해소가 목표다. ADR·리서치·현행 데이터·PR로 기능 명세·PRD·TRD·UML·Gap·조치 상태를 도출해 docs/product-technical-gap-baseline.md에 갱신하라. 한 시간 간격으로 예약하고 메시지도 개선·갱신하라. PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다. 내가 온전히 소유한 ContextualWisdomLab 저장소를 레버리지 순으로 연계해 PR 병합·추가와 Connector 추가·수정 등 Ecosystem을 구축하라. Ecosystem 전 라이브러리 PRD를 숙지하고 조직·저장소명 대소문자를 지킨다. 리뷰·Checks 대기는 Blocker가 아니며, 실패 원인·수정·재실행 필요에 즉시 대응하며 안전한 작업을 계속한다. 결과 보고에 멈추지 말고 다음 Loop로 이동하라. 저장소는 이름이 아니라 제품 책임·재사용 경계·문서·구현·소비 저장소를 대조해 선택한다. ADR·Goal을 수시로 갱신하고 Goal 수정 불가 시 Loop를 갱신한다.
