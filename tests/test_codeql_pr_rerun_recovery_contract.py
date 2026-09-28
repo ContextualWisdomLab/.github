@@ -40,8 +40,12 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
         "repos/ContextualWisdomLab/.github/dispatches"
     ]
     payload = json.loads(post_body.read_text(encoding="utf-8"))
+    client = payload["client_payload"]
     assert payload["event_type"] == "codeql-scan-v2"
-    assert payload["client_payload"]["rerun_request"]["schema"] == "1"
+    assert client["pr_head"] == {"schema": "1", "ref": "feature", "sha": "b" * 40}
+    assert client["producer_source_sha"] == "c" * 40
+    assert client["required_jobs"]
+    assert "rerun_request" not in client
 
 
 def test_status_lookup_paginates_complete_history_before_redispatch() -> None:
@@ -50,8 +54,10 @@ def test_status_lookup_paginates_complete_history_before_redispatch() -> None:
     script = _extract_run_block(workflow, DISPATCH_STEP_NAME)
 
     assert (
-        'gh api --paginate --slurp '
-        '"repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100"'
+        "gh api --paginate -f per_page=100 "
+        '"repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses" '
+        "--jq '.[]'"
         in script
     )
-    assert ".[][]" in script
+    assert "--slurp" not in script
+    assert "jq -s '.'" in script
