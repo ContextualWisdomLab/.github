@@ -100,6 +100,25 @@ def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     assert "merge authorization" in source
 
 
+def test_baseline_keeps_checkpoint_and_coverage_lock_incident_rows() -> None:
+    """Restack keeps this PR's checkpoint rows and main's coverage-lock row."""
+
+    source = BASELINE.read_text(encoding="utf-8")
+    assert "<<<<<<<" not in source
+    assert ">>>>>>>" not in source
+    for marker in (
+        "### 2026-09-20 current-head incident delta",
+        "CONTROL-OPENCODE-CHECKPOINT-INTEGRITY-01",
+        "CONTROL-OPENCODE-CONTINUATION-AUTHORITY-02",
+        "CONTROL-OPENCODE-PROVIDER-NEUTRAL-03",
+        "CONTROL-OPENCODE-CHECKPOINT-CAUSE-04",
+        "CONTROL-OPENCODE-CHECKPOINT-BOUNDS-05",
+        "### 2026-09-19 exact-head incident delta",
+        "CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01",
+    ):
+        assert marker in source, marker
+
+
 def test_baseline_preserves_protected_main_authority_sections() -> None:
     """Partial-file replacements must not erase protected Gap evidence."""
 
