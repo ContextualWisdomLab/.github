@@ -653,6 +653,35 @@ def test_fail_outside_a_phase_emits_no_phase_receipt() -> None:
     assert "orchestrator_sha=unknown" in result.stdout
 
 
+def test_dependency_install_command_failure_closes_phase_once(tmp_path) -> None:
+    """A failed real install command must leave one failed phase receipt."""
+    text = _read(SIDECAR)
+    start = text.index("phase dependency_install start")
+    end = text.index("phase dependency_install end outcome=ok", start)
+    install = text[start : end + len("phase dependency_install end outcome=ok")]
+    python = tmp_path / "failing-python"
+    python.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+    python.chmod(0o700)
+    harness = (
+        "set -euo pipefail\n"
+        "log() { printf '[t] %s\\n' \"$*\"; }\n"
+        + _phase_helpers()
+        + f'sidecar_python="{python}"\n'
+        + 'checked_out="a"\nrequirements_lock="/missing.lock"\n'
+        + 'ORCHESTRATOR_SOURCE="/missing"\nORG_REPO_ROOT="/missing"\n'
+        + install
+        + "\n"
+    )
+    result = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 42
+    assert result.stdout.count("phase=dependency_install event=start") == 1
+    assert result.stdout.count("phase=dependency_install event=end") == 1
+    assert "phase=dependency_install event=end" in result.stdout
+    assert "outcome=failed" in result.stdout
+    assert "outcome=ok" not in result.stdout
+
+
 def test_sidecar_emits_phase_receipts_in_startup_order_without_changing_gates() -> None:
     """Every startup phase opens and closes once, in order, around the existing gates."""
     text = _read(SIDECAR)

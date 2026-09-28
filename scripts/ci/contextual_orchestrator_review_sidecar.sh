@@ -73,6 +73,9 @@ phase() {
   log "phase=$1 event=$2 elapsed_s=$(awk -v now="$now" -v origin="$sidecar_clock_origin" 'BEGIN { printf "%.2f", now - origin }') orchestrator_sha=${ORCHESTRATOR_PIN_SHA:-unknown} workflow_sha=${GITHUB_WORKFLOW_SHA:-unknown}${3:+ ${*:3}}"
 }
 
+# set -e can exit without calling fail(); close that phase before EXIT cleanup.
+trap 'if [ -n "$sidecar_phase" ]; then phase "$sidecar_phase" end outcome=failed; fi' ERR
+
 fail() {
   if [ -n "$sidecar_phase" ]; then
     phase "$sidecar_phase" end outcome=failed
