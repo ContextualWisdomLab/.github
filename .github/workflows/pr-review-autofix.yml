@@ -270,6 +270,13 @@ jobs:
           python-version: "3.12"
           update-environment: false
 
+      - name: Prepare contextual-orchestrator closure without provider credentials
+        env:
+          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/contextual_orchestrator_review_sidecar.sh" --prepare
+
       - name: Provision contextual-orchestrator review sidecar
         env:
           SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}

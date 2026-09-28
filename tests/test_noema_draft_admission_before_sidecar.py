@@ -30,6 +30,7 @@ REVIEWER_TOKEN = (
 GATED_MODEL_STEPS = (
     "Provision pinned Node.js for Noema document review",
     "Set up lock-compatible sidecar Python",
+    "Prepare contextual-orchestrator closure without provider credentials",
     "Provision contextual-orchestrator review sidecar",
     "Provision local reviewed HWP document reader",
     "Prepare Noema model verdict",
