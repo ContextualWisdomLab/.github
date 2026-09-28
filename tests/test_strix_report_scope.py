@@ -7,6 +7,14 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/ci/strix_report_scope.py"
+COMPLETED_RESULTS = {
+    "scan_completed": True,
+    "success": True,
+    "executive_summary": "No issues found in the changed file.",
+    "methodology": "Reviewed the changed source file.",
+    "technical_analysis": "The changed function parses without executing input.",
+    "recommendations": "Retain static parsing.",
+}
 
 
 def test_report_scope_rejects_unrelated_success_and_accepts_scoped_success(tmp_path: Path) -> None:
@@ -30,7 +38,7 @@ def test_report_scope_accepts_path_suffix_at_component_boundary_only(tmp_path: P
     run = tmp_path / "current-scan"
     run.mkdir()
     (run / "run.json").write_text(
-        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True}}),
+        json.dumps({"status": "completed", "scan_results": COMPLETED_RESULTS}),
         encoding="utf-8",
     )
     report = run / "penetration_test_report.md"
@@ -89,7 +97,7 @@ def test_report_scope_rejects_each_malformed_report_shape(tmp_path: Path) -> Non
         with pytest.raises(ValueError, match=message):
             scope.validate(output, ["a.py"])
     metadata.write_text(
-        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True}}),
+        json.dumps({"status": "completed", "scan_results": COMPLETED_RESULTS}),
         encoding="utf-8",
     )
     scope.validate(output, ["src/a.py"])
