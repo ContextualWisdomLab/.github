@@ -992,6 +992,7 @@ jobs:
             chown -R root:root /work/.git
             chmod -R go-w /work/.git
           fi
+          rm -rf -- /work/.opencode-sandbox-home
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
