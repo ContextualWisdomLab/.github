@@ -1458,7 +1458,7 @@ def test_scope_module_entrypoint_verifies_and_emits_selected_rows(
         def poll() -> int:
             return 0
 
-    def popen(args, stdout):
+    def popen(args, stdout, shell=False):
         assert stdout is subprocess.PIPE
         artifact_id = int(args[2].split("/")[-2])
         return Process(case["archives"][artifact_id])
