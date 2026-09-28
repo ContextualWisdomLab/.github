@@ -13,9 +13,32 @@ set -u
 out=$1; shift
 mkdir -p "$out"
 hdr() { grep -i "^$1:" "$2" | head -1 | cut -d: -f2- | tr -d ' \r'; }
+# A label is one output stem inside OUTDIR. It may contain only ASCII letters,
+# digits, '.', '_', and '-', and it must not be empty or contain a '..' segment.
+# That charset also keeps the duplicate scan below from treating the label as a glob.
+safe_name() {
+  case "$1" in
+    ''|*..*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+seen_names=""
 while [ "$#" -gt 0 ]; do
   item=$1; shift
   name=${item%%:*}; path=${item#*:}
+  # Domain invariant: name must be a plain filename component, not a path.
+  if ! safe_name "$name"; then
+    echo "STOP: unsafe name '$name' (want one [A-Za-z0-9._-] stem without '..')" >&2
+    exit 2
+  fi
+  # Domain invariant: each name must be unique within a batch run.
+  case " $seen_names " in
+    *" $name "*)
+      echo "STOP: duplicate name '$name' — each batch name must be unique" >&2
+      exit 2
+      ;;
+  esac
+  seen_names="$seen_names $name"
   gh api -i "$path" > "$out/$name.raw" 2> "$out/$name.err"; rc=$?
   status=$(head -1 "$out/$name.raw" | awk '{print $2}')
   rem=$(hdr x-ratelimit-remaining "$out/$name.raw")
