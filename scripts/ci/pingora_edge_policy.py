@@ -113,6 +113,17 @@ DOCX_PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/
 DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
 )
+# ISO/IEC 29500 Strict names the same officeDocument part. Library of Congress
+# fdd000400 cites the first URI from ISO/IEC 29500-1:2012 §11.3.10. Microsoft
+# Word's Strict Open XML save writes the second (python-openxml/python-docx#693).
+DOCX_STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPES = frozenset({
+    "http://purl.oclc.org/ooxml/relationships/officeDocument",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+})
+DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPES = frozenset({
+    DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE,
+    *DOCX_STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPES,
+})
 # Every required part is read bounded, and the bounded read *is* the expansion
 # bound: a part whose decompressed content exceeds its ceiling is rejected
 # rather than streamed, so admission cannot be turned into an unbounded read
@@ -872,9 +883,12 @@ def _docx_relates_main_document(
 
     Requires the OPC relationships root element and exactly one relationship of
     the ``officeDocument`` type, internal, whose ``Target`` is exactly the main
-    document part in either permitted spelling. Exact matching is what rejects
-    a traversal, an absolute or an external target: nothing is resolved or
-    normalized, so no target outside the package can agree.
+    document part in either permitted spelling. Transitional packages use
+    ``DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE``; ISO/IEC 29500 Strict packages
+    use one URI in ``DOCX_STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPES``. One of
+    each is two relationships and does not agree. Exact matching is what
+    rejects a traversal, an absolute or an external target: nothing is resolved
+    or normalized, so no target outside the package can agree.
     """
 
     if elements[0][0] != f"{DOCX_PACKAGE_RELATIONSHIPS_NS} Relationships":
@@ -883,7 +897,7 @@ def _docx_relates_main_document(
         (attributes.get("Target"), attributes.get("TargetMode", "Internal"))
         for name, attributes in elements
         if name == f"{DOCX_PACKAGE_RELATIONSHIPS_NS} Relationship"
-        and attributes.get("Type") == DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE
+        and attributes.get("Type") in DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPES
     ]
     return roots in (
         [(DOCX_MAIN_DOCUMENT_PART, "Internal")],

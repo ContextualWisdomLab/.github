@@ -25,6 +25,13 @@ PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relat
 OFFICE_DOCUMENT_RELATIONSHIP_TYPE = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
 )
+# Library of Congress fdd000400 cites ISO/IEC 29500-1:2012 §11.3.10 for the
+# first spelling. Microsoft Word's Strict Open XML save writes the second
+# (python-openxml/python-docx#693). The OPC relationships namespace is unchanged.
+STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPES = (
+    "http://purl.oclc.org/ooxml/relationships/officeDocument",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+)
 MAIN_DOCUMENT_CONTENT_TYPE = policy.DOCX_MAIN_DOCUMENT_CONTENT_TYPE
 WORD_MAIN_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 STRICT_WORD_MAIN_NS = "http://purl.oclc.org/ooxml/wordprocessingml/main"
@@ -167,6 +174,30 @@ def test_valid_docx_accepts_the_iso_strict_main_document_namespace():
     """ISO 29500 Strict manuscripts carry the same content type and must pass."""
     archive_bytes = docx_archive(document=document_xml(namespace=STRICT_WORD_MAIN_NS))
     assert evaluate_bytes("docs/manuscript.docx", archive_bytes) == ()
+
+
+@pytest.mark.parametrize("relationship_type", STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPES)
+def test_valid_docx_accepts_an_iso_strict_office_document_relationship(relationship_type):
+    """Strict WordprocessingML still points the package root at the main part."""
+    archive_bytes = docx_archive(
+        package_rels=package_rels_xml(relationship_type=relationship_type),
+        document=document_xml(namespace=STRICT_WORD_MAIN_NS),
+    )
+    assert evaluate_bytes("docs/manuscript.docx", archive_bytes) == ()
+
+
+def test_mixed_transitional_and_strict_office_document_relationships_are_ambiguous():
+    """Exactly one officeDocument relationship is allowed, across either spelling."""
+    rels = (
+        f'{XML_DECLARATION}<Relationships xmlns="{PACKAGE_RELATIONSHIPS_NS}">'
+        f'<Relationship Id="rId1" Type="{OFFICE_DOCUMENT_RELATIONSHIP_TYPE}" '
+        'Target="word/document.xml"/>'
+        '<Relationship Id="rId2" Type="http://purl.oclc.org/ooxml/officeDocument/'
+        'relationships/officeDocument" Target="/word/document.xml"/>'
+        "</Relationships>"
+    ).encode()
+    with pytest.raises(policy.PolicyError):
+        evaluate_bytes("docs/manuscript.docx", docx_archive(package_rels=rels))
 
 
 @pytest.mark.skipif(
