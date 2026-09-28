@@ -969,6 +969,3 @@ def test_workspace_missing_root_returns_false(tmp_path: Path) -> None:
 
     missing = tmp_path / "missing-root"
     assert binding.workspace_contains_expected_diff(missing, "a.py", "body") is False
-
-
-
