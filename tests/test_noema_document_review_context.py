@@ -6,6 +6,8 @@ import base64
 import io
 import json
 import os
+import runpy
+import sys
 import zipfile
 from pathlib import Path
 
@@ -81,6 +83,15 @@ def _docx_entity_bytes() -> bytes:
     return output.getvalue()
 
 
+def _docx_archive(entries: dict[str, str | bytes]) -> bytes:
+    """Build a small DOCX-like ZIP from explicit member contents."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for member_name, member_body in entries.items():
+            archive.writestr(member_name, member_body)
+    return output.getvalue()
+
+
 def _pr() -> dict[str, object]:
     return {
         "headRefOid": "head",
@@ -112,6 +123,12 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     )
 
     assert "Provision local reviewed HWP document reader" in workflow
+    node_setup = "Provision pinned Node.js for Noema document review"
+    assert node_setup in workflow
+    setup = workflow.split(node_setup, 1)[1].split("\n      - name:", 1)[0]
+    assert "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020" in setup
+    assert 'node-version: "22.23.3"' in setup
+    assert workflow.index(node_setup) < workflow.index("Provision contextual-orchestrator review sidecar")
     assert 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' in workflow
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in workflow
     assert "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" in workflow
@@ -143,7 +160,7 @@ def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
 
     def fake_run(args, stdin=None):
         assert "contents/docs/review.docx?ref=head" in args[2]
-        return encoded
+        return json.dumps({"content": encoded, "encoding": "base64", "size": len(raw)})
 
     monkeypatch.setattr(noema, "run", fake_run)
     context = noema.build_review_context(
@@ -197,8 +214,11 @@ def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
 
 def test_malformed_docx_is_explicit_in_review_context(monkeypatch):
     """Malformed document bytes are reported instead of UTF-8 replacement text."""
-    encoded = base64.b64encode(_docx_bytes(malformed=True)).decode("ascii")
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
+    raw = _docx_bytes(malformed=True)
+    encoded = base64.b64encode(raw).decode("ascii")
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: json.dumps(
+        {"content": encoded, "encoding": "base64", "size": len(raw)}
+    ))
 
     context, parts = noema.changed_file_context(
         "owner/repo", 7, "head", changed_files=[("docs/broken.docx", "modified")]
@@ -214,6 +234,95 @@ def test_forbidden_docx_entities_are_explicitly_rejected():
     """Defused XML entity failures become the same bounded reader error."""
     with pytest.raises(document.DocumentReadError, match="DOCX document.xml is malformed"):
         document.extract_review_document("docs/entity.docx", _docx_entity_bytes())
+
+
+def test_document_reader_rejects_unsupported_and_oversized_inputs(monkeypatch):
+    """The public reader enforces its format and compressed-input bounds first."""
+    with pytest.raises(document.DocumentReadError, match=r"unsupported.*\.txt"):
+        document.extract_review_document("docs/review.txt", b"plain text")
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_BYTES", 3)
+    with pytest.raises(document.DocumentReadError, match="exceeds.*8 MiB"):
+        document.extract_review_document("docs/review.docx", b"1234")
+
+
+def test_docx_archive_and_xml_boundaries_fail_closed(monkeypatch):
+    """Malformed DOCX container structures expose bounded stable errors."""
+    valid_xml = (
+        f'<w:document xmlns:w="{document.W_NS}"><w:body>'
+        "<w:p><w:r><w:t>text</w:t></w:r></w:p>"
+        "</w:body></w:document>"
+    )
+    archive = _docx_archive({"word/document.xml": valid_xml})
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_ENTRIES", 0)
+    with pytest.raises(document.DocumentReadError, match="too many entries"):
+        document.extract_review_document("docs/review.docx", archive)
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_ENTRIES", 2048)
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_UNCOMPRESSED_BYTES", 1)
+    with pytest.raises(document.DocumentReadError, match="bounded unpacked size"):
+        document.extract_review_document("docs/review.docx", archive)
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_UNCOMPRESSED_BYTES", 64 * 1024 * 1024)
+
+    missing_xml = _docx_archive({"word/styles.xml": "<styles/>"})
+    with pytest.raises(document.DocumentReadError, match="no word/document.xml"):
+        document.extract_review_document("docs/review.docx", missing_xml)
+
+    malformed_xml = _docx_archive({"word/document.xml": "<not-closed>"})
+    with pytest.raises(document.DocumentReadError, match="document.xml is malformed"):
+        document.extract_review_document("docs/review.docx", malformed_xml)
+
+    no_body = _docx_archive(
+        {
+            "word/document.xml": (
+                f'<w:document xmlns:w="{document.W_NS}"></w:document>'
+            )
+        }
+    )
+    with pytest.raises(document.DocumentReadError, match="no document body"):
+        document.extract_review_document("docs/review.docx", no_body)
+
+    empty_body = _docx_archive(
+        {
+            "word/document.xml": (
+                f'<w:document xmlns:w="{document.W_NS}"><w:body>'
+                "<w:p/><w:tbl/><w:sectPr/>"
+                "</w:body></w:document>"
+            )
+        }
+    )
+    with pytest.raises(document.DocumentReadError, match="no readable text"):
+        document.extract_review_document("docs/review.docx", empty_body)
+
+
+def test_docx_visible_controls_and_ragged_tables_are_preserved():
+    """Visible Word controls and reviewer-safe table structure survive extraction."""
+    xml = f"""<w:document xmlns:w="{document.W_NS}">
+  <w:body>
+    <w:p><w:instrText>field</w:instrText><w:tab/><w:t>A</w:t><w:br/><w:t>B</w:t><w:cr/><w:t>C</w:t></w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:t>left|pipe</w:t></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+      <w:tr/>
+      <w:tr><w:tc><w:p><w:t>short</w:t></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"""
+    text = document.extract_review_document(
+        "docs/controls.docx", _docx_archive({"word/document.xml": xml})
+    )
+
+    assert "field\tA\nB\nC" in text
+    assert "### Table 1 (2 rows x 2 columns)" in text
+    assert "| left\\|pipe |  |" in text
+    assert "| short |  |" in text
+
+
+def test_invalid_github_base64_content_fails_closed(monkeypatch):
+    """Malformed GitHub file data must not reach the document reader."""
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: json.dumps({"content": "not/base64!", "encoding": "base64", "size": 1}))
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")
 
 
 def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
@@ -250,6 +359,81 @@ def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
         raise AssertionError("expected hung local HWP reader to fail closed")
 
 
+def test_hwp_reader_rejects_configuration_process_and_output_failures(monkeypatch):
+    """Every local HWP adapter boundary fails closed without leaking output."""
+    monkeypatch.delenv(document.HWP_READER_ENV, raising=False)
+    with pytest.raises(document.DocumentReadError, match="is not configured"):
+        document.extract_review_document("docs/review.hwp", b"binary")
+
+    monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
+
+    def cannot_start(*_args, **_kwargs):
+        raise OSError("node unavailable")
+
+    monkeypatch.setattr(document.subprocess, "run", cannot_start)
+    with pytest.raises(document.DocumentReadError, match="could not start"):
+        document.extract_review_document("docs/review.hwp", b"binary")
+
+    def completed(stdout: bytes):
+        return document.subprocess.CompletedProcess(
+            ["node"], 0, stdout=stdout, stderr=b"private adapter details"
+        )
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 3)
+    monkeypatch.setattr(document.subprocess, "run", lambda *_a, **_k: completed(b"four"))
+    with pytest.raises(document.DocumentReadError, match="bounded output"):
+        document.extract_review_document("docs/review.hwpx", b"binary")
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 256 * 1024)
+    monkeypatch.setattr(document.subprocess, "run", lambda *_a, **_k: completed(b"\xff"))
+    with pytest.raises(document.DocumentReadError, match="non-UTF-8"):
+        document.extract_review_document("docs/review.hwpx", b"binary")
+
+    monkeypatch.setattr(document.subprocess, "run", lambda *_a, **_k: completed(b" \n"))
+    with pytest.raises(document.DocumentReadError, match="empty text"):
+        document.extract_review_document("docs/review.hwpx", b"binary")
+
+
+def test_document_text_bound_preserves_utf8_boundary_and_reports_omission(monkeypatch):
+    """The DOCX path envelope never emits a partial UTF-8 code point."""
+    xml = (
+        f'<w:document xmlns:w="{document.W_NS}"><w:body>'
+        "<w:p><w:r><w:t>ééé</w:t></w:r></w:p>"
+        "</w:body></w:document>"
+    )
+    prefix = "[document text] path=docs/multibyte.docx\n\n"
+    monkeypatch.setattr(
+        document, "MAX_DOCUMENT_TEXT_BYTES", len(prefix.encode("utf-8")) + 1
+    )
+    assert document.extract_review_document(
+        "docs/multibyte.docx", _docx_archive({"word/document.xml": xml})
+    ) == (
+        f"{prefix}\n[document text truncated; 6 bytes omitted]"
+    )
+
+
+def test_document_reader_cli_success_failure_and_entrypoint(
+    tmp_path, monkeypatch, capsys
+):
+    """The byte-safe local CLI returns and propagates stable process statuses."""
+    docx_path = tmp_path / "review.docx"
+    docx_path.write_bytes(_docx_bytes())
+
+    monkeypatch.setattr(sys, "argv", [document.__file__, str(docx_path)])
+    assert document._main() == 0
+    assert "DOCX-REVIEW-MARKER" in capsys.readouterr().out
+
+    missing_path = tmp_path / "missing.docx"
+    monkeypatch.setattr(sys, "argv", [document.__file__, str(missing_path)])
+    assert document._main() == 1
+    assert str(missing_path) in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "argv", [document.__file__, str(docx_path)])
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(document.__file__, run_name="__main__")
+    assert raised.value.code == 0
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "expected_text"),
     [("simple.hwp", "안녕하세요 hwp-mcp."), ("text_only.hwpx", "hwpx 텍스트.")],
@@ -266,8 +450,15 @@ def test_real_hwp_mcp_fixture_text_reaches_reviewer_payload(
         )
 
     monkeypatch.setenv(document.HWP_READER_ENV, str(source))
-    encoded = base64.b64encode(fixture.read_bytes()).decode("ascii")
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
+    raw = fixture.read_bytes()
+    encoded = base64.b64encode(raw).decode("ascii")
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda _args, stdin=None, raw=raw, encoded=encoded: json.dumps(
+            {"content": encoded, "encoding": "base64", "size": len(raw)}
+        ),
+    )
     context = noema.build_review_context(
         "owner/repo", 7, _pr(), [(f"docs/{fixture_name}", "modified")]
     )
@@ -320,7 +511,13 @@ def test_docx_figures_reach_multimodal_llm_request(monkeypatch):
     """Synthetic DOCX figures must appear as image_url data-URLs in the model request."""
     raw = _docx_bytes(with_image=True)
     encoded = base64.b64encode(raw).decode("ascii")
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda _args, stdin=None, raw=raw, encoded=encoded: json.dumps(
+            {"content": encoded, "encoding": "base64", "size": len(raw)}
+        ),
+    )
 
     context = noema.build_review_context(
         "owner/repo", 7, _pr(), [("docs/review.docx", "modified")]
@@ -437,7 +634,17 @@ def test_review_context_equality_and_fetch_file_content_fail_closed(monkeypatch)
 
 
 def test_fetch_repository_file_bytes_rejects_malformed_base64(monkeypatch):
-    """Malformed GitHub content base64 fails closed before decoding."""
-    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "%%%not-base64%%%")
+    """Object-media GitHub content with invalid base64 fails closed."""
+    seen: list[list[str]] = []
+
+    def fake_run(args, stdin=None):
+        seen.append(args)
+        return json.dumps(
+            {"content": "%%%not-base64%%%", "encoding": "base64", "size": 1}
+        )
+
+    monkeypatch.setattr(noema, "run", fake_run)
     with pytest.raises(RuntimeError, match="malformed base64"):
         noema.fetch_file_review_bundle("owner/repo", "docs/x.docx", "head")
+    assert seen
+    assert "Accept: application/vnd.github.object+json" in seen[0]
