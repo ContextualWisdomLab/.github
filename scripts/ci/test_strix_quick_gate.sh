@@ -22,6 +22,7 @@ materialize_trusted_gate_fixture() {
 	cp "$GATE_SCRIPT" "$fixture_script_dir/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$fixture_script_dir/strix_model_utils.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$fixture_script_dir/strix_evidence_binding.py"
+	cp "$REPO_ROOT/scripts/ci/strix_report_scope.py" "$fixture_script_dir/strix_report_scope.py"
 	chmod +x "$fixture_script_dir/strix_quick_gate.sh"
 }
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
@@ -657,7 +658,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN" "dispatch-only opencode review does not retain an unreachable pull-request-target token bridge"
 	assert_file_not_contains "$workflow_file" "legacy_github_actions_opencode_blocking_review_ids" "dispatch-only opencode review does not retain stale github-actions bridge lookup code"
 	assert_file_not_contains "$workflow_file" "publish_legacy_github_actions_approval_bridge" "dispatch-only opencode review does not retain stale github-actions bridge publication code"
-	assert_file_contains "$workflow_file" 'COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head' "opencode coverage keeps PR-head data outside the trusted workflow root"
+	assert_file_contains "$workflow_file" 'COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source' "opencode coverage keeps PR-head data outside the trusted workflow root"
 	assert_file_contains "$workflow_file" 'target=/trusted,readonly' "opencode coverage mounts central scripts read-only in the isolated sandbox"
 	assert_file_contains "$workflow_file" 'target=/work' "opencode coverage mounts only the PR worktree writable in the isolated sandbox"
 	assert_file_contains "$workflow_file" '--pids-limit 2048' "opencode coverage isolates pull-request process ancestry and bounds process use"
@@ -7100,6 +7101,9 @@ else
 	fi
 fi
 echo "scan ok with PR head content"
+mkdir -p strix_runs/current
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf 'Assessed %s\n' "$FAKE_STRIX_EXPECTED_CHANGED_FILE" >strix_runs/current/penetration_test_report.md
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7715,6 +7719,9 @@ if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
 	matched_backend_context=1
 fi
 
+mkdir -p strix_runs/current
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf '%s\n' 'Assessed backend/api/auth.py' >strix_runs/current/penetration_test_report.md
 if [ "$matched_backend_context" -eq 1 ]; then
 	exit 0
 fi
@@ -8047,6 +8054,9 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 echo "scan ok"
+mkdir -p strix_runs/current
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf '%s\n' 'Assessed 한글 경로/app.py' >strix_runs/current/penetration_test_report.md
 exit 0
 EOF
 	chmod +x "$fake_strix"
