@@ -1667,7 +1667,7 @@ def test_structured_route_receipt_exports_only_bounded_scalars():
     error = noema.urllib.error.HTTPError("https://llm.example.test", 429, "", {}, io.BytesIO(body))
 
     telemetry = noema._extract_http_error_telemetry(error)
-    rendered = noema._format_gateway_error_telemetry(telemetry)
+    rendered = noema._format_gateway_telemetry(telemetry)
     assert rendered == (
         "provider_attempt_count=2 route_stage=structured_synthesis "
         "route_outcome=fail_closed upstream_status=429"
@@ -1686,6 +1686,46 @@ def test_malformed_structured_route_fails_closed_without_legacy_attempt_fallback
     error = noema.urllib.error.HTTPError("https://llm.example.test", 502, "", {}, io.BytesIO(body))
 
     assert noema._extract_http_error_telemetry(error) == {}
+
+
+def test_served_structured_route_reports_429_recovery_without_route_secrets(monkeypatch, capsys):
+    secret = "never-print-route-identity"
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
+    payload = {
+        "choices": [{"message": {"content": json.dumps({
+            "decision": "comment", "summary": "review complete", "findings": [],
+        })}}],
+        "orchestration": {"route": {
+            "stage": "structured_synthesis",
+            "terminal_reason": "served",
+            "attempted": [
+                {"agent_id": secret, "outcome": "retryable_transport", "provider_status": 429},
+                {"agent_id": secret, "outcome": "served"},
+            ],
+            "eligible_agent_ids": [secret],
+        }},
+    }
+
+    class Opener:
+        def open(self, _request):
+            return FakeResponse(payload)
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+    assert noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")["decision"] == "comment"
+    output = capsys.readouterr().out
+    assert "duration=" in output
+    assert (
+        "gateway provider_attempt_count=2 route_stage=structured_synthesis "
+        "route_outcome=served rate_limit_recovered=1"
+    ) in output
+    assert secret not in output
+
+    payload["orchestration"]["route"]["attempted"][0]["provider_status"] = True
+    assert noema._extract_success_route_telemetry(json.dumps(payload))["rate_limit_recovered"] == 0
+    payload["orchestration"]["route"]["attempted"].append({"outcome": secret})
+    assert noema._extract_success_route_telemetry(json.dumps(payload)) == {}
 
 
 def test_is_provider_capacity_http_status_covers_only_capacity_class():
