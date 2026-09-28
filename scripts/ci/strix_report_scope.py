@@ -4,11 +4,29 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 
+def names_changed_path(report: str, changed_path: str) -> bool:
+    """Return whether the report names ``changed_path`` or a component-boundary suffix of it.
+
+    Scanners abbreviate a scoped file to its basename or a trailing directory
+    slice; a bare substring would also accept ``test_x.py`` for ``x.py``.
+    """
+    parts = changed_path.split("/")
+    for start in range(len(parts)):
+        suffix = re.escape("/".join(parts[start:]))
+        # Only the full path may follow a slash, i.e. sit under an absolute scan root.
+        before = r"[\w.-]" if start == 0 else r"[\w./-]"
+        if re.search(rf"(?<!{before}){suffix}(?![\w/-]|\.\w)", report):
+            return True
+    return False
+
+
 def validate(output: Path, changed_paths: list[str]) -> None:
+    """Raise ``ValueError`` unless ``output`` holds one completed report naming a changed path."""
     if not output.is_dir() or output.is_symlink():
         raise ValueError("scan output directory is missing")
     runs = [path for path in output.iterdir() if path.is_dir() and not path.is_symlink()]
@@ -28,7 +46,7 @@ def validate(output: Path, changed_paths: list[str]) -> None:
     if metadata.get("status") != "completed" or results.get("scan_completed") is not True or results.get("success") is not True:
         raise ValueError("scan report is incomplete")
     report = report_path.read_text(encoding="utf-8")
-    if not any(path in report for path in changed_paths):
+    if not any(names_changed_path(report, path) for path in changed_paths):
         raise ValueError("scan report does not identify a changed source file")
 
 
