@@ -151,8 +151,14 @@ from opentelemetry.sdk.trace import TracerProvider as Provider
 selected = Provider if enabled else object
 selected()
 (Provider if enabled else object)()
+alternate = Provider or object
+alternate()
+(enabled and Provider)()
 '''
-    assert scan_source(source) == ((4, "selected"), (5, "conditional factory"))
+    assert scan_source(source) == (
+        (4, "selected"), (5, "conditional factory"),
+        (7, "alternate"), (8, "conditional factory"),
+    )
 
 
 def test_method_does_not_inherit_class_import() -> None:

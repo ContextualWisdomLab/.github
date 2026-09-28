@@ -36,7 +36,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Verify scanner source contract
         env:
-          SCANNER_SHA256: 1358af545a246ad232a2e4e3e0e7da9ed9fe96e27128b46ce918be8b03617623
+          SCANNER_SHA256: bbb11e76d9b6e53957ca8be451a0a49df9a1d0ba07bfc0b6d553a640e67da4b1
         run: |
           printf "%s  %s\n" "$SCANNER_SHA256" governance/scripts/ci/check_telemetry_ownership.py | sha256sum --check --status
       - name: Check product telemetry ownership
