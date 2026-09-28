@@ -199,7 +199,8 @@ known_internal_warning = re.compile(
 )
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
-    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.|"
+    r"PTY process count reached warning threshold: [0-9]+ active sessions$)"
 )
 known_optional_search_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "

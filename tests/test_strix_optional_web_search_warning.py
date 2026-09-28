@@ -113,6 +113,17 @@ class StrixOptionalWebSearchWarningTests(unittest.TestCase):
         self.assertIn("provider returned malformed search evidence", remaining)
         self.assertTrue(signal)
 
+    def test_completed_scan_ignores_only_exact_pty_count_notice(self) -> None:
+        notice = "PTY process count reached warning threshold: 60 active sessions\n"
+        remaining, signal = _sanitize_then_signal(notice + COMPLETION_LINE)
+        self.assertNotIn(notice, remaining)
+        self.assertFalse(signal)
+
+        unknown = "PTY process count reached warning threshold: unknown active sessions\n"
+        remaining, signal = _sanitize_then_signal(unknown + COMPLETION_LINE)
+        self.assertIn(unknown, remaining)
+        self.assertTrue(signal)
+
 
 if __name__ == "__main__":
     unittest.main()
