@@ -2869,6 +2869,100 @@ def bind_install_requirements(
     return lines
 
 
+_TOOL_ROLES = {
+    "co": ("ContextualWisdomLab/contextual-orchestrator", "requirements.lock"),
+    "strix": ("ContextualWisdomLab/.github", "requirements-strix-ci-hashes.txt"),
+}
+
+
+def _tool_git_stdout(source: Path, *args: str) -> bytes:
+    """Return git stdout for one tool checkout."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(source), *args],
+        check=True,
+        capture_output=True,
+    )
+    return completed.stdout
+
+
+def tool_source_identity(source: Path, sha: str, lock_name: str) -> dict[str, str]:
+    """Require a clean exact commit and the same tracked, hash-pinned lock bytes.
+
+    A direct archive, VCS URL, marker, or unpinned line is refused before any
+    wheel is collected. The refusal text names the lock shape only.
+    """
+
+    if source.is_symlink() or not GIT_SHA_RE.fullmatch(sha):
+        raise GateError(SOURCE_HASH_MISMATCH, "tool source does not match exact commit")
+    if _tool_git_stdout(source, "rev-parse", "HEAD").decode().strip() != sha:
+        raise GateError(SOURCE_HASH_MISMATCH, "tool source does not match exact commit")
+    if _tool_git_stdout(source, "status", "--porcelain", "--untracked-files=all"):
+        raise GateError(SOURCE_HASH_MISMATCH, "tool source has uncommitted content")
+    path = _require_regular_file(source / lock_name, SOURCE_HASH_MISMATCH)
+    raw = path.read_bytes()
+    if raw != _tool_git_stdout(source, "show", f"{sha}:{lock_name}"):
+        raise GateError(SOURCE_HASH_MISMATCH, "tool lock differs from immutable source")
+    try:
+        lock_download_options(raw.decode("utf-8"), path.parent)
+        parse_python_lock(raw.decode("utf-8"))
+    except (GateError, UnicodeError) as error:
+        raise GateError(
+            LOCK_SOURCE_UNSUPPORTED,
+            "tool lock uses an unsupported or unpinned source; HOLD",
+        ) from error
+    return {"source_sha": sha, "lock_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def tool_environment(source: Path, sha: str, root: Path, role: str, *, prepare: bool) -> None:
+    """License-prescreen one isolated CI tool closure and install only those bytes.
+
+    Preparation refuses provider credentials. Launch rechecks the preparation
+    receipt and does not install again. This is the licence-stage entry; review
+    workflows do not call it until the exact-text registry covers that lock.
+    """
+
+    repository, lock_name = _TOOL_ROLES[role]
+    if source.is_symlink() or root.is_symlink() or root.parent.is_symlink():
+        raise GateError(SOURCE_HASH_MISMATCH, "tool source/environment must not be symlinked")
+    identity = dict(tool_source_identity(source, sha, lock_name), role=role)
+    capture_root, downloaded = root / "capture", root / "collected"
+    report_path = root / "license-report.json"
+    raw_root = root / "raw"
+    script = Path(__file__).resolve().with_name("release_dependency_capture_raw.sh")
+    if prepare:
+        if any(os.environ.get(name) for name in (*STRIX_CREDENTIAL_NAMES, "ORCHESTRATOR_TOKEN")):
+            raise GateError("TOOL_CREDENTIALS_PRESENT", "tool preparation requires an uncredentialed step")
+        root.mkdir(parents=True, exist_ok=False)
+        subprocess.run(
+            ["bash", str(script), "--raw-root", str(raw_root), "--capture-root", str(capture_root),
+             "--ecosystems", "python", "--python-lock", str(source / lock_name),
+             "--download-root", str(downloaded)],
+            check=True,
+        )
+        (capture_root / "release.json").write_text(json.dumps({
+            "source_repository": repository, "source_sha": sha, "ecosystems": ["python"]}))
+        capture(raw_root, capture_root)
+    else:
+        if load_json(root / "prepared.json") != identity:
+            raise GateError(SOURCE_HASH_MISMATCH, "prepared tool role/source/lock differs")
+    report = gate(capture_root, stage=LICENSE_STAGE)
+    if not report.passed:
+        raise GateError(report.failures[0].code, "tool dependency license stage refuses installation")
+    report_path.write_text(json.dumps(report.to_json()))
+    bind_install_requirements(report_path, capture_root, downloaded, root / "bound.txt")
+    tool_source_identity(source, sha, lock_name)
+    if prepare:
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "venv")], check=True)
+        subprocess.run(
+            ["bash", str(script), "--install-gated", "--python-lock", str(source / lock_name),
+             "--python-interpreter", str(root / "venv/bin/python"), "--capture-root", str(capture_root),
+             "--download-root", str(downloaded), "--license-report", str(report_path)],
+            check=True,
+        )
+        (root / "prepared.json").write_text(json.dumps(identity))
+
+
 def install_is_authorized(report: Path) -> None:
     """Raise unless a prescreen report authorizes installing the release closure.
 
@@ -2895,13 +2989,27 @@ def install_is_authorized(report: Path) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry: ``validate-inputs`` and ``prescreen`` refuse a release before any
-    credential exists, ``require-strix-credentials`` refuses a credential-less Strix
-    stage, ``install-authorized`` refuses an install the licence stage did not clear,
+    credential exists, ``tool-identity`` refuses an inexact tool checkout,
+    ``tool-environment`` license-prescreens an isolated tool closure,
+    ``require-strix-credentials`` refuses a credential-less Strix stage,
+    ``install-authorized`` refuses an install the licence stage did not clear,
     ``gate`` refuses a release, and ``seal`` composes the attestation.
     """
 
     parser = argparse.ArgumentParser(description="Pre-publish dependency gate")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    tool_identity = sub.add_parser("tool-identity", help="Refuse an inexact or unpinned tool lock")
+    tool_identity.add_argument("--role", choices=tuple(_TOOL_ROLES), required=True)
+    tool_identity.add_argument("--source", required=True)
+    tool_identity.add_argument("--source-sha", required=True)
+
+    tool = sub.add_parser("tool-environment", help="Prepare or recheck a license-gated CI tool environment")
+    tool.add_argument("--role", choices=tuple(_TOOL_ROLES), required=True)
+    tool.add_argument("--source", required=True)
+    tool.add_argument("--source-sha", required=True)
+    tool.add_argument("--root", required=True)
+    tool.add_argument("--prepare", action="store_true")
 
     collect = sub.add_parser("capture", help="Assemble evidence and fixtures from raw output")
     collect.add_argument("--raw", required=True)
@@ -2986,6 +3094,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     github_output = os.environ.get("GITHUB_OUTPUT")
     destination = Path(github_output) if github_output else None
     try:
+        if args.command == "tool-identity":
+            identity = tool_source_identity(
+                Path(args.source), args.source_sha, _TOOL_ROLES[args.role][1]
+            )
+            json.dump(
+                dict(identity, role=args.role),
+                sys.stdout,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            sys.stdout.write("\n")
+            return 0
+        if args.command == "tool-environment":
+            tool_environment(
+                Path(args.source), args.source_sha, Path(args.root), args.role, prepare=args.prepare
+            )
+            return 0
         if args.command == "capture-license-selections":
             capture_license_selections(Path(args.source), args.source_sha, Path(args.capture))
             return 0

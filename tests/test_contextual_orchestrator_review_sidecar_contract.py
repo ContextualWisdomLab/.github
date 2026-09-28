@@ -294,19 +294,19 @@ def test_every_model_consumer_loads_the_bearer_inside_its_own_step() -> None:
 
 
 def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
-    """The bearer is masked before clone, install, launch, or health output."""
+    """Preparation excludes secrets; launch masks the bearer before output."""
     text = _read(SIDECAR)
     mask = "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\""
     assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert mask in text
     mask_index = text.index(mask)
     for later_operation in (
-        "git clone",
-        '"$sidecar_python" -m pip install',
         '"$ORCHESTRATOR_WORK/launch_sidecar.py"',
         "healthz",
     ):
         assert mask_index < text.index(later_operation)
+    assert text.index('fail "prepare requires an uncredentialed step"') < text.index("git clone")
+    assert text.index("tool-identity --role co") < text.index('ORCHESTRATOR_TOKEN="')
 
 
 def test_launcher_registers_secrets_into_the_kv_once() -> None:

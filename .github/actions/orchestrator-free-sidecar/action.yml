@@ -1,6 +1,10 @@
 name: Orchestrator free sidecar
 description: Provision the immutable contextual-orchestrator orchestrator/free gateway for a model-backed workflow.
 inputs:
+  mode:
+    description: Run prepare in a separate uncredentialed action step, then launch with provider credentials.
+    required: false
+    default: "launch"
   require_zdr:
     description: Require an attested Zero Data Retention route for private or internal content.
     required: false
@@ -32,6 +36,7 @@ runs:
     - name: Provision contextual-orchestrator orchestrator/free
       shell: bash --noprofile --norc -e -o pipefail {0}
       env:
+        SIDECAR_MODE: ${{ inputs.mode }}
         SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
         CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ inputs.require_zdr }}
         ORCHESTRATOR_CATALOG_LIMIT: ${{ inputs.catalog_limit }}
@@ -44,4 +49,8 @@ runs:
           echo "::error::Immutable central contextual-orchestrator sidecar source is missing or symlinked."
           exit 1
         fi
-        bash "$sidecar"
+        case "$SIDECAR_MODE" in
+          prepare) bash "$sidecar" --prepare ;;
+          launch) bash "$sidecar" ;;
+          *) echo "::error::Unsupported sidecar mode."; exit 1 ;;
+        esac
