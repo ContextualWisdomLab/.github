@@ -568,7 +568,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
-    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
+    assert (
+        "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-"
+        "${{ github.run_id }}-${{ github.run_attempt }}" in workflow
+    )
+    prepare = workflow.split("      - name: Prepare pull request merge tree for coverage measurement", 1)[1].split("      - name:", 1)[0]
+    assert 'mkdir "$COVERAGE_SOURCE_WORKDIR"' in prepare
+    assert 'rm -rf "$COVERAGE_SOURCE_WORKDIR"' not in prepare
     assert (
         'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
     )
@@ -835,6 +841,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert "printf '\\n[net]\\noffline = true\\n' >>/work/.opencode-sandbox-home/.cargo/config.toml" in measure_step
+    assert "CARGO_NET_OFFLINE=true \\" not in measure_step
+    assert measure_step.index('rm -rf -- /work/.opencode-sandbox-home') < measure_step.index(
+        'cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/'
+    )
     assert "docker run --rm --init --network=none" in measure_step
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1
