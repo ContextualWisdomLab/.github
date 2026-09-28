@@ -2061,7 +2061,7 @@ PY
 	normalize_vulnerability_location() {
 		local raw_location="$1"
 		raw_location="$({
-			python3 - "$REPO_ROOT" "$REPO_NAME" "$resolved_scan_target" "$narrowed_workspace_prefix" "$raw_location" <<'PY'
+			python3 - "$REPO_ROOT" "$REPO_NAME" "$resolved_scan_target" "$narrowed_workspace_prefix" "$raw_location" "$TARGET_PATH_IS_INTERNAL_PR_SCOPE" <<'PY'
 from pathlib import Path
 from urllib.parse import unquote
 import sys
@@ -2071,6 +2071,7 @@ repo_name = sys.argv[2]
 scan_target_root_raw = sys.argv[3].strip()
 scan_target_workspace_prefix = sys.argv[4].strip()
 raw_location = unquote(sys.argv[5].strip())
+internal_pr_scope = sys.argv[6] == "1"
 if not raw_location:
     raise SystemExit(1)
 
@@ -2099,7 +2100,7 @@ def emit_repo_relative(candidate: Path, fallback_relative: Path | None = None) -
         if fallback_relative is None:
             raise SystemExit(1)
         repo_candidate = (repo_root / fallback_relative).resolve(strict=False)
-        if not repo_candidate.exists():
+        if not repo_candidate.exists() and not (internal_pr_scope and candidate.is_file()):
             raise SystemExit(1)
         try:
             relative = repo_candidate.relative_to(repo_root)
@@ -2144,6 +2145,17 @@ PY
 		if [ -f "$REPO_ROOT/$raw_location" ] && [ ! -L "$REPO_ROOT/$raw_location" ]; then
 			printf '%s\n' "$raw_location"
 			return 0
+		fi
+		if [ "$TARGET_PATH_IS_INTERNAL_PR_SCOPE" -eq 1 ] &&
+			[ -f "$LAST_PULL_REQUEST_SCOPE_DIR/$raw_location" ] &&
+			[ ! -L "$LAST_PULL_REQUEST_SCOPE_DIR/$raw_location" ]; then
+			local changed_file
+			for changed_file in "${CHANGED_FILES[@]}"; do
+				if [ "$changed_file" = "$raw_location" ]; then
+					printf '%s\n' "$raw_location"
+					return 0
+				fi
+			done
 		fi
 
 		return 1
