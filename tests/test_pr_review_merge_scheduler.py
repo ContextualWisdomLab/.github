@@ -2541,6 +2541,37 @@ def test_dispatch_opencode_review_coalesces_a_fresh_head_when_enabled(monkeypatc
     assert result == "coalescing"
 
 
+def test_dispatch_opencode_review_fail_opens_when_default_horizon_is_unset(monkeypatch):
+    """Unset N dispatches a fresh head and does not query the coalesce tick."""
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", raising=False)
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "300")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: pytest.fail("unset N must not query coalesce ticks"),
+    )
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *a: ([], []))
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *a: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *a: True)
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *a: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "reset_active_workflow_runs_cache", lambda: None)
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *a, **k: None)
+
+    pr = make_pr(
+        headRefOid="a" * 40,
+        baseRefOid="b" * 40,
+        commits={"nodes": [{"commit": {"oid": "a" * 40, "committedDate": _committed_seconds_ago(60)}}]},
+    )
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    assert result == "dispatched"
+
+
 def test_dispatch_opencode_review_fail_opens_when_coalesce_tick_is_stale(monkeypatch):
     """A fresh head still dispatches when the org tick has not completed recently."""
     monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")

@@ -346,9 +346,9 @@ DEFAULT_COALESCE_WINDOW_SECONDS = 300
 # measurement (workflow 360129488, sampled 2026-09-18) found zero
 # conclusion=success ticks (only skipped/cancelled while the flag is false),
 # so N cannot be calibrated from successful-tick cadence yet. A positive N
-# (candidate once ≥3 success ticks exist: 600s = two healthy */5 periods)
-# may be set via OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS; do not encode
-# the measured multi-hour schedule-delivery lag as N. See ADR-0028 and
+# may be set via OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS only after a
+# separately reviewed measurement design. Do not encode an observation count
+# or the measured multi-hour schedule-delivery lag as N. See ADR-0028 and
 # docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md.
 DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0
 COALESCE_TICK_WORKFLOW_PATH = ".github/workflows/opencode-review-coalesce-tick.yml"
@@ -1824,9 +1824,10 @@ def recent_coalesce_tick_completed(
 ) -> bool:
     """Return whether a coalesce tick completed within the fail-open horizon.
 
-    The scheduled tick is the only path that dispatches synchronize-triggered
-    reviews once coalescing is enabled. When no tick has completed recently,
-    callers must fail open and dispatch immediately rather than defer forever.
+    A fresh successful tick is what lets a still-settling head stay deferred.
+    Non-positive N, or no successful tick inside a positive N, is stale:
+    synchronize and push callers dispatch immediately instead of waiting on
+    this schedule.
     """
     max_age = (
         coalesce_tick_max_age_seconds()

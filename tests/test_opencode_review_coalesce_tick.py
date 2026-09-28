@@ -150,6 +150,10 @@ def test_fail_open_horizon_defaults_unset_until_success_ticks_measured():
     assert "coalesce-fail-open-tick-max-age-20260918.md" in core
     assert "def recent_coalesce_tick_completed(" in core
     assert '!= "success"' in core
+    # ADR-0028 refuses an unmeasured observation count and a sole-schedule path.
+    assert "only path that dispatches" not in core
+    assert "candidate once" not in core
+    assert "≥3 success ticks" not in core
 
 
 def test_fail_open_doctoring_and_adr_refuse_unmeasured_reenable_rules():
