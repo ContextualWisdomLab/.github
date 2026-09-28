@@ -802,30 +802,20 @@ def test_publisher_workflow_cannot_replace_review_with_coverage_finding(
     assert "publish_fallback_diff_review" in model_skip
 
 
-def test_coverage_fallback_review_is_formal_not_comment() -> None:
-    """#1907: a COMMENT-only fallback can never satisfy the receipt gate, so the
-    required workflow's rerun-on-verdict path (opencode-review-dispatch.yml's
-    "Wake exact-head required OpenCode workflow" step) never fires and the
-    required opencode-review check fails closed forever. The fallback event
-    must be a formal state (REQUEST_CHANGES), matching the surrounding intent
-    comment: "so a miss never looks finished; next action stays 'fix coverage
-    evidence, then rerun'".
-    """
+def test_coverage_fallback_is_diagnostic_without_product_findings() -> None:
+    """Infrastructure failure must not create a product changes-requested state."""
     workflow = (ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
         encoding="utf-8"
     )
     fallback_fn = workflow.split("publish_fallback_diff_review() {", 1)[1]
     fallback_fn = fallback_fn.split("\n          }\n", 1)[0]
-    assert 'event="COMMENT"' not in fallback_fn
-    assert 'event="REQUEST_CHANGES"' in fallback_fn
+    assert 'event="COMMENT"' in fallback_fn
+    assert 'event="REQUEST_CHANGES"' not in fallback_fn
+    assert "request_changes_for_coverage_evidence_failure" in fallback_fn
 
 
-def test_coverage_fallback_review_body_is_a_formal_receipt() -> None:
-    """The fallback body actually produced by build-fallback-review must be
-    accepted by the receipt gate once it is published as a formal event, so
-    the required workflow can observe a current-head verdict and stop
-    fail-closing indefinitely.
-    """
+def test_coverage_fallback_does_not_satisfy_the_formal_receipt_gate() -> None:
+    """Diagnostic coverage comments cannot authorize a completed product review."""
     body = surfaces.build_fallback_review(
         changed_files=["python/fast_mlsirm/estimators/marginal.py"],
         head_sha=HEAD,
@@ -838,8 +828,9 @@ def test_coverage_fallback_review_body_is_a_formal_receipt() -> None:
         "id": 1,
         "user": {"login": "opencode-agent"},
         "commit_id": HEAD,
-        "state": "CHANGES_REQUESTED",
+        "state": "COMMENTED",
         "body": body,
     }
     receipt, reason = receipt_gate.evaluate_receipts([review], HEAD, is_draft=False)
-    assert receipt is not None, reason
+    assert receipt is None
+    assert "no current-head formal" in reason
