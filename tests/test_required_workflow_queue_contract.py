@@ -21,6 +21,31 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
+    """Central-only workflows cannot fall back into the general Ubuntu pool."""
+    for name, group, jobs in (
+        ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("agent-mention-router.yml", "CWL central control", 2),
+        ("hourly-review-repair.yml", "CWL central control", 1),
+    ):
+        text = workflow_text(name)
+        assert text.count(f"    runs-on:\n      group: {group}\n      labels: [self-hosted, linux, x64]") == jobs
+        assert "runs-on: ubuntu-24.04" not in text
+
+
+def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
+    """Reusable trusted schedulers share control capacity without PR execution."""
+    text = workflow_text("pr-review-merge-scheduler.yml")
+    selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
+    assert selector.strip() == "runs-on:"
+    assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
+    assert "fromJSON" not in selector
+    assert 'trusted_repository != "ContextualWisdomLab/.github"' in text
+    assert 'tarball/${TRUSTED_SOURCE_REF}' in text
+    assert 'Trusted scheduler source ref must resolve to the immutable workflow commit SHA' in text
+
+
 # The workflow-level block is the one whose key starts at column zero; job-level
 # blocks are indented under ``jobs:``. Anchoring there instead of slicing the text
 # before ``permissions:`` makes the search independent of key order, which two
@@ -959,11 +984,12 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     end = workflow.index('\n              \' <<<"$runs_json"', start)
     runs = {
         "workflow_runs": [
-            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
-            {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
-            {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 1, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
+            {"id": 2, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 3, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
+            {"id": 4, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 5, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 6, "name": "Strix Security Scan", "path": ".github/workflows/other.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
         ]
     }
     result = subprocess.run(
@@ -1012,7 +1038,7 @@ if [[ "$*" == *"/pulls/7"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status=queued"* ]]; then
-  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan owner/repo#7@old","path":".github/workflows/strix.yml","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status="* ]]; then

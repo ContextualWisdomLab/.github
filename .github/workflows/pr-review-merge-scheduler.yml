@@ -112,7 +112,11 @@ jobs:
         github.event_name != 'repository_dispatch' ||
         github.event.client_payload.org_sweep != true
       )
-    runs-on: ubuntu-24.04
+    # The group admits only trusted central main workflows, including reusable
+    # callers. Keep admission/dispatch off pools occupied by model execution.
+    runs-on:
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
     # 360-minute platform default. This is a single-repository queue scan
     # (paginated GraphQL reads plus at most one review dispatch and one

@@ -81,3 +81,77 @@ That competes directly with the org's 60-job ceiling work, and `#1949`'s measure
 The report adds `postponed_probed_count`; `skipped_count` now means "postponed and never reached", and `candidate_count − probed_count − skipped_count` keeps its meaning. A refused probe additionally records `retry_after_s` when the response carried a whole-seconds `Retry-After` header (the HTTP-date form and out-of-range values record nothing). Nothing waits on that value; it exists so the next census can answer the question this amendment could not.
 
 **Discriminator.** `postponed_probed_count > 0` marks any boot that reached a second pass, which includes the `12 / 12 / 3` class as well as the burst class. To isolate the all-429 class, read the first `probed_count − postponed_probed_count` rows of `routes` (they are in probe order) and require every one to carry `http_status` 429. The next census asks (a) whether such boots end with `ready_count ≥ 1`, (b) what fraction of 429 rows carry `retry_after_s` and how long the refusals claim to last, (c) whether the healthy-minute figures (`ready 5–6`) are unchanged, and (d) the provisioning step's duration on those boots, so the benefit in (a) and the cost above are read from one table. If (a) is consistently 0 **and** (b) shows providers publishing a usable delay, the follow-up is to spend the second pass after that delay rather than immediately — a decision this ADR deliberately leaves to that data. `#1948`'s shared rate ledger remains the lever above all of it.
+
+## 2026-09-27 amendment — concurrent readiness (Proposed)
+
+### Context
+
+The 90-second probe-duration examples above predate ADR-0003's 2026-09-13
+runtime pin update. They are historical measurements, not current wall-time
+bounds. At pin `767e67fbc6b881a452761f32abb69b9971b9b03b`, model inference
+has no configured deadline. In fast-mlsirm run `36237188327`, retained artifact
+`10919666896` shows discovery completed and several serial probes finished,
+then `nvidia_nim` `meta/llama-3.2-90b-vision-instruct` began at
+2026-09-26T19:06:49.173Z without a later outcome before hosted cancellation
+at 2026-09-27T01:00:56.653Z. Health readiness and scanning were never reached.
+
+### Decision
+
+In the shared review startup, facing a pending provider probe that prevents
+later candidates from being validated, we use concurrent validation with the
+existing total probe budget, in order to reach the same eight-ready target
+without classifying slow inference as failure, accepting more simultaneous
+provider traffic within the unchanged request-count budget.
+
+The shared launcher uses the existing per-route validator and payload. It
+processes available completions before scheduling more candidates, postpones
+future candidates after observed consecutive account 429s, and spends at most
+16 base probes per stage and four escalations per run (shared across primary
+and fallback). The same probe budget bounds outstanding calls; no new numeric
+limit is introduced. Already outstanding calls cannot be retroactively
+postponed when another call reports 429. Only completed validated routes and
+explicitly retryable responses enter the serving pool. Pending rows are
+recorded separately, never rejected or admitted. The snapshot seals further
+escalations; pending base calls may complete but cannot spend another retry.
+No model call is cancelled when the readiness target is reached. Their threads
+remain within the sidecar lifecycle and end when that process is explicitly
+terminated or its host ends. The priced fallback still begins only after the
+primary stage terminates with no ready route.
+
+### Consequences
+
+A pending probe no longer serializes all later candidates. The ready target,
+free/ZDR selection, validation, and global request budgets remain intact.
+A pool without enough responding routes can still wait indefinitely; this
+change makes no inference deadline or hosted-capacity guarantee. Simultaneous
+traffic can expose provider capacity limits sooner. Readiness membership follows
+completion order, while serving priority and evidence rows retain catalog
+scheduling order. The
+snapshot may contain pending calls that subsequently finish; it is startup
+admission evidence, not a final verdict on every candidate.
+
+### Alternatives considered
+
+- A fixed inference timeout conflicts with ADR-0003 and was rejected.
+- Lowering the eight-ready target weakens the intended validated pool and was
+  rejected.
+- Admitting unprobed candidates removes provider validation and was rejected.
+- Eight outstanding calls recreate the same obstruction when eight pending
+  probes precede eight healthy ones; the regression oracle demonstrated this,
+  so the existing total probe budget also bounds outstanding calls.
+- Runner cancellation discards valid current-head work and does not repair
+  startup scheduling.
+
+### Verification
+
+Event-controlled tests keep one or eight probes pending while eight later
+routes become ready. The scheduler must return before the test releases those
+calls. Separate checks cover all-429 failure, global escalation budget,
+primary/fallback ordering, deferred-route admission, and unexpected worker
+faults. Hosted acceptance is required; this amendment is not a claim that the
+repair has been deployed.
+
+Implementation uses only the standard library's [Thread and Lock contracts](https://docs.python.org/3/library/threading.html)
+and [synchronized Queue](https://docs.python.org/3/library/queue.html). Pending
+probe threads deliberately share the sidecar process lifecycle; interpreter
+shutdown is not a resumable-provider guarantee.
