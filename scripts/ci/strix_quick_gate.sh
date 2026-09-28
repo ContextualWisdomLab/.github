@@ -202,7 +202,9 @@ optional_web_search_warning = re.compile(
     # web-search failure and continues the scan; it is not an LLM outage.
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
     r"[^ ]+ - strix\.tools\.web_search\.tool: "
-    r"web_search invoked without PERPLEXITY_API_KEY configured\s*$"
+    r"web_search invoked without "
+    r"(?:EXA_API_KEY|PERPLEXITY_API_KEY|EXA_API_KEY or PERPLEXITY_API_KEY) "
+    r"configured\s*$"
 )
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"

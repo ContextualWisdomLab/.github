@@ -4739,6 +4739,8 @@ EOS
 		mkdir -p "$STRIX_REPORTS_DIR/fake-optional-web-search-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-optional-web-search-warning/strix.log" <<'EOS'
 2026-09-28 04:00:15.128 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured
+2026-09-28 04:00:15.129 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without EXA_API_KEY configured
+2026-09-28 04:00:15.130 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without EXA_API_KEY or PERPLEXITY_API_KEY configured
 2026-09-28 04:54:41.472 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
 		echo 'scan completed despite optional web search and PTY notices'
