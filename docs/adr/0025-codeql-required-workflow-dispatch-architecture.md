@@ -1,6 +1,6 @@
 # 0025 — Restore central CodeQL as a required workflow via repository_dispatch
 
-**Status:** Proposed · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
+**Status:** Proposed, amended 2026-09-12 (versioned handler-first bootstrap) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
 
 ## Problem
 
@@ -96,14 +96,29 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 does) before dispatching.
   analyze-head (matrix)     -- SAME REQUIRED-CHECK NAME:
                                 "CodeQL compatibility analysis (${{ matrix.language }})".
-                                No codeql-action reference. On attempt one it
-                                dispatches its exact run id, job id, language,
-                                and head, then fails intentionally to release
-                                the runner. The trusted handler publishes the
-                                terminal status and reruns only that failed
-                                job. On attempt two the shard reads the
-                                authenticated current-head status once and
-                                reflects it as this job's own exit code.
+                                No codeql-action reference and no
+                                repository_dispatch. On attempt one it
+                                re-checks the live head, consumes an
+                                authenticated codeql-dispatch/<language>
+                                status when one exists, and otherwise fails
+                                pending to release the runner. The trusted
+                                handler publishes the terminal status and
+                                reruns only that failed job. On the woken
+                                attempt the shard reads the authenticated
+                                current-head status once and reflects it as
+                                this job's own exit code.
+  dispatch-current-head     -- NEW: needs analyze-head, runs on attempt one
+                                of an open current-head PR after the shards
+                                have job ids. Collects those ids from this
+                                run's jobs API, POSTs event_type codeql-scan
+                                once with the remaining language matrix and
+                                required_jobs: [{language, job_id}, ...], and
+                                fails closed if any shard job id is missing.
+                                Skips the POST when every language already
+                                has a terminal verdict. github.run_attempt == 1
+                                is required: a single-job wake re-runs
+                                dependents, and a second POST would cancel
+                                the in-flight multi-language handler.
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -151,24 +166,49 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 closed and leaves the required job failed.
 ```
 
-### Concurrency identity is per pull request and language shard
+### Concurrency identity is per pull request; language independence is the job matrix
 
-Each required `analyze-head` matrix job dispatches one language and supplies a
-matching `required_language`. The native handler therefore serializes only the
-same repository, pull request, and language tuple. A newer dispatch for that
-tuple cancels its stale predecessor, while Python, JavaScript/TypeScript, and
-Actions scans for the same head remain independent.
+The required `analyze-head` matrix still publishes one named check per
+language. It no longer POSTs. One `dispatch-current-head` job sends every
+still-pending language in a single `codeql-scan` payload (`matrix` plus
+`required_jobs`). The native handler's concurrency group is
+`codeql-scan-dispatch-${target_repository}-${pr_number}` with
+`cancel-in-progress: true`, so a newer HEAD of the same pull request cancels
+its predecessor and other repositories or pull requests stay independent.
 
-This distinction is required by the exact-job wake contract. On 2026-09-05,
-contextual-orchestrator PR #1049 dispatched all three current-head language
-jobs, but central run `33938784437` was the sole survivor because the handler's
-group omitted `required_language`. The sibling runs cancelled one another,
-leaving their required jobs failed in the documented `pending` handoff state.
-The chosen key adds the already validated language to the existing workflow,
-repository, and pull-request identity. Sending the full language matrix in one
-dispatch was rejected because the handler validates one shard and wakes one
-exact required job per run; changing that contract would enlarge the security
-and recovery surface without solving another observed need.
+Language independence is `strategy.fail-fast: false` on that one run's job
+matrix. Each scan job still publishes `codeql-dispatch/<language>` and wakes
+only its own required job. One language's failure cannot cancel or skip a
+sibling.
+
+#### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
+
+The 2026-09-05 per-language run was the right fix for the accident it
+recorded. contextual-orchestrator PR #1049 dispatched three current-head
+language jobs, and central run `33938784437` was the sole survivor because
+the handler's group omitted `required_language`. Sibling runs cancelled one
+another and left their required jobs failed in the `pending` handoff state.
+Sending the full language matrix in one dispatch was rejected then because
+the handler validated one shard and woke one exact required job per run;
+enlarging that surface had no observed need.
+
+That need now exists. On 2026-09-07 the organization job ceiling (60 jobs)
+was saturated by this fan-out: ContextualWisdomLab/.github had ~300 queued
+runs, 149 of them `codeql-scan-dispatch.yml`, covering 60 PR@SHA tuples
+(n=2:29, n=3:27, n=4:2). Duplicate cancellation could not collapse them:
+the language is not present on the run name, the job name, or the REST
+payload. The user-facing concurrency contract for pull-request workflows is
+`{workflow}-{repository}-{PR}` with `cancel-in-progress: true` only for a
+superseded HEAD of the same pull request, and a language suffix is
+forbidden.
+
+The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
+superseded. The sibling-cancel failure mode is gone because siblings are
+jobs in one run, not runs in one concurrency group. The exact-job wake
+contract is preserved: `required_jobs` is a 1:1 map of language to canonical
+job id, each scan shard looks up only its own id, and a missing, stale, or
+mismatched identity still fails closed. The old scalar
+`required_job_id`/`required_language` payload is retired.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -240,9 +280,10 @@ blocker for this one.
   inline Python between `analyze-head`/`analyze-merge` today.
   exact run/job wake-up follows the OpenCode runner-release pattern while
   avoiding one occupied runner per language for the scan's full duration.
-- A repository and pull request can now have one active native handler per
-  language. This modest concurrency increase is bounded by the detected CodeQL
-  matrix and prevents valid sibling evidence from being treated as stale work.
+- A repository and pull request have one active native handler run. Language
+  parallelism is bounded by the detected CodeQL matrix inside that run, and a
+  superseded HEAD of the same pull request cancels the in-flight handler
+  instead of queuing another copy per language.
 - Re-admitting `codeql-pr.yml` to ruleset `18156473` must happen only after
   this design is implemented, tested, and its `detect-languages`/
   `dispatch-analysis`/`analyze-head` jobs are confirmed free of any
@@ -265,3 +306,55 @@ blocker for this one.
    required `workflows` list (admin:org PUT, same mechanism used to remove
    it) and verify a real PR observes a successful, correctly-named required
    check before declaring this ADR's status Accepted.
+
+## 2026-09-12 amendment: versioned handler-first bootstrap
+
+The initial rollout created a protected-branch/client dependency cycle. A
+candidate producer can dispatch a stronger evidence envelope, but
+`repository_dispatch` always executes the handler from protected `main`.
+Conversely, landing the stronger handler first would reject the protected
+client's legacy payload and status context. This ADR therefore adopts a
+staged protocol on the single canonical handler; it does not create a copied
+workflow or permit branch-selected execution.
+
+The protected bootstrap accepts exactly two event types:
+
+- `codeql-scan` is temporary legacy v1. It keeps the protected client's
+  current run title, top-level `required_jobs`, and
+  `codeql-dispatch/<language>` status context. It rejects nested `pr_head`,
+  `producer_source_sha`, `rerun_request`, and explicit `rerun_mode` fields so
+  a v2 caller cannot downgrade its identity checks.
+- `codeql-scan-v2` is the proposed v2 contract. The event type is the version
+  discriminator and consumes no `client_payload` property. It requires the
+  versioned head envelope, exact synthetic merge `producer_source_sha`, live
+  base/head parent binding, base-bound status context, and exact handler
+  gate/SARIF/artifact evidence.
+
+Both modes share one repository-and-PR concurrency group and one post-matrix
+`settle-required-run` job. The matrix scan has `actions:read`; only settlement
+has `actions:write`. Settlement revalidates the open PR, repository, base ref
+and SHA, head ref and SHA, required run, complete required-job map, terminal
+handler jobs, gate steps, and non-expired SARIF artifacts before issuing one
+run-wide rerun request. The common concurrency identity prevents v1 and v2
+from becoming simultaneous writers during cutover.
+
+Live evidence for the amendment is recorded in
+`docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md`. In short,
+handler run `34684228601` completed both language scans but its matrix-owned
+legacy wakes raced: Actions started the required run and Python received HTTP
+403. Later same-tuple handler runs were repeatedly cancelled by concurrency,
+including `34684575249`, leaving a clean scan without a converged terminal
+receipt. This is a settlement-timing defect, not a CodeQL finding.
+
+Landing sequence is normative:
+
+1. Land this dual-event, legacy-compatible handler from fresh protected main.
+2. Non-force restack the complete successor (#2040), switch its producer to
+   `codeql-scan-v2`, and generate fresh exact-head end-to-end evidence.
+3. Keep legacy v1 until the protected v2 producer is live, all in-flight v1
+   required runs are terminal, and repository-wide caller inventory is zero;
+   then remove v1 with its bridge tests in a separate proven cleanup.
+
+The ADR remains **Proposed** until that sequence passes ordinary protection
+and a real consumer reaches a successful required CodeQL conclusion. Open PR
+code is not production authority.

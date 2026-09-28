@@ -6,9 +6,9 @@ inputs:
     required: false
     default: "false"
   catalog_limit:
-    description: Maximum discovered route catalog size for the sidecar preflight.
+    description: Maximum discovered route catalog size for the sidecar preflight (a candidate list probed lazily to a readiness target, ADR-0029).
     required: false
-    default: "12"
+    default: "24"
   catalog_account_cap:
     description: Maximum routes admitted from one credential account.
     required: false
@@ -23,9 +23,16 @@ runs:
         ref: ${{ github.action_ref }}
         path: ${{ runner.temp }}/cwl-control-plane
         persist-credentials: false
+    - name: Set up lock-compatible sidecar Python
+      id: sidecar_python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.12"
+        update-environment: false
     - name: Provision contextual-orchestrator orchestrator/free
       shell: bash --noprofile --norc -e -o pipefail {0}
       env:
+        SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
         CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ inputs.require_zdr }}
         ORCHESTRATOR_CATALOG_LIMIT: ${{ inputs.catalog_limit }}
         ORCHESTRATOR_CATALOG_ACCOUNT_CAP: ${{ inputs.catalog_account_cap }}

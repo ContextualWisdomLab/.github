@@ -195,12 +195,43 @@ def test_scheduler_validates_dispatch_authority_before_credentials() -> None:
         check=False,
     ).returncode == 0
 
+    # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with the two
+    # dispatch workflows; every listed identity passes when actor and sender
+    # both equal it, whitespace around commas tolerated.
+    allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        assert subprocess.run(
+            ["bash"],
+            input=shell,
+            text=True,
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            check=False,
+        ).returncode == 0
+
     for override in (
         {"DISPATCH_SENDER": "untrusted"},
         {"DISPATCH_ACTOR": "untrusted"},
         {"TARGET_REPOSITORY": "ContextualWisdomLab/unapproved"},
         {"ALLOWED_DISPATCH_ACTOR": ""},
         {"ALLOWED_TARGET_REPOSITORIES": ""},
+        # A listed allowlist still rejects an unlisted identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "untrusted",
+            "DISPATCH_SENDER": "untrusted",
+        },
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "opencode-agent[bot]",
+            "DISPATCH_SENDER": "github-actions[bot]",
+        },
     ):
         assert subprocess.run(
             ["bash"],

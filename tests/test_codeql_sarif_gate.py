@@ -203,3 +203,135 @@ def test_script_entrypoint_exits_with_main_status(tmp_path, monkeypatch):
         runpy.run_path(str(Path("scripts/ci/codeql_sarif_gate.py")), run_name="__main__")
 
     assert exc_info.value.code == 0
+
+
+def _extension_run(results: list[dict], *, driver_rules: list | None = None) -> dict:
+    """A run shaped like a real CodeQL artifact: 0 driver rules, rules in a query-pack extension."""
+    extension_rules = [{"id": f"py/filler-{n}"} for n in range(17)] + [
+        {
+            "id": "py/incomplete-url-substring-sanitization",
+            "properties": {"security-severity": "7.8", "tags": ["security", "external/cwe/cwe-020"]},
+            "defaultConfiguration": {"level": "warning"},
+        }
+    ]
+    return {
+        "tool": {
+            "driver": {"name": "CodeQL", "rules": driver_rules or []},
+            "extensions": [{"name": "codeql/python-queries", "rules": extension_rules}],
+        },
+        "results": results,
+    }
+
+
+def test_gather_findings_resolves_rules_from_the_referenced_extension(tmp_path):
+    """Issue #2150: a result whose rule lives in tool.extensions must gate, not fail open."""
+    _write_sarif(
+        tmp_path / "ext.sarif",
+        [
+            _extension_run(
+                [
+                    {
+                        "ruleId": "py/incomplete-url-substring-sanitization",
+                        "rule": {"id": "py/incomplete-url-substring-sanitization", "index": 17, "toolComponent": {"index": 0}},
+                        "message": {"text": "doi check"},
+                        "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/x.py"}, "region": {"startLine": 4}}}],
+                    },
+                    {
+                        "ruleId": "py/incomplete-url-substring-sanitization",
+                        "rule": {"index": 17, "toolComponent": {"name": "codeql/python-queries"}},
+                        "message": {"text": "by component name"},
+                    },
+                ]
+            )
+        ],
+    )
+
+    findings, total_results, _ = gate.gather_findings(tmp_path)
+
+    assert total_results == 2
+    assert [(f.rule_id, f.score, f.level, f.path, f.line) for f in findings] == [
+        ("py/incomplete-url-substring-sanitization", 7.8, "warning", "src/x.py", 4),
+        ("py/incomplete-url-substring-sanitization", 7.8, "warning", "unknown", 0),
+    ]
+
+
+def test_gather_findings_keeps_colliding_rule_ids_per_component(tmp_path):
+    """The same rule id in the driver and an extension resolves to the referenced component's metadata."""
+    _write_sarif(
+        tmp_path / "collide.sarif",
+        [
+            _extension_run(
+                [
+                    {"ruleId": "shared/id", "message": {"text": "driver copy"}},
+                    {"ruleId": "shared/id", "rule": {"toolComponent": {"index": 0}}, "message": {"text": "extension copy"}},
+                ],
+                driver_rules=[{"id": "shared/id", "defaultConfiguration": {"level": "note"}}],
+            )
+        ],
+    )
+    # extension gets a colliding scored rule appended
+    payload = json.loads((tmp_path / "collide.sarif").read_text(encoding="utf-8"))
+    payload["runs"][0]["tool"]["extensions"][0]["rules"].append(
+        {"id": "shared/id", "properties": {"security-severity": "9.1"}}
+    )
+    (tmp_path / "collide.sarif").write_text(json.dumps(payload), encoding="utf-8")
+
+    findings, _, _ = gate.gather_findings(tmp_path)
+
+    assert [(f.message, f.score) for f in findings] == [("extension copy", 9.1)]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ruleId": "py/x", "rule": {"index": 17, "toolComponent": {"index": 5}}},
+        {"ruleId": "py/x", "rule": {"index": 17, "toolComponent": {"name": "codeql/no-such-pack"}}},
+        {"ruleId": "py/x", "rule": {"index": 99, "toolComponent": {"index": 0}}},
+        {"ruleId": "py/other", "rule": {"index": 17, "toolComponent": {"index": 0}}},
+        {"ruleId": "py/x", "rule": {"id": "py/y", "toolComponent": {"index": 0}}},
+        {"rule": {"index": 3, "toolComponent": {"guid": "00000000-0000-0000-0000-000000000000"}}},
+        {"ruleId": "py/x", "rule": {"toolComponent": {}}},
+    ],
+    ids=["bad-component-index", "bad-component-name", "bad-rule-index", "indexed-rule-id-mismatch", "ruleId-vs-rule-id-mismatch", "bad-component-guid", "empty-component-reference"],
+)
+def test_gather_findings_fails_closed_on_unresolvable_rule_references(tmp_path, result):
+    """A rule reference that cannot be resolved, with no severity evidence, gates instead of passing."""
+    _write_sarif(tmp_path / "bad.sarif", [_extension_run([dict(result, message={"text": "m"})])])
+
+    findings, _, _ = gate.gather_findings(tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].level == "unresolved-rule"
+    assert findings[0].score is None
+    assert gate.format_finding(findings[0]).startswith("CODEQL_FINDING rule=")
+
+
+def test_gather_findings_uses_result_score_even_when_rule_is_unresolvable(tmp_path):
+    """Explicit result-level security-severity still decides gating when the rule cannot be resolved."""
+    _write_sarif(
+        tmp_path / "scored.sarif",
+        [_extension_run([{"ruleId": "py/x", "rule": {"toolComponent": {"index": 9}}, "properties": {"security-severity": "1.0"}}])],
+    )
+
+    findings, _, _ = gate.gather_findings(tmp_path)
+
+    assert findings == []
+
+
+def test_gather_findings_gates_an_unreferenced_result_on_its_own_score(tmp_path):
+    """A result with no rule reference at all is judged purely on its result-level severity."""
+    _write_sarif(tmp_path / "bare.sarif", [_extension_run([{"properties": {"security-severity": "6.0"}}])])
+
+    findings, _, _ = gate.gather_findings(tmp_path)
+
+    assert [(f.rule_id, f.score, f.level) for f in findings] == [("unknown", 6.0, "none")]
+
+
+def test_gather_findings_leaves_resolved_non_security_extension_rules_alone(tmp_path):
+    """A resolved extension rule with no security metadata keeps the existing non-gating semantics."""
+    _write_sarif(
+        tmp_path / "style.sarif",
+        [_extension_run([{"rule": {"index": 3, "toolComponent": {"index": 0}}, "level": "note", "message": {"text": "style"}}])],
+    )
+
+    assert gate.gather_findings(tmp_path)[0] == []

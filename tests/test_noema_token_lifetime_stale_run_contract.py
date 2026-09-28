@@ -1,5 +1,8 @@
 """Regression contract for consolidated Noema quality-run retirement."""
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 from pathlib import Path
 
 
@@ -26,4 +29,4 @@ def test_noema_token_lifetime_quality_ci_retires_superseded_pr_runs() -> None:
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.sha" not in concurrency_contract
     assert "github.ref" not in concurrency_contract
-    assert "cancel-in-progress: true" in concurrency_contract
+    assert workflow_level_cancels_in_progress(workflow)

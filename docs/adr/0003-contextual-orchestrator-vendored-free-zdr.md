@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`2e414d15ba58f28597751b625a8a2f00fc9fadcf` today) into `RUNNER_TEMP`. The
+   (`01bf92a3ec67a0e1f9b68978eb16b60301e985fd` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -50,9 +50,12 @@ all five, and auto-optimize routing by cost.
    route rejects the real runtime request contract does it rebuild once from
    fully price-attested routes and record the rejected primary attempt. This is
    evidence-triggered failover, not an arbitrary free/paid mixing ratio.
-   Both stages share one twelve-route startup budget: no more than eight routes
-   enter the free primary stage and only its remaining capacity may enter priced
-   fallback. Full discovery counts remain in policy evidence, and the transient
+   Both stages share one bounded startup budget of twenty-four candidates: no
+   more than sixteen enter the free primary stage and only its remaining
+   capacity may enter priced fallback. Candidates are probed lazily in catalog
+   order until eight routes are ready or sixteen probes are spent per stage
+   (ADR-0029), so a dead candidate costs one probe, not a served slot. Full
+   discovery counts remain in policy evidence, and the transient
    priced catalog is removed immediately after loading.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
@@ -256,3 +259,59 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
+- **2026-09-13 amendment: advance the governed runtime pin to remove the
+  implicit 90 s model request timeout.** The vendored pin advances from
+  `414f22973658c4ddc3d4320fcf7acd9b4e8ba991` to
+  `767e67fbc6b881a452761f32abb69b9971b9b03b`, the commit that merges
+  `contextual-orchestrator#1053`. Under the previous pin `ModelClient`
+  defaulted to `timeout=90`, so every NVIDIA NIM `google/gemma-4-31b-it`
+  attempt in the Noema sidecar ended in `TimeoutError` at exactly 90 s (15 of
+  27 attempts in fast-mlsirm#1860 run 34748511702) and the gateway surfaced
+  `502 provider_connection_error` after ~20 min of circuit retries. #1053 makes
+  the model timeout null by default and administrator-configured per model
+  (`model_timeout_seconds`), matching this ADR's rule that model inference
+  carries no wall-clock deadline.
+- **2026-09-06 amendment: advance the governed runtime pin to fix
+  `orchestrator/free` retry-stacking.** The vendored pin advances from
+  `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to
+  `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, the commit that merges
+  `contextual-orchestrator#1081`. That PR fixes `TaskOrchestrator._invoke`'s
+  per-agent retry-then-failover decision (`RETRY_SAME_AGENT` for a retryable
+  5xx, budgeted at `1 + tool_retry_attempts` real tries per candidate) getting
+  multiplied by `ModelClient._send_with_retry`'s own, independent
+  transient-retry-with-backoff loop underneath it (`max_retries + 1` further
+  tries per call) — up to `(tool_retry_attempts + 1) × (max_retries + 1)` real
+  network attempts (6 at production defaults) against one already-flagged-flaky
+  `orchestrator/free` agent before `_invoke` ever tried the next ranked
+  candidate. This is the confirmed root cause of independently observed
+  incidents in `ContextualWisdomLab/.github` PRs #1912, #1231, #1503, and
+  #1198, each spending 9–57+ minutes on one escalated route and surfacing that
+  same route's model in its final error, never reaching a cleanly-ready
+  sibling preflight had already found. The fix adds
+  `ModelClient.single_attempt_transport()` (a thread-local context manager
+  mirroring the existing `request_settings()` pattern) that forces
+  `_send_with_retry`'s retry budget to 0 for the duration of `_invoke`'s own
+  per-agent attempt; it changes only *which* agent gets tried next, never any
+  per-attempt timeout, consistent with the 2026-08-31 amendment above. No
+  other contextual-orchestrator behavior changes with this pin advance.
+- **2026-09-25 amendment: adopt bounded 429 recovery in the review runtime.**
+  Advance the vendored pin from `767e67fbc6b881a452761f32abb69b9971b9b03b`
+  to `0d0637d032560417a9a08a8477c4aaf3a5942e0a`, the protected-main
+  revision containing the merged rate-limit admission repair (#1179). The
+  old runtime advanced to another provider after one 429 but returned a 429
+  when all eligible free routes were cooling. The new runtime honors a
+  provider cooldown within its bounded request budget and returns a typed
+  429 when no eligible route can recover in time. It keeps
+  `orchestrator/free` inside the admitted free pool and retains the default
+  null model timeout. Both revisions have byte-identical `requirements.lock`.
+  This pin change still needs protected delivery and a successful exact-head
+  Noema or OpenCode review; preflight success alone is not that evidence.
+
+- **2026-09-27 amendment: retain cooldown recovery with a patched dependency lock.**
+  The deployed pin is `01bf92a3ec67a0e1f9b68978eb16b60301e985fd`, a merged CO main revision containing
+  #1179 recovery and AnyIO 4.14.2. Auditing the earlier proposed `0d0637d0`
+  pin with pip-audit 2.10.1 found CVE-2026-63374, CVE-2026-64847, and
+  CVE-2026-63349 in AnyIO 4.14.1. The replacement hash lock has no known
+  vulnerabilities in the same audit. The earlier byte-identical-lock claim
+  describes the superseded proposal, not this amended target. No review
+  completion or runtime provider success is inferred from the lock audit.
