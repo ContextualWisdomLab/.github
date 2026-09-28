@@ -3917,14 +3917,8 @@ def is_strix_scan_check_run(node: dict[str, Any]) -> bool:
 
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
-    job_id = matching_actions_job_id(pr, is_strix_scan_check_run)
-    if job_id:
-        if not dry_run and not review_dispatch_admitted("strix", repo, pr):
-            return "admission_deferred"
-        if not dry_run and not live_dispatch_head_matches(repo, pr):
-            return "stale_head"
-        rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
-        return "rerun" if not dry_run else "dry_run"
+    # A job rerun retains its original trusted workflow revision. Fresh dispatch
+    # selects the default-branch runtime and still enforces admission and live head.
     if dry_run:
         return "dry_run"
     require_github_actions_control_actor("inspect-active-strix-evidence")
