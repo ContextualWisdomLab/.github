@@ -98,6 +98,16 @@ def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp
     assert 'transport_retry_eligible=true' in output.read_text()
 
     output.unlink()
+    log.write_text(
+        "STRIX_PROVIDER_UNAVAILABLE: orchestrator/free exhausted\n"
+        "Error code: 503 - {'error': {'code': 'concurrency_limit_exceeded'}}\n"
+        "Error code: 503 - {'error': {'code': 'provider_outcome_unknown'}}\n"
+    )
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+    output.unlink(missing_ok=True)
     log.write_text("STRIX_PROVIDER_UNAVAILABLE: orchestrator/free exhausted\nError code: 503 - {'error': {'code': 'provider_outcome_unknown'}}\n")
     result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
     assert result.returncode == 1
