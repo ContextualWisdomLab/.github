@@ -29,7 +29,9 @@ jobs:
     concurrency:
       group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 5
     permissions:
       actions: read
@@ -74,7 +76,9 @@ jobs:
     concurrency:
       group: review-agent-mention-router-sweep-${{ github.repository }}
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     permissions:
       actions: read
