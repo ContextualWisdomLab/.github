@@ -55,7 +55,7 @@ A valid bundle therefore answers “these are the authenticated evidence bytes f
 
 - **Caller-supplied result digest as trust root.** Rejected because a caller that can replace the result can also recompute the digest.
 - **Repository/SHA-only caller authentication.** Rejected because it does not distinguish the canonical benchmark caller from another workflow at the same repository/SHA. The caller's OIDC `workflow_ref` and `workflow_sha` are now part of the signed evidence identity.
-- **`github.workflow_sha` as reusable-workflow source identity.** Rejected for cross-repository callers because the reusable workflow inherits caller context. OIDC `job_workflow_ref`/`job_workflow_sha` is the prerequisite repair owned by #2164/#1228.
+- **`github.workflow_sha` as reusable-workflow source identity.** Rejected for cross-repository callers because the reusable workflow inherits caller context. This workflow resolves callee identity from the OIDC claims `job_workflow_ref` and `job_workflow_sha`, then checks out that exact central SHA. Release SBOM helpers stay on their independently reviewed helper snapshot and are not a checkout selector here.
 - **`actions/download-artifact` extraction before bounded validation.** Rejected because the archive would be expanded before the trusted verifier can enforce uncompressed limits. The current path authenticates and bounds the ZIP first, then uses the central materializer.
 - **Central latency `PASS`.** Rejected because the organization signer owns evidence authenticity, not product workload semantics or acceptance thresholds.
 

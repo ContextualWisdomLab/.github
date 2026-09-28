@@ -126,7 +126,7 @@ def test_artifact_intake_verifies_exact_immutable_same_run_metadata() -> None:
     assert "permissions:" in intake
     assert "actions: read" in intake
     assert "contents: read" in intake
-    assert "id-token: write" in intake
+    assert "id-token: write" not in intake
     assert "attestations: write" not in intake
     assert "artifact-metadata: write" not in intake
     assert "${{ inputs.evidence_artifact_id }}" in intake
@@ -148,12 +148,11 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
 
     assert ATTEST_ACTION_PIN in signer
     assert CHECKOUT_ACTION_PIN in workflow
+    # Helpers use an independently reviewed literal source pin.
     assert workflow.count("repository: ContextualWisdomLab/.github") >= 2
-    assert "ref: ${{ github.workflow_sha }}" not in workflow
-    assert workflow.count("ref: ${{ steps.workflow-identity.outputs.workflow_sha }}") >= 2
-    assert workflow.count("job_workflow_ref") >= 2
-    assert workflow.count("job_workflow_sha") >= 2
-    assert workflow.count("id-token: write") >= 2
+    assert workflow.count("ref: 00c6551183cca101cfc97c43656a17cc2491c1b4") == 2
+    assert "${{ job.workflow_repository }}" not in workflow
+    assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
     assert "actions: read" in signer

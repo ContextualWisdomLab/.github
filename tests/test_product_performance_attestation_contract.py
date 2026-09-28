@@ -45,14 +45,36 @@ def test_reusable_workflow_has_explicit_performance_handoff_contract() -> None:
 def test_reusable_workflow_uses_oidc_callee_identity_before_trusted_checkout() -> None:
     """Keep caller workflow identity from selecting central verifier source."""
     workflow = _text(WORKFLOW)
+    issuer = "https://token.actions.githubusercontent.com"
+    audience = (
+        "https://github.com/ContextualWisdomLab/.github/"
+        "product-performance-attestation"
+    )
 
     assert "ref: ${{ github.workflow_sha }}" not in workflow
+    assert "ref: ${{ inputs.source_sha }}" not in workflow
     assert workflow.count("Resolve exact called reusable workflow identity") == 2
     assert workflow.count("job_workflow_ref") >= 2
     assert workflow.count("job_workflow_sha") >= 2
     assert workflow.count("id-token: write") >= 2
     assert workflow.count("ref: ${{ steps.workflow-identity.outputs.workflow_sha }}") >= 2
     assert workflow.count("product-performance-attestation.yml@") >= 2
+    assert workflow.count(issuer) >= 2
+    assert workflow.count(audience) >= 2
+    assert workflow.count("ACTIONS_ID_TOKEN_REQUEST_URL") >= 2
+    assert workflow.count("ACTIONS_ID_TOKEN_REQUEST_TOKEN") >= 2
+    assert (
+        workflow.count("Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}")
+        >= 2
+    )
+    assert workflow.count("curl --fail --silent --show-error --get") >= 2
+    assert workflow.count('--data-urlencode "audience=${OIDC_AUDIENCE}"') >= 2
+    assert workflow.count("runner_environment") >= 2
+    assert workflow.count("github-hosted") >= 2
+    assert workflow.count("full 40-hex") >= 2
+    first_identity = workflow.index("Resolve exact called reusable workflow identity")
+    first_checkout = workflow.index("Materialize immutable trusted verifier")
+    assert first_identity < first_checkout
 
 
 def test_reusable_workflow_authenticates_and_records_caller_workflow_identity() -> None:
