@@ -73,8 +73,12 @@ def test_coverage_cleanup_removes_only_the_current_attempt(tmp_path: Path):
 
     owned = tmp_path / "opencode-coverage-42-2"
     other = tmp_path / "opencode-coverage-41-1"
+    build = tmp_path / "opencode-coverage-tool-build-42-2"
+    other_build = tmp_path / "opencode-coverage-tool-build-41-1"
     owned.mkdir()
     other.mkdir()
+    build.mkdir()
+    other_build.mkdir()
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     sudo = fake_bin / "sudo"
@@ -95,13 +99,16 @@ def test_coverage_cleanup_removes_only_the_current_attempt(tmp_path: Path):
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
             "COVERAGE_SOURCE_WORKDIR": str(owned),
+            "COVERAGE_BUILD_DIR": str(build),
             "GITHUB_RUN_ID": "42",
             "GITHUB_RUN_ATTEMPT": "2",
         },
     )
     assert result.returncode == 0, result.stderr
     assert not owned.exists()
+    assert not build.exists()
     assert other.is_dir()
+    assert other_build.is_dir()
     assert log.read_text().splitlines() == [
         "image inspect opencode-coverage-tools:42-2",
         "image rm opencode-coverage-tools:42-2",
