@@ -33,7 +33,6 @@ import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
-from urllib.error import HTTPError
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
@@ -376,9 +375,6 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     type name (or a bounded placeholder when that name is unsafe to log)
     plus an optional numeric HTTP status, identically regardless of which
     probe attempt (base or escalated) raised it. Mutates ``row`` in place.
-    An ``HTTPError`` is closed after that status and retry hint are copied,
-    because the probe owns the response and must not leave it for implicit
-    cleanup.
 
     Also clears any ``finish_reason``/``reasoning_without_content`` already
     on ``row`` from an EARLIER attempt on the same candidate (a no-op for
@@ -406,8 +402,6 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row["retry_after_s"] = retry_after
     row.pop("finish_reason", None)
     row.pop("reasoning_without_content", None)
-    if isinstance(exc, HTTPError):
-        exc.close()
 
 
 def _demote_agent(agent: object, penalty: int) -> object:
