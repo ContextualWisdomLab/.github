@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: d7d2d4de4225bdc1f1bce372c42c581428baff1f
+          ref: ${{ github.repository == 'ContextualWisdomLab/.github' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.pull_request.head.sha || github.event.merge_group.head_sha) || 'main' }}
           path: governance
           persist-credentials: false
           sparse-checkout: scripts/ci/check_telemetry_ownership.py

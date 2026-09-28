@@ -434,7 +434,13 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     assert "contents: read" in workflow and "persist-credentials: false" in workflow
     assert "github.event.pull_request.head.sha || github.sha" in workflow
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert "ref: d7d2d4de4225bdc1f1bce372c42c581428baff1f" in workflow
+    assert (
+        "github.repository == 'ContextualWisdomLab/.github' && "
+        "(github.event_name == 'pull_request' || github.event_name == 'merge_group')"
+        in workflow
+    )
+    assert "github.event.pull_request.head.sha || github.event.merge_group.head_sha" in workflow
+    assert "|| 'main' }}" in workflow
     digest = re.search(r"SCANNER_SHA256: ([0-9a-f]{64})", workflow)
     assert digest is not None
     assert digest.group(1) == hashlib.sha256(Path(ownership.__file__).read_bytes()).hexdigest()

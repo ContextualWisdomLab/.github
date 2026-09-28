@@ -218,13 +218,16 @@ production. Do not infer backend or SIEM delivery from local canaries.
 
 ### Scanner delivery evidence — 2026-09-27
 
-The reusable canary now pins scanner revision
-`d7d2d4de4225bdc1f1bce372c42c581428baff1f` and verifies SHA-256
+The reusable canary reads the exact `.github` PR or merge-group head while
+reviewing this governance change, then reads the durable `main` ref for product
+consumers. It verifies the scanner's SHA-256
 `4aac066e64b18bf31d5a1a04e73b9148ef1e3e9d5cbbc5a82d25a7844eb72533`
-before execution. The paired regression compares that digest with the producer
-source. Commit producer changes before refreshing the consumer revision; the
-scanner digest excludes the workflow itself, avoiding a self-referential pin.
-The exact pinned source rejects the wildcard bootstrap fixture, and 27 ownership
+before execution, so a moved `main` cannot silently change the scanner. The
+previous PR-only revision would become unreferenced when GitHub deletes the
+source branch after a squash merge. The paired regression compares the digest
+with the producer source. Update the digest together with any scanner change;
+the scanner digest excludes the workflow itself, avoiding a self-referential pin.
+The exact digest-bound source rejects the wildcard bootstrap fixture, and 28 ownership
 tests pass with and without `GITHUB_ACTIONS=true`. Earlier reusable-workflow
 consumer pins still require updating; local scanner changes alone do not prove
 consumer adoption. Required organization enforcement, release and independent
