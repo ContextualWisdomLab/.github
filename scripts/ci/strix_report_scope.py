@@ -8,6 +8,14 @@ import sys
 from pathlib import Path
 
 
+FINISH_TOOL_PLACEHOLDERS = {
+    "executive_summary": "Business-level summary for leadership.",
+    "methodology": "Frameworks, scope, and approach.",
+    "technical_analysis": "Consolidated findings + systemic themes.",
+    "recommendations": "Prioritized, actionable remediation.",
+}
+
+
 def validate(output: Path, changed_paths: list[str]) -> None:
     if not output.is_dir() or output.is_symlink():
         raise ValueError("scan output directory is missing")
@@ -27,6 +35,12 @@ def validate(output: Path, changed_paths: list[str]) -> None:
         raise ValueError("scan results are not an object")
     if metadata.get("status") != "completed" or results.get("scan_completed") is not True or results.get("success") is not True:
         raise ValueError("scan report is incomplete")
+    for field, placeholder in FINISH_TOOL_PLACEHOLDERS.items():
+        value = results.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("scan report is incomplete")
+        if value.strip() == placeholder:
+            raise ValueError("scan report contains a finish-tool placeholder")
     report = report_path.read_text(encoding="utf-8")
     if not any(path in report for path in changed_paths):
         raise ValueError("scan report does not identify a changed source file")
