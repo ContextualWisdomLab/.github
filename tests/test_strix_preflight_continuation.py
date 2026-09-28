@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from scripts.ci import strix_runtime_capacity
+
 
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):
     source = Path('.github/workflows/strix.yml').read_text()
@@ -104,3 +106,22 @@ def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp
     result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
     assert result.returncode == 1
     assert not output.exists()
+
+
+def test_runtime_capacity_module_covers_head_and_retry_budget(tmp_path, monkeypatch):
+    output = tmp_path / 'output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    monkeypatch.setattr('sys.argv', ['strix_runtime_capacity', '--expected-head', 'invalid'])
+    assert strix_runtime_capacity.main() == 0
+    assert not output.exists()
+
+    monkeypatch.setattr('sys.argv', ['strix_runtime_capacity', '--expected-head', 'a'*40])
+    monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '0')
+    assert strix_runtime_capacity.main() == 0
+    assert 'transport_retry_eligible=true' in output.read_text()
+    assert 'transport_retry_next_attempt=1' in output.read_text()
+
+    output.unlink()
+    monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '2')
+    assert strix_runtime_capacity.main() == 0
+    assert 'transport_retry_eligible=false' in output.read_text()

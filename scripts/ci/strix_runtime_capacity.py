@@ -39,5 +39,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by workflow shell test
     raise SystemExit(main())
