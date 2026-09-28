@@ -1,6 +1,7 @@
 """Exercise DOCX structural admission through the production policy boundary offline."""
 import io
 import os
+import warnings
 import zipfile
 
 import pytest
@@ -102,13 +103,22 @@ def docx_archive(
     ]
     if duplicate_document:
         members.append(("word/document.xml", document_xml()))
-    with zipfile.ZipFile(archive_buffer, "w") as archive_file:
-        for member_name, member_value in members:
-            if member_value is OMITTED:
-                continue
-            member_info = zipfile.ZipInfo(member_name)
-            member_info.compress_type = compression_type
-            archive_file.writestr(member_info, member_value)
+    with warnings.catch_warnings():
+        if duplicate_document:
+            # The duplicate-member rejection fixture writes the same part twice.
+            # zipfile warns on that write; the warning is the fixture, not a defect.
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Duplicate name: 'word/document.xml'",
+                category=UserWarning,
+            )
+        with zipfile.ZipFile(archive_buffer, "w") as archive_file:
+            for member_name, member_value in members:
+                if member_value is OMITTED:
+                    continue
+                member_info = zipfile.ZipInfo(member_name)
+                member_info.compress_type = compression_type
+                archive_file.writestr(member_info, member_value)
     return archive_buffer.getvalue()
 
 
