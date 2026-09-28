@@ -841,6 +841,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert measure_step.count("CARGO_NET_OFFLINE=true \\") == 2
     assert "docker run --rm --init --network=none" in measure_step
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1

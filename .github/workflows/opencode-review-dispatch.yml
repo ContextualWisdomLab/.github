@@ -1078,6 +1078,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              CARGO_NET_OFFLINE=true \
               PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
@@ -1200,6 +1201,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              CARGO_NET_OFFLINE=true \
               PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
