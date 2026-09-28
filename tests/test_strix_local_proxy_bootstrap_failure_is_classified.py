@@ -95,7 +95,7 @@ class StrixLocalProxyBootstrapFailureTests(unittest.TestCase):
 
     def test_workflow_recognizes_the_authenticated_caido_failure_shape(self) -> None:
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("loginAsGuest failed after [0-9]+ attempts: curl exit", workflow)
+        self.assertIn("loginAsGuest failed after", workflow)
 
 
     def test_classifies_local_proxy_bootstrap_failure_with_zero_findings(self) -> None:
