@@ -1688,6 +1688,25 @@ def test_malformed_structured_route_fails_closed_without_legacy_attempt_fallback
     assert noema._extract_http_error_telemetry(error) == {}
 
 
+@pytest.mark.parametrize(
+    "last_attempt",
+    [
+        "not-a-receipt",
+        {"outcome": "never-print-provider-payload", "provider_status": 99},
+    ],
+)
+def test_structured_route_counts_attempts_but_drops_unrecognized_last_receipt(last_attempt):
+    body = json.dumps({"error": {"detail": {"route": {
+        "stage": "conduct", "attempted": [last_attempt],
+    }}}}).encode()
+    error = noema.urllib.error.HTTPError("https://llm.example.test", 502, "", {}, io.BytesIO(body))
+
+    assert noema._extract_http_error_telemetry(error) == {
+        "route_stage": "conduct",
+        "provider_attempt_count": 1,
+    }
+
+
 def test_is_provider_capacity_http_status_covers_only_capacity_class():
     """429/5xx are capacity; other statuses stay ordinary transport failures."""
     assert noema.is_provider_capacity_http_status(429) is True
