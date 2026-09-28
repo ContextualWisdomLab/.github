@@ -27,7 +27,9 @@ reviewer cannot treat "the YAML is gone" as "no writer remains enabled."
 2. Classification is evidence-based: `present_active`, `present_disabled`,
    `orphan_active`, `orphan_disabled`, `dynamic_owned`, or `unresolved`.
    A file named `once` is not alone proof of invalidity. A benign name
-   does not hide a missing source file.
+   does not hide a missing source file. `orphan_active` means absent from the
+   bound default-branch tree; an open pull request can still use that path on
+   its head or base. It is not a safe-disable verdict.
 3. Incomplete visibility (401/403/404), a 5xx after one retry, pagination
    truncation, `total_count` drift, reused workflow IDs, percent-encoded
    paths, and default-branch movement fail closed.
@@ -117,8 +119,9 @@ python3 scripts/ci/inventory_orphaned_workflows.py \
 
 The scanner and owner-issue publisher expose no workflow-state mutation.
 Disablement needs a separate reviewed operator path that rechecks the live
-default-branch SHA, exact workflow ID, source absence, owner intent, active
-runs, and reusable-workflow callers immediately before the API write. After a
+default-branch SHA, exact workflow ID, source absence, open pull request heads
+and bases, owner intent, active runs, and reusable-workflow callers immediately
+before the API write. After a
 reviewed operator pass, rerun the organization sweep and retain both receipt sets.
 Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live
 evidence to their governance issues without heuristic issue creation.

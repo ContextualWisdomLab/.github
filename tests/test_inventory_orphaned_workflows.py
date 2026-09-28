@@ -1117,6 +1117,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
     assert operator.publish_owner_issue(
         creator, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
+    assert "open pull request heads" in creator.writes[0][1]["body"]
     with pytest.raises(inventory.InventoryError, match="ledger-bound"):
         operator.publish_owner_issue(client, known, ledger={"records": []})
     prior = {

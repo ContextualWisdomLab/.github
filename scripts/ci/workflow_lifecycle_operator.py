@@ -204,7 +204,11 @@ def publish_owner_issue(
             method="POST",
             payload={
                 "title": "Review orphaned GitHub Actions workflows",
-                "body": f"{owner_marker}\nReview each revalidated workflow ID below before disabling it.",
+                "body": (
+                    f"{owner_marker}\nReview each revalidated workflow ID below before disabling it. "
+                    "Default-branch absence does not prove retirement: check open pull request heads "
+                    "and bases, active runs, reusable callers, and owner intent."
+                ),
             },
         )
     except Exception as exc:
