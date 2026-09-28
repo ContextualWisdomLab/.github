@@ -1436,6 +1436,7 @@ def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp
 
     def _fake_run(command, **kwargs):
         captured["command"] = command
+        captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
@@ -1445,6 +1446,7 @@ def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp
     probe_executable = command[-3]
     assert probe_executable in sandboxed_web_e2e.PROBE_SHELL_PATHS
     assert probe_executable != str(shadow_sh)
+    assert captured["kwargs"].get("shell") is False
 
 
 def test_probe_shell_fails_clearly_when_no_mounted_shell_exists(monkeypatch, tmp_path):
