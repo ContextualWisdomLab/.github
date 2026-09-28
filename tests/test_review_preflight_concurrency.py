@@ -22,6 +22,19 @@ def text_response():
     return {'choices': [{'message': {'content': 'OK'}}]}
 
 
+def provider_http_error(status: int, body: str, released: list[int]) -> HTTPError:
+    """Build a synthetic provider response the preflight must close itself."""
+
+    class _TrackedHTTPError(HTTPError):
+        """Count a close that happens after classification, not before raise."""
+
+        def close(self) -> None:
+            released.append(self.code)
+            super().close()
+
+    return _TrackedHTTPError('https://provider.invalid', status, body, {}, None)
+
+
 @pytest.mark.parametrize("pending", [1, 8])
 def test_pending_routes_do_not_block_eight_ready_routes(pending):
     """Retain pending inference while serving only completed, validated routes."""
@@ -63,17 +76,18 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
     """Concurrent completion does not enlarge the committed probe budget."""
     namespace = runpy.run_path(str(LAUNCHER))
     calls = []
+    released: list[int] = []
 
     class Client:
         """Return explicit provider rate-limit responses."""
         def proxy_send_once(self, agent, endpoint, payload):
             calls.append(agent.id)
-            with HTTPError('https://provider.invalid', 429, 'private body', {}, None) as error:
-                raise error
+            raise provider_http_error(429, 'private body', released)
 
     with pytest.raises(namespace['ReviewPreflightError']) as error:
         namespace['_preflight_review_agents_concurrently'](agents(24), client=Client())
     report = error.value.report
+    assert released.count(429) == namespace['REVIEW_PREFLIGHT_MAX_PROBES']
     assert len(calls) == report['probed_count'] == namespace['REVIEW_PREFLIGHT_MAX_PROBES']
     assert report['ready_count'] == report['pending_count'] == 0
     assert all(row['status'] == 'rejected' and row['http_status'] == 429 for row in report['routes'])
@@ -102,16 +116,18 @@ def test_parallel_escalations_share_one_budget():
 def test_completed_transient_routes_are_deferred_only_with_a_ready_route():
     """Only explicit retryable responses are retained behind a proven route."""
     namespace = runpy.run_path(str(LAUNCHER))
+    released: list[int] = []
 
     class Client:
         """Provide one ready route, a rate limit, and a permanent denial."""
         def proxy_send_once(self, agent, endpoint, payload):
             if agent.id != '2':
-                with HTTPError('https://provider.invalid', 429 if agent.id == '0' else 401, 'private', {}, None) as error:
-                    raise error
+                status = 429 if agent.id == '0' else 401
+                raise provider_http_error(status, 'private', released)
             return text_response()
 
     viable, report = namespace['_preflight_review_agents_concurrently'](agents(3), client=Client())
+    assert sorted(released) == [401, 429]
     assert [agent.id for agent in viable] == ['2', '0']
     assert (report['ready_count'], report['deferred_count'], report['rejected_count']) == (1, 1, 1)
     assert report['pending_count'] == 0
@@ -125,6 +141,7 @@ def test_parallel_fallback_keeps_the_shared_escalation_budget():
     for agent in fallback:
         agent.id = 'fallback-' + agent.id
     calls = []
+    released: list[int] = []
 
     class Client:
         """Primary escalation still rejects; fallback escalation can succeed."""
@@ -134,13 +151,13 @@ def test_parallel_fallback_keeps_the_shared_escalation_budget():
                 return {'choices': [{'finish_reason': 'length', 'message': {'reasoning': 'pending'}}]}
             if agent.id.startswith('fallback-'):
                 return text_response()
-            with HTTPError('https://provider.invalid', 400, 'rejected', {}, None) as error:
-                raise error
+            raise provider_http_error(400, 'rejected', released)
 
     viable, report, used = namespace['_preflight_with_fallback'](
         primary, fallback, client=Client(), preflight=namespace['_preflight_review_agents_concurrently'],
     )
     assert used and len(viable) == 2
+    assert released.count(400) == 2
     assert report['primary_attempt']['escalations_used'] == 2
     assert report['escalations_used'] == namespace['REVIEW_PREFLIGHT_MAX_ESCALATIONS']
     assert calls[:4].count('0') == calls[:4].count('1') == 2
