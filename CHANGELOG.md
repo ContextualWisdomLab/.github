@@ -1,3 +1,72 @@
+### Intel macOS native archives are bound to x86_64 bytes
+
+- The release prescreener now requires every native member in an Intel macOS
+  continuation wheel to contain x86_64 code. Architecture inspection happens
+  before package/hash deduplication, so a wheel already reviewed for the
+  universal2 release leg cannot bypass the Intel-specific check. Universal2
+  binaries that contain x86_64 remain valid; aarch64-only binaries fail closed.
+  Exact-tree evidence is 4,061 passed, 8 skipped, and 40 subtests passed, with
+  all 17,383 production statements and 7,098 branches covered.
+
+### Intel macOS runtime archives enter the exact release dependency gate
+
+- Require three same-run Intel macOS install receipts for the universal2 wheels.
+  The central verifier checks each artifact ZIP digest, source and distribution
+  identity, x86_64 interpreter, and dependency archive bytes before licence
+  prescreen. Distinct x86_64 dependency wheels join the Strix fixture matrix;
+  the final verdict seals the three artifact IDs and digests. The thirteen
+  publishable distribution identities remain unchanged. Local focused tests
+  are 77 passed, the full suite is 4,063 passed and 4 skipped, and the three
+  changed production modules have 100% statement and branch coverage. Release
+  admission remains HOLD pending the fast-mlsirm consumer and hosted checks.
+
+### Exact native-link review is bound before release verdict sealing
+
+- Release wheel and build-interpreter native links now fail closed unless each
+  target is a reviewed operating-system, interpreter, self-install-name, or
+  named external runtime. The immutable report advances to
+  `cwl.release-native-links/2` and records the review basis beside every needed
+  library. Concurrent coverage work was preserved by an ordinary two-parent
+  merge, including its exact Maturin release-asset verifier. That integration
+  first reproduced a 99% coverage failure with 22 missing statements and 10
+  partial branches; behavior contracts now cover bounded downloads, archive
+  shapes, executable identity, native-link review, CLI dispatch, and prescreen
+  rejection paths. Current-tree evidence is 4,049 passed, 8 skipped, and 40
+  subtests passed; all 17,302 production statements and 7,058 branches are
+  covered. Ruff E9/F/I, compileall, and diff checks also pass. Hosted exact-head
+  Checks and independent review remain required before admission.
+
+### Native release prescreen coverage remains fail-closed
+
+- Added behavior-level contracts for directory entries, cached analyzer reuse, oversized and unreadable native members, build-snapshot files omitted from package receipts, runtime wheels with unknown dynamic links, and malformed static-link evidence. This repairs the coverage regression introduced when runtime wheels and build-interpreter snapshots began using the pinned native-link analyzer. The exact-tree suite is 4,037 passed, 8 skipped, and 40 subtests passed; all 17,186 production statements and 7,000 branches are covered. Release admission remains Draft/HOLD pending fresh exact-head hosted Checks and qualifying independent review.
+
+### Canonical Rust materializer integration closes the repository coverage gate
+
+- Ordinary-merged the complete `ContextualWisdomLab/.github#2360` owner branch into the release-control stack, preserving its foundation ancestry, multi-root `cargo vendor --sync --locked` implementation, target-path confinement, real-Cargo integration cases, and toolchain-independent mock/error/CLI contracts. The focused materializer suite is 26 passed and 3 real-Cargo skips with `materialize_base_rust_dependencies.py` at 155/155 statements and 60/60 branches. The merged exact tree is 4,030 passed, 8 skipped, and 40 subtests passed; all 17,144 production statements and 6,982 branches are covered. Draft remains required until fresh exact-head hosted Checks and qualifying independent review complete.
+
+### Noema document-reader trust boundaries reach 100% executable coverage
+
+- Added behavior-level coverage for unsupported and oversized inputs, bounded DOCX ZIP/XML structure, empty documents, visible Word controls, ragged and escaped tables, missing or unstartable local HWP readers, oversized/non-UTF-8/empty adapter output, UTF-8-safe prompt truncation, and both CLI outcomes. Production reader behavior is unchanged. The focused suite is 11 passed and 2 optional real-fixture skips with `noema_review_document.py` at 144/144 statements and 52/52 branches. The warnings-as-errors full suite is 3,988 passed, 28 skipped, and 40 subtests passed; only the independently owned Rust dependency materializer on `ContextualWisdomLab/.github#2360` remains below 100%, so the repository gate remains RED and this PR remains Draft.
+
+### Queue-health ownership matches the documented boundary and reaches 100% coverage
+
+- Removed the dead duplicate `collect_snapshot()` and CLI `main()` from `actions_queue_health_core.py`; the executable `actions_queue_health.py` remains the single owner of collection, retry, exact-head reconciliation, and process exit behavior, while the core retains bounded parsing and report primitives. New boundary cases cover both pre-evidence identity retries, malformed active and terminal run IDs, obsolete target cancellations, and remediation-action deduplication. The focused queue-health suite is 80 passed with both queue-health modules at 100% statement and branch coverage. The full exact tree is 3,982 passed, 28 skipped, and 40 subtests passed; uncovered statements fell from 249 to 163 and partial branches from 26 to 19, leaving only the Noema document reader and Rust dependency materializer owners.
+
+### Release dependency gate trust boundaries reach executable 100% coverage
+
+- `release_dependency_gate.py` now has behavior-level coverage for bounded archive reads, unsafe or absent declared licence files, symlink/special members, archive-member limits, raw-capture and destination symlinks, Cargo workspace identity, Strix fanout identity/fixture/runtime-report validation, and install-time licence rebinding. The no-caller `parse_member_listing` helper and its isolated test were removed; immutable archive bytes remain the sole member authority. Focused evidence is 442 passed with 1,126/1,126 statements and 472/472 branches; the warnings-as-errors repository suite is 3,976 passed and 28 skipped. Repository-wide coverage rises from 98% to 99%, so the overall 100% release gate remains RED and the PR stays Draft.
+
+### Pingora declared binary artifacts reject readable runtime directives
+
+- A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
+### Queue-health permission contract rejects aggregate token grants
+
+- The queue-health workflow contract now pins both workflow-level and collector-job permissions to exactly `contents: read` plus `actions: read`, rejecting scalar `read-all`/`write-all`, quoting/spacing variants, inline maps, and unexpected write scopes.
+
+### OpenCode coverage image materializes every Dockerfile lock input
+
+- Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
@@ -96,6 +165,7 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Bind GitHub REST redirect evidence to both production opener chains.** `.github#2279` now feeds a synthetic same-authority 302 through the CodeQL identity and Strix evidence clients' real module-level openers, proving the redirect target is never contacted and the bearer header is never forwarded. Removing `_RejectRedirects` from either opener makes the contract fail on the forbidden second request. Four stale Strix HTTP/transport/JSON fixtures now patch that same production seam; direct handler unit cases and standalone CodeQL materialization remain unchanged.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
