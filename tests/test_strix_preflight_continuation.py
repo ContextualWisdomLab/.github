@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from scripts.ci import strix_runtime_capacity
+
 
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):
     source = Path('.github/workflows/strix.yml').read_text()
@@ -58,3 +60,73 @@ def test_workflow_classifier_invocation_emits_bounded_capacity(tmp_path):
     result = subprocess.run(['bash', '-c', shell], env=env | {'NOEMA_TRANSPORT_RETRY_ATTEMPT': '2', 'GITHUB_OUTPUT': str(tmp_path/'exhausted')}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert 'transport_retry_eligible=false' in (tmp_path/'exhausted').read_text()
+
+
+def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp_path):
+    source = Path('.github/workflows/strix.yml').read_text()
+    assert 'id: strix_scan' in source
+    assert 'steps.strix_scan.outputs.transport_retry_eligible' in source
+    block = source.split('          strix_neutralization_scope_log="$strix_terminal_log"', 1)[1]
+    block = 'strix_neutralization_scope_log="$strix_terminal_log"' + block.split('      - name: Collect Strix reports', 1)[0]
+    log = tmp_path / 'strix_gate_console.log'
+    log.write_text('LLM CONNECTION FAILED\nError: Request timed out.\n')
+    output = tmp_path / 'output'
+    env = dict(os.environ, TRUSTED_STRIX_SOURCE=str(Path.cwd()), PYTHONPATH=str(Path.cwd()),
+               RUNNER_TEMP=str(tmp_path), PR_HEAD_SHA='a'*40, GITHUB_OUTPUT=str(output),
+               NOEMA_TRANSPORT_RETRY_ATTEMPT='0')
+    script = '\n'.join((
+        'strix_terminal_log="$RUNNER_TEMP/strix_gate_console.log"',
+        'strix_rc=1',
+        "backend_unavailable_signal='LLM CONNECTION FAILED|STRIX_PROVIDER_UNAVAILABLE'",
+        "runtime_transport_signal='LLM CONNECTION FAILED'",
+        "model_behavior_error_signal='ModelBehaviorError'",
+        "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|severity[[:space:]]*:'",
+        "tooling_error_signal='STRIX_TOOLING_ERROR'",
+        block,
+    ))
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    emitted = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert emitted['transport_capacity_unavailable'] == 'true'
+    assert emitted['transport_retry_eligible'] == 'true'
+    assert emitted['transport_retry_next_attempt'] == '1'
+
+    output.unlink()
+    result = subprocess.run(['bash', '-c', script], env=env | {'NOEMA_TRANSPORT_RETRY_ATTEMPT': '2'}, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert 'transport_retry_eligible=false' in output.read_text()
+
+    output.unlink()
+    log.write_text('LLM CONNECTION FAILED\nVulnerability Report\nSeverity: CRITICAL\n')
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+    log.write_text('STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE\n')
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+    log.write_text('LLM CONNECTION FAILED\nSTRIX_SANDBOX_UNAVAILABLE\n')
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+
+def test_runtime_capacity_module_covers_head_and_retry_budget(tmp_path, monkeypatch):
+    output = tmp_path / 'output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    monkeypatch.setattr('sys.argv', ['strix_runtime_capacity', '--expected-head', 'invalid'])
+    assert strix_runtime_capacity.main() == 0
+    assert not output.exists()
+
+    monkeypatch.setattr('sys.argv', ['strix_runtime_capacity', '--expected-head', 'a'*40])
+    monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '0')
+    assert strix_runtime_capacity.main() == 0
+    assert 'transport_retry_eligible=true' in output.read_text()
+    assert 'transport_retry_next_attempt=1' in output.read_text()
+
+    output.unlink()
+    monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '2')
+    assert strix_runtime_capacity.main() == 0
+    assert 'transport_retry_eligible=false' in output.read_text()
