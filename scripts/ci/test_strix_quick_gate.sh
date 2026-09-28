@@ -6171,6 +6171,12 @@ run_filtered_gate_case_if_requested() {
 	"")
 		return 0
 		;;
+	pull-request-target-added-file-finding-maps-to-head)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-added-file-finding-maps-to-head" \
+			"src/new_module.py" "__ABSENT__" "HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED" \
+			"0" "0" "__PR_SCOPE__" "0" "" "pull_request_target" "1"
+		;;
 	success)
 		run_gate_case "success" \
 			"vertex_ai/ready-primary" \
@@ -7033,6 +7039,7 @@ run_pull_request_target_head_scope_case() {
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
 	local github_event_name="${10-pull_request_target}"
+	local emit_finding="${11-0}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -7104,6 +7111,10 @@ echo "scan ok with PR head content"
 mkdir -p strix_runs/current
 printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
 printf 'Assessed %s\n' "$FAKE_STRIX_EXPECTED_CHANGED_FILE" >strix_runs/current/penetration_test_report.md
+if [ "${FAKE_STRIX_EMIT_FINDING:-0}" = "1" ]; then
+	mkdir -p strix_runs/current/vulnerabilities
+	printf '**Severity:** CRITICAL\n**Target:** /workspace/%s/%s\n' "$(basename -- "$target_path")" "$FAKE_STRIX_EXPECTED_CHANGED_FILE" >strix_runs/current/vulnerabilities/vuln-0001.md
+fi
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7164,6 +7175,7 @@ EOF
 			FAKE_STRIX_EXPECTED_UNCHANGED_FILE="docs/full-scope-context.md" \
 			FAKE_STRIX_EXPECTED_UNCHANGED_CONTENT="HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED" \
 			FAKE_STRIX_EXPECT_FULL_HEAD_SCOPE="$expected_full_head_scope" \
+			FAKE_STRIX_EMIT_FINDING="$emit_finding" \
 			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
@@ -7174,7 +7186,12 @@ EOF
 	local rc=$?
 	set -e
 
-	assert_equals "0" "$rc" "case=$case_name exit code"
+	if [ "$emit_finding" = "1" ]; then
+		assert_equals "1" "$rc" "case=$case_name exit code"
+		assert_file_contains "$output_log" "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." "case=$case_name finding scope"
+	else
+		assert_equals "0" "$rc" "case=$case_name exit code"
+	fi
 	assert_file_contains "$output_log" "scan ok with PR head content" "case=$case_name output"
 	if [ -n "$expected_scope_message" ]; then
 		assert_file_contains "$output_log" "$expected_scope_message" "case=$case_name scope reason"
@@ -9752,6 +9769,13 @@ run_pull_request_target_head_scope_case \
 	"src/new_module.py" \
 	"__ABSENT__" \
 	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-added-file-finding-maps-to-head" \
+	"src/new_module.py" \
+	"__ABSENT__" \
+	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED" \
+	"0" "0" "__PR_SCOPE__" "0" "" "pull_request_target" "1"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-source-file-with-space-uses-head-blob" \
