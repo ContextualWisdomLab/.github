@@ -1476,12 +1476,52 @@ def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
+def _extract_success_route_telemetry(raw: str) -> dict[str, str | int]:
+    """Report only bounded structured-route facts from a served gateway response."""
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    orchestration = payload.get("orchestration")
+    route = orchestration.get("route") if isinstance(orchestration, dict) else None
+    if not isinstance(route, dict) or route.get("terminal_reason") != "served":
+        return {}
+    stage = route.get("stage")
+    attempts = route.get("attempted")
+    if stage not in ("structured_synthesis", "structured_repair") or not (
+        isinstance(attempts, list) and 1 <= len(attempts) <= 64
+    ):
+        return {}
+    if any(not isinstance(attempt, dict) for attempt in attempts):
+        return {}
+    if attempts[-1].get("outcome") != "served" or any(
+        attempt.get("outcome") not in (
+            "request_too_large", "retryable_transport", "deadline_exceeded", "fail_closed"
+        ) for attempt in attempts[:-1]
+    ):
+        return {}
+    recovered = any(
+        type(attempt.get("provider_status")) is int
+        and attempt["provider_status"] == 429
+        for attempt in attempts[:-1]
+    )
+    return {
+        "provider_attempt_count": len(attempts),
+        "route_stage": stage,
+        "route_outcome": "served",
+        "rate_limit_recovered": int(recovered),
+    }
+
+
+def _format_gateway_telemetry(telemetry: dict[str, str | int]) -> str:
     """Format only allowlisted scalar receipt fields for a public Actions log."""
     ordered_keys = (
         "provider_attempt_count",
         "route_stage",
         "route_outcome",
+        "rate_limit_recovered",
         "provider_name",
         "upstream_phase",
         "attempt_number",
@@ -1749,7 +1789,7 @@ def call_llm(
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
-        gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
+        gateway_note = _format_gateway_telemetry(gateway_telemetry)
         capacity_unavailable = is_provider_capacity_http_status(http_status)
         capacity_note = (
             " outcome=provider_capacity_unavailable"
@@ -1793,10 +1833,12 @@ def call_llm(
             f"Noema review failed closed: {current_failure}{suffix}"
         ) from exc
     elapsed = time.monotonic() - attempt_started
+    gateway_note = _format_gateway_telemetry(_extract_success_route_telemetry(raw))
     print(
         f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
         f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
         "caller attempts=1."
+        + (f" gateway {gateway_note}" if gateway_note else "")
     )
     return verdict
 
