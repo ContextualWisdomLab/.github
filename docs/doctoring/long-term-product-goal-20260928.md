@@ -6,6 +6,14 @@ important foundations. Their proposed numeric availability, detection,
 delivery, and adoption targets lacked a measured baseline or owner approval,
 so they were not adopted.
 
+A second read-only Grok and Antigravity CLI review on 2026-09-28 found that
+email retrieval and schedule resolution need separate task evidence. The
+directive now names moved, cancelled, and conflicting schedules, visible
+source history, customer correction, and revoked consent. These cases come
+from the master context and naruon platform plan; the CLI output is advisory,
+not authority for new product requirements. No new percentage or latency
+target was adopted without a baseline.
+
 The binding [master context](../CWL-MASTER-CONTEXT.md) identifies the customer
 jobs: find email and track the current state of changing email-borne schedules.
 The [platform specification](https://github.com/ContextualWisdomLab/naruon/pull/974)

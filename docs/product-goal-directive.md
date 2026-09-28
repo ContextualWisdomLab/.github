@@ -36,11 +36,16 @@ those jobs through their documented product boundaries; they are not goals in
 themselves. This outcome follows [the master context](CWL-MASTER-CONTEXT.md)
 and the [platform specification](https://github.com/ContextualWisdomLab/naruon/pull/974).
 
-Measure progress with direct, reproducible customer-task evidence: successful
-email retrieval and current-schedule identification on representative changing
-threads, traceable source and correction history, and verified customer data
-boundaries. Record the baseline and an agreed target before claiming an
-improvement; do not invent availability, latency, or adoption percentages.
+Measure the two customer jobs separately with direct, reproducible task
+evidence: finding the relevant message, and identifying the current schedule
+after a move, cancellation, or conflicting update. The schedule view must show
+the source supporting the current value, prior values, and unresolved conflicts.
+It must never silently break a confirmed commitment. Verify that customer
+corrections and revoked disclosure consent take effect in the view and
+notifications without exposing private reasons across contexts. Record
+baseline task results and agreed targets before claiming an improvement. Do
+not invent availability, latency, or adoption percentages. Keep customer-task
+evidence separate from telemetry delivery and CI health evidence.
 For each production capability, require a named owner, a released and pinned
 artifact, deployment evidence, failure-and-recovery evidence, and protected
 current-head review and checks. The [telemetry owner issue](https://github.com/ContextualWisdomLab/.github/issues/1565)
