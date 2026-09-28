@@ -1164,7 +1164,8 @@ jobs:
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
             echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
             if grep -Eiq "$runtime_transport_signal" "$strix_neutralization_scope_log" \
-              && ! grep -Eq "$tooling_error_signal" "$strix_neutralization_scope_log"; then
+              && ! grep -Eq "$tooling_error_signal" "$strix_neutralization_scope_log" \
+              && ! grep -Fq 'STRIX_SANDBOX_UNAVAILABLE' "$strix_neutralization_scope_log"; then
               PYTHONPATH="$TRUSTED_STRIX_SOURCE" python3 -m scripts.ci.strix_runtime_capacity --expected-head "$PR_HEAD_SHA"
             fi
             exit "$strix_rc"

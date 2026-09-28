@@ -107,6 +107,11 @@ def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp
     assert result.returncode == 1
     assert not output.exists()
 
+    log.write_text('LLM CONNECTION FAILED\nSTRIX_SANDBOX_UNAVAILABLE\n')
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
 
 def test_runtime_capacity_module_covers_head_and_retry_budget(tmp_path, monkeypatch):
     output = tmp_path / 'output'
