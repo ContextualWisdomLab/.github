@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import inspect
 import re
@@ -10,6 +11,7 @@ import sys
 import zlib
 from io import BytesIO
 from pathlib import Path
+from typing import Callable
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -103,8 +105,8 @@ def test_needs_content_scan_exempts_documentation_pdfs() -> None:
 
     Binary files never carry a GitHub diff `patch`, so without this exemption
     `_needs_content_scan` falls through to its `not patch_available` branch and
-    always returns True for a PDF -- and any such file over the Contents API's
-    1 MiB base64 ceiling then fails closed in `_load_file_content` for a
+    always returns True for a PDF -- and any such file over the Git blob API's
+    100 MB ceiling then fails closed in `_load_file_content` for a
     reason unrelated to the Nginx runtime policy this module enforces (see
     this org's "attach the relevant paper PDF under docs/papers/" convention).
     """
@@ -306,7 +308,7 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
     an oversized declared size) -- this is that real shape, not a synthetic
     one, per Devin Review's finding that the earlier version of this test
-    used a response shape GitHub never actually returns. This is the one
+    used a response shape GitHub never actually returns. Above 100 MB is the one
     case that still falls back to the path+suffix convention -- the real
     research-paper-citation use case this whole exemption exists for.
     """
@@ -317,7 +319,7 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
                 {"filename": "docs/papers/big-paper.pdf", "status": "added"},
             ]
         assert "/contents/docs/papers/big-paper.pdf" in url
-        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+        return {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1, "sha": "a" * 40}
 
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
@@ -331,13 +333,60 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     assert result == ()
 
 
+@pytest.mark.parametrize(
+    ("encoding", "blob_sha", "message"),
+    [("garbage", "a" * 40, "invalid encoding"), ("none", "bad", "valid blob SHA")],
+)
+def test_oversized_pdf_rejects_malformed_metadata_before_size_exception(
+    encoding: str, blob_sha: str, message: str,
+) -> None:
+    """Invalid Contents metadata cannot invoke the narrow PDF convention."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [{"filename": "docs/papers/big-paper.pdf", "status": "added"}]
+        return {"type": "file", "encoding": encoding, "size": policy.MAX_BLOB_BYTES + 1, "sha": blob_sha}
+
+    with pytest.raises(policy.PolicyError, match=message):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+            pull_request=11, head_sha="c" * 40, event_action="opened",
+            token="token", opener=opener,
+        )
+
+
+@pytest.mark.parametrize(
+    ("encoding", "content"),
+    [("base64", "!"), ("none", "unexpected")],
+)
+def test_oversized_pdf_rejects_contradictory_content_before_size_exception(
+    encoding: str, content: str,
+) -> None:
+    """A claimed >100 MB PDF cannot hide malformed or nonempty content."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [{"filename": "docs/papers/big-paper.pdf", "status": "added"}]
+        return {
+            "type": "file", "encoding": encoding, "size": policy.MAX_BLOB_BYTES + 1,
+            "sha": "a" * 40, "content": content,
+        }
+
+    with pytest.raises(policy.PolicyError, match="contradictory oversized content"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+            pull_request=11, head_sha="c" * 40, event_action="opened",
+            token="token", opener=opener,
+        )
+
+
 def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
     """A patchless '.pdf' file that fetches as real content is still scanned.
 
     Regression coverage for Devin Review's second finding: a missing diff
     patch is not proof of binary content by itself (GitHub also omits one
     for a textual diff over its own rendering limit, well under this
-    module's MAX_FILE_BYTES fetch ceiling), so a file this small must be
+    module's MAX_BLOB_BYTES fetch ceiling), so a file this small must be
     verified by its real magic bytes, not trusted on patch-absence alone.
     """
 
@@ -458,6 +507,271 @@ def test_evaluate_pull_request_rejects_png_with_appended_runtime_text() -> None:
             token="token",
             opener=opener,
         )
+
+
+def _declaration_url_fragment(base_ref: str) -> str:
+    """Return the substring identifying the declaration-fetch request URL."""
+    return f"/contents/{policy.ARTIFACT_PATH_DECLARATION_PATH}?ref={base_ref}"
+
+
+def test_declared_prefix_from_base_ref_admits_a_real_binary_artifact(capsys: pytest.CaptureFixture[str]) -> None:
+    """A base-ref-declared prefix admits a genuine non-UTF-8 research artifact.
+
+    ``local/model.npz`` has no ``BINARY_DOCUMENT_MAGIC`` entry, so admission
+    depends entirely on the declared prefix plus the "no patch + not valid
+    UTF-8" evidence -- the option (a) suffix decision from issue #2193.
+    """
+
+    artifact_bytes = b"\x93NUMPY\x01\x00\xff\xfe\x00\x01\x02\x80\x81\x82\xf0\x0f"
+    with pytest.raises(UnicodeDecodeError):
+        artifact_bytes.decode("utf-8")
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2193/files" in url:
+            return [{"filename": "local/model.npz", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("\nlocal\n\n")
+        assert "/contents/local/model.npz" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(artifact_bytes),
+            "content": base64.b64encode(artifact_bytes).decode("ascii"),
+        }
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2193,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert result == ()
+    notice = capsys.readouterr().out
+    assert "declared prefix 'local'" in notice
+    assert "base ref 'main'" in notice
+    assert "local/model.npz" in notice
+
+
+def test_same_pr_self_authorization_is_refused() -> None:
+    """A declaration added only at the PR head grants no admission.
+
+    The declaration is resolved *only* from ``base_ref``; when it is absent
+    there (the same PR adds the declaration and the binary together), the
+    artifact is scanned exactly as if no declaration existed anywhere, and a
+    genuinely non-UTF-8 file with no diff patch fails closed the same way
+    any other unrecognized binary format does.
+    """
+
+    artifact_bytes = b"\x93NUMPY\x01\x00\xff\xfe\x00\x01\x02\x80\x81\x82\xf0\x0f"
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2194/files" in url:
+            return [{"filename": "local/model.npz", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            raise policy.ArtifactDeclarationNotFoundError("no declaration at base ref")
+        assert "/contents/local/model.npz" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(artifact_bytes),
+            "content": base64.b64encode(artifact_bytes).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=2194,
+            head_sha="b" * 40,
+            event_action="opened",
+            token="token",
+            base_ref="main",
+            opener=opener,
+        )
+
+
+def test_runtime_form_under_declared_prefix_is_still_rejected() -> None:
+    """A declared prefix cannot launder an active Nginx runtime artifact."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2195/files" in url:
+            return [{"filename": "local/nginx.conf", "status": "added", "patch": "+listen 80;"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("local\n")
+        assert "/contents/local/nginx.conf" in url
+        return encoded_file("server { listen 80; }\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2195,
+        head_sha="c" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_artifact"]
+
+
+def test_valid_utf8_file_under_declared_prefix_is_still_scanned() -> None:
+    """A declared prefix never admits a file that decodes as valid UTF-8.
+
+    Without a diff patch, this would otherwise look like the exact binary
+    pre-filter shape (`patch_available=False`); the strict UTF-8 complement
+    in `_binary_documentation_evidence_confirms` refuses to trust it, so it
+    falls through to the ordinary scan and still gets flagged.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2196/files" in url:
+            return [{"filename": "local/notes.dat", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("local\n")
+        assert "/contents/local/notes.dat" in url
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2196,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+@pytest.mark.parametrize("name", ["deploy.sh", "deploy.dat", "deploy.txt"])
+def test_declared_prefix_does_not_admit_binary_marked_nginx_runtime(name: str) -> None:
+    """A stray non-UTF-8 byte cannot hide readable runtime commands."""
+
+    raw = b"#!/bin/sh\nnginx -c /etc/nginx/nginx.conf\n# \xff\n"
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2197/files" in url:
+            return [{"filename": f"docs/delivery_interim_20260920/{name}", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("docs/delivery_interim_20260920/\n")
+        assert f"/contents/docs/delivery_interim_20260920/{name}" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=2197,
+            head_sha="e" * 40,
+            event_action="opened",
+            token="token",
+            base_ref="main",
+            opener=opener,
+        )
+
+
+@pytest.mark.parametrize(
+    ("declaration_text", "message"),
+    [
+        ("/etc/passwd\n", "must be a relative path prefix"),
+        ("local/../etc\n", "malformed"),
+        ("..\n", "malformed"),
+        (".\n", "must be a relative path prefix"),
+        ("/\n", "must be a relative path prefix"),
+        ("data/*.npz\n", "glob"),
+        ("\n".join(f"path-{index}" for index in range(policy.MAX_DECLARED_ARTIFACT_PREFIXES + 1)), "exceeds 64 entries"),
+        ("a/" * (policy.MAX_DECLARED_ARTIFACT_PREFIX_DEPTH + 1) + "b\n", "exceeds depth 8"),
+    ],
+)
+def test_malformed_declaration_raises_naming_the_offending_entry(declaration_text: str, message: str) -> None:
+    """Every malformed declaration shape is a hard PolicyError, never silent."""
+
+    with pytest.raises(policy.PolicyError, match=message):
+        policy._parse_artifact_path_declaration(declaration_text)
+
+
+def test_no_declaration_file_present_is_a_regression_guard() -> None:
+    """A repository with no declaration file behaves identically to today."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2197/files" in url:
+            return [{"filename": "docker-compose.yml", "status": "modified", "patch": "+image: nginx"}]
+        if _declaration_url_fragment("main") in url:
+            raise policy.ArtifactDeclarationNotFoundError("no declaration file in this repository")
+        return encoded_file("services:\n  edge:\n    image: nginx:1.27-alpine\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2197,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_omitting_base_ref_never_fetches_a_declaration() -> None:
+    """The default (no ``base_ref``) reproduces this module's exact prior behavior."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2198/files" in url:
+            return [{"filename": "docker-compose.yml", "status": "modified", "patch": "+image: nginx"}]
+        assert "edge-policy-artifact-paths" not in url
+        return encoded_file("services:\n  edge:\n    image: nginx:1.27-alpine\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2198,
+        head_sha="f" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_evaluate_pull_request_rejects_malformed_base_ref() -> None:
+    """A malformed base ref fails before any network access."""
+
+    with pytest.raises(policy.PolicyError, match="base ref"):
+        policy.evaluate_pull_request(
+            api_url="x",
+            repository="a/b",
+            pull_request=1,
+            head_sha="a" * 40,
+            event_action="opened",
+            token="x",
+            base_ref="../etc/passwd",
+            opener=lambda _url, _token: pytest.fail("must not open"),
+        )
+
+
+def test_declared_prefix_for_path_matches_by_path_segment() -> None:
+    """A declared prefix matches whole path segments, not a raw string prefix."""
+
+    assert policy._declared_prefix_for_path("local/model.npz", ("local",)) == "local"
+    assert policy._declared_prefix_for_path("local-cache/model.npz", ("local",)) is None
+    assert policy._declared_prefix_for_path("evidence/raw/data.sav", ("evidence/raw",)) == "evidence/raw"
+    assert policy._declared_prefix_for_path("evidence/other.sav", ("evidence/raw",)) is None
+
+
+def test_github_open_json_maps_not_found_to_artifact_declaration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404 from the GitHub API is distinguished from every other transport failure."""
+
+    monkeypatch.setattr(
+        policy.github_opener, "open",
+        lambda _request, timeout: (_ for _ in ()).throw(HTTPError("x", 404, "not found", {}, BytesIO())),
+    )
+    with pytest.raises(policy.ArtifactDeclarationNotFoundError):
+        policy._github_open_json("https://api.github.com/repos/a/b", "token")
 
 
 def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
@@ -714,13 +1028,13 @@ def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
         ([], "not an object"),
         ({"type": "symlink", "encoding": "base64", "size": 0, "content": ""}, "not a regular"),
         ({"type": "file", "encoding": "base64", "size": -1, "content": ""}, "malformed size"),
-        ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "size contract"),
+        ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "blob SHA"),
         # GitHub's real response shape for a file whose blob exceeds the
         # inline-content ceiling: no content at all, encoding "none".
-        ({"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1}, "size contract"),
+        ({"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1}, "blob SHA"),
         ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
-        ({"type": "file", "encoding": "none", "size": "not-an-int"}, "no inline content"),
-        ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "not a regular base64 file"),
+        ({"type": "file", "encoding": "none", "size": "not-an-int"}, "malformed size"),
+        ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "invalid encoding"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
@@ -731,6 +1045,92 @@ def test_file_content_evidence_is_fail_closed(payload: object, message: str) -> 
 
     with pytest.raises(policy.PolicyError, match=message):
         policy._load_file_content("api", "a/b", "x y", "a" * 40, "x", lambda url, _token: payload)
+
+
+@pytest.mark.parametrize(
+    ("tail", "expected_rules"),
+    [(b"\nThird-party license notice\n", []), (b"\nimage: nginx:latest\n", ["nginx_container_image"])],
+)
+def test_patchless_large_text_uses_exact_head_verified_blob(tail: bytes, expected_rules: list[str]) -> None:
+    """A patchless file above 1 MiB is fully scanned, including its tail."""
+
+    raw = b"A" * policy.MAX_FILE_BYTES + tail
+    blob_sha = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
+    seen: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        seen.append(url)
+        if "/pulls/17/files" in url:
+            return [{"filename": "LICENSE-THIRD-PARTY", "status": "added"}]
+        return {"type": "file", "encoding": "none", "size": len(raw), "sha": blob_sha}
+
+    def raw_opener(url: str, _token: str, limit: int) -> bytes:
+        assert url.endswith(f"/git/blobs/{blob_sha}")
+        assert limit == len(raw)
+        return raw
+
+    violations = policy.evaluate_pull_request(
+        api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+        pull_request=17, head_sha="a" * 40, event_action="opened", token="token",
+        opener=opener, raw_opener=raw_opener,
+    )
+    assert [item.rule for item in violations] == expected_rules
+    assert "?ref=" + "a" * 40 in seen[1]
+
+
+def test_large_text_disguised_as_pdf_still_reaches_policy_scan() -> None:
+    """A patchless PDF path gains no exemption from a 1–100 MB size alone."""
+
+    raw = b"A" * policy.MAX_FILE_BYTES + b"\nimage: nginx:latest\n"
+    blob_sha = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/18/files" in url:
+            return [{"filename": "docs/papers/disguised.pdf", "status": "added"}]
+        return {"type": "file", "encoding": "none", "size": len(raw), "sha": blob_sha}
+
+    violations = policy.evaluate_pull_request(
+        api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+        pull_request=18, head_sha="a" * 40, event_action="opened", token="token",
+        opener=opener, raw_opener=lambda _url, _token, _limit: raw,
+    )
+    assert [item.rule for item in violations] == ["nginx_container_image"]
+
+
+@pytest.mark.parametrize(
+    ("altered", "message"),
+    [
+        (lambda raw: raw[:-1], "size mismatch"),
+        (lambda raw: raw[:-1] + b"X", "SHA mismatch"),
+        (lambda raw: raw + b"X", "size mismatch"),
+    ],
+)
+def test_large_blob_rejects_incomplete_tampered_or_oversized_bytes(
+    altered: Callable[[bytes], bytes], message: str,
+) -> None:
+    """Metadata alone never authorizes a truncated or substituted raw blob."""
+
+    raw = b"A" * (policy.MAX_FILE_BYTES + 1)
+    blob_sha = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
+    payload = {"type": "file", "encoding": "none", "size": len(raw), "sha": blob_sha}
+    with pytest.raises(policy.PolicyError, match=message):
+        policy._load_file_content(
+            "api", "a/b", "LICENSE-THIRD-PARTY", "a" * 40, "token",
+            lambda _url, _token: payload,
+            lambda _url, _token, _limit: altered(raw),
+        )
+
+
+def test_text_above_blob_limit_fails_without_download() -> None:
+    """The narrow PDF fallback cannot admit a huge patchless text file."""
+
+    payload = {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1, "sha": "a" * 40}
+    with pytest.raises(policy.ContentSizeExceededError, match="size contract"):
+        policy._load_file_content(
+            "api", "a/b", "LICENSE-THIRD-PARTY", "a" * 40, "token",
+            lambda _url, _token: payload,
+            lambda _url, _token, _limit: pytest.fail("oversize blob must not be fetched"),
+        )
 
 
 def test_file_content_loader_quotes_paths() -> None:
@@ -803,6 +1203,21 @@ def test_github_open_json_rejects_oversized_and_malformed_payloads(monkeypatch: 
     monkeypatch.setattr(policy.github_opener, "open", lambda _request, timeout: FakeResponse(b"not-json"))
     with pytest.raises(policy.PolicyError, match="malformed JSON"):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
+
+
+def test_github_open_raw_bytes_is_bounded_and_requests_raw_blob(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The production transport requests raw bytes and rejects a long response."""
+
+    def open_response(request: object, timeout: int) -> FakeResponse:
+        assert request.get_header("Accept") == "application/vnd.github.raw+json"
+        assert timeout == 30
+        return FakeResponse(b"abcd")
+
+    monkeypatch.setattr(policy.github_opener, "open", open_response)
+    url = "https://api.github.com/repos/a/b/git/blobs/" + "a" * 40
+    assert policy._github_open_raw_bytes(url, "token", 4) == b"abcd"
+    with pytest.raises(policy.PolicyError, match="bounded response size"):
+        policy._github_open_raw_bytes(url, "token", 3)
 
 
 @pytest.mark.parametrize(

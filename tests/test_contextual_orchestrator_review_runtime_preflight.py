@@ -1733,6 +1733,33 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> None:
+    """Review endpoints keep safe success correlation without arbitrary URL data."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+    request_id = "0123456789abcdef0123456789abcdef"
+    session_hash = "ab" * 32
+    event = (
+        "http_request method=POST path=/v1/chat/completions status=200 "
+        f"latency_ms=125.2 session_id_hash={session_hash} request_id={request_id}"
+    )
+    assert sanitize_line(event) == event
+    assert sanitize_line(f"INFO:contextual_orchestrator.server:{event}") == event
+    assert sanitize_line(
+        "http_request method=GET path=/healthz status=200 latency_ms=0.4 "
+        f"session_id_hash=- request_id={request_id}"
+    ) == (
+        "http_request method=GET path=/healthz status=200 latency_ms=0.4 "
+        f"session_id_hash=- request_id={request_id}"
+    )
+    for unsafe_event in (
+        event.replace("/v1/chat/completions", "/v1/files/private-name"),
+        event.replace(request_id, "A" * 32),
+        event.replace(session_hash, "ab" * 31),
+        event + " token=sk-secret",
+    ):
+        assert sanitize_line(unsafe_event) is None
+
+
 def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
 
@@ -1769,6 +1796,62 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     assert sanitize_line(
         "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
     ) == "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    request_id = "0123456789abcdef0123456789abcdef"
+    assert sanitize_line(
+        "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+        f"request_id={request_id}"
+    ) == (
+        "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+        f"request_id={request_id}"
+    )
+    assert sanitize_line(
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500 "
+        f"request_id={request_id}"
+    ) == (
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500 "
+        f"request_id={request_id}"
+    )
+    for event in (
+        "provider_exhausted agent_id=nvidia_nim_x model=m/x attempts=2 final_error_type=HTTPError",
+        "provider_rejected_permanent agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=ValueError",
+        "provider_no_retry_budget agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=HTTPError transient=False",
+        "provider_one_shot_call_failed agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=HTTPError transient=False",
+    ):
+        correlated_event = f"{event} request_id={request_id}"
+        assert sanitize_line(correlated_event) == correlated_event
+        absent_event = f"{event} request_id=-"
+        assert sanitize_line(absent_event) == absent_event
+    request_failed = sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True "
+        f"request_id={request_id} error_message=Bearer sk-secret"
+    )
+    assert request_failed == (
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True "
+        f"request_id={request_id} error_message=<omitted>"
+    )
+    assert "sk-secret" not in request_failed
+    provider_status_failed = sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True provider_status=429 "
+        f"request_id={request_id} error_message=Bearer sk-secret"
+    )
+    assert provider_status_failed == (
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True provider_status=429 "
+        f"request_id={request_id} error_message=<omitted>"
+    )
+    assert sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True request_id=- error_message=unbound"
+    ) == (
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True request_id=- error_message=<omitted>"
+    )
+    assert sanitize_line(
+        f"request_failed status=502 code=provider_error request_id={request_id}"
+    ) == f"request_failed status=502 code=provider_error request_id={request_id}"
     assert sanitize_line(
         "INFO:contextual_orchestrator.orchestrator:provider_no_retry_budget agent_id=bytez_a "
         "model=m/x attempts=1 final_error_type=InvalidChatResponse transient=False"
@@ -1798,6 +1881,79 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
         "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 error_type=E transient=False"
     ) is None
     assert sanitize_line(f"DEBUG:contextual_orchestrator.orchestrator:{secret}") is None
+    for invalid_request_id in (
+        "0123456789abcdef0123456789abcde",
+        "0123456789abcdef0123456789abcdef0",
+        "0123456789ABCDEF0123456789ABCDEF",
+        "not-a-request-id",
+    ):
+        assert sanitize_line(
+            "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+            f"request_id={invalid_request_id}"
+        ) is None
+        assert sanitize_line(
+            "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+            "error_type=HTTPError transient=True "
+            f"request_id={invalid_request_id} error_message=raw-error"
+        ) is None
+        assert sanitize_line(
+            f"request_failed status=502 code=provider_error request_id={invalid_request_id}"
+        ) is None
+
+
+@pytest.mark.parametrize("status", [None, "100", "429", "599", "None"])
+def test_sidecar_stream_provider_status_compatibility(status) -> None:
+    """Legacy and typed producer diagnostics survive without upstream text."""
+    prefix = "provider_attempt_failed agent_id=fixture model=m/x attempt=1 error_type=HTTPError transient=True"
+    fields = "" if status is None else f" provider_status={status}"
+    assert _load_sanitizer()["sanitize_line"](
+        prefix + fields + " error_message=Bearer sk-secret"
+    ) == prefix + fields + " error_message=<omitted>"
+
+
+@pytest.mark.parametrize("request_id", [None, "a1" * 16, "<omitted>"])
+def test_sidecar_stream_request_id_compatibility(request_id) -> None:
+    """Keep safe correlation identifiers, including the producer omission marker."""
+    message = "request_failed status=500 code=internal_error"
+    if request_id is not None:
+        message += f" request_id={request_id}"
+    assert _load_sanitizer()["sanitize_line"](message) == message
+
+
+@pytest.mark.parametrize("status", ["099", "600", "4290", "429secret", "-1", "True", "none", "４２９"])
+def test_sidecar_stream_rejects_invalid_provider_status(status) -> None:
+    """Invalid typed fields must not downgrade to an accepted legacy prefix."""
+    assert _load_sanitizer()["sanitize_line"](
+        "provider_attempt_failed agent_id=fixture model=m/x attempt=1 "
+        f"error_type=HTTPError transient=True provider_status={status} error_message=sk-secret"
+    ) is None
+
+
+@pytest.mark.parametrize("request_id", ["a" * 31, "a" * 33, "A" * 32, "g" * 32,
+                                      "<omitted>secret", "a" * 32 + "-secret", "", "a" * 32 + "\nsecret"])
+def test_sidecar_stream_rejects_invalid_request_id(request_id) -> None:
+    """Do not preserve a partial identifier or fall back to the legacy record."""
+    assert _load_sanitizer()["sanitize_line"](
+        f"request_failed status=500 code=internal_error request_id={request_id}"
+    ) is None
+
+
+@pytest.mark.parametrize("status,code", [("5000", "internal_error"), ("600", "internal_error"),
+                                       ("500", "x" * 65), ("500", "internal_error/secret")])
+def test_sidecar_stream_rejects_partial_request_fields(status, code) -> None:
+    """Status and code validation consumes complete tokens, never safe prefixes."""
+    assert _load_sanitizer()["sanitize_line"](f"request_failed status={status} code={code}") is None
+
+
+@pytest.mark.parametrize("prefix,allowed", [
+    ("", True), ("WARNING:contextual_orchestrator.server:", True),
+    ("2026-09-05 21:40:00,123 WARNING contextual_orchestrator.server ", True),
+    ("provider text ", False), ("WARNING:provider.raw:", False),
+])
+def test_sidecar_stream_request_event_boundary(prefix, allowed) -> None:
+    """Only bare events or the server logger envelope may carry request IDs."""
+    event = "request_failed status=500 code=internal_error request_id=" + "a" * 32
+    assert _load_sanitizer()["sanitize_line"](prefix + event) == (event if allowed else None)
 
 
 def test_sidecar_stream_sanitizer_matches_real_formatter_output() -> None:

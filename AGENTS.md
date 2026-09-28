@@ -30,6 +30,14 @@ see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003
 2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
 false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
+Sidecar diagnostics may retain only a server-generated `request_id` matching
+exactly 32 lowercase hexadecimal characters, plus the producer's explicit `-`
+or `<omitted>` marker where that event contract permits it. Keep free-form
+provider errors omitted; malformed, uppercase, short, long, or otherwise
+unbounded identifiers must not pass the sanitizer.
+HTTP success summaries are narrower still: preserve correlation only for the
+review sidecar's fixed health, chat-completions, and responses paths. Never
+allowlist arbitrary request paths merely because the producer stripped queries.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure
@@ -67,6 +75,8 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   security changes.
 
 ## Verification discipline
+
+- producer가 안전한 로그 필드를 추가하면 exact revision 쌍으로 consumer sanitizer를 통과시켜 allowlist의 누락을 확인한다. producer 단위 테스트 성공만으로 CI artifact 보존을 주장하지 않으며, 연결 검증에서도 raw 본문 비출력을 유지한다.
 
 Many agent sessions work this organization concurrently under the same standing
 brief. Silence is not evidence: "I have not touched X" describes one session's

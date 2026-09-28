@@ -33,19 +33,66 @@ def iter_sarif_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.sarif"))
 
 
-def _rule_for_result(result: dict[str, Any], rules: list[Any]) -> dict[str, Any]:
-    """Resolve the SARIF rule definition referenced by a result."""
-    rules_by_id = {
-        str(rule.get("id") or ""): rule for rule in rules if isinstance(rule, dict)
-    }
-    rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
-    if rule:
-        return rule
-    rule_index = result.get("ruleIndex")
-    if isinstance(rule_index, int) and 0 <= rule_index < len(rules):
-        candidate = rules[rule_index]
-        if isinstance(candidate, dict):
+UNRESOLVED_RULE_LEVEL = "unresolved-rule"
+
+
+def _component_rules(result: dict[str, Any], tool: dict[str, Any]) -> list[Any] | None:
+    """Return the rules of the tool component a result references (SARIF 2.1.0 §3.54).
+
+    No ``rule.toolComponent`` means the driver. Otherwise the reference selects one of
+    ``tool.extensions`` by ``index``, ``guid``, or ``name``; an unmatched reference
+    returns ``None`` so the caller can fail closed instead of consulting the wrong
+    component (issue #2150).
+    """
+    reference = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+    component_ref = reference.get("toolComponent")
+    if not isinstance(component_ref, dict):
+        return (tool.get("driver") or {}).get("rules") or []
+    extensions = [ext for ext in tool.get("extensions") or [] if isinstance(ext, dict)]
+    index = component_ref.get("index")
+    if isinstance(index, int):
+        if 0 <= index < len(extensions):
+            return extensions[index].get("rules") or []
+        return None
+    for key in ("guid", "name"):
+        wanted = component_ref.get(key)
+        if wanted is not None:
+            for extension in extensions:
+                if extension.get(key) == wanted:
+                    return extension.get("rules") or []
+            return None
+    return None
+
+
+def _rule_for_result(result: dict[str, Any], tool: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve the SARIF rule definition a result references, or ``None`` if it cannot be.
+
+    Resolution order inside the referenced component: ``rule.index`` (validated
+    against the declared id), then id lookup (``ruleId`` / ``rule.id``), then the
+    legacy ``ruleIndex``. Colliding ids across components stay distinct because
+    lookup never leaves the referenced component.
+    """
+    rules = _component_rules(result, tool)
+    if rules is None:
+        return None
+    reference = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+    declared_ids = {str(v) for v in (result.get("ruleId"), reference.get("id")) if v}
+    if len(declared_ids) > 1:
+        return None
+    declared_id = next(iter(declared_ids), "")
+    for index in (reference.get("index"), result.get("ruleIndex")):
+        if isinstance(index, int):
+            candidate = rules[index] if 0 <= index < len(rules) else None
+            if not isinstance(candidate, dict):
+                return None
+            if declared_id and str(candidate.get("id") or "") != declared_id:
+                return None
             return candidate
+    if declared_id:
+        for rule in rules:
+            if isinstance(rule, dict) and str(rule.get("id") or "") == declared_id:
+                return rule
+        return None
     return {}
 
 
@@ -56,11 +103,16 @@ def _is_medium_plus(score: float | None, level: str, security_rule: bool) -> boo
     return security_rule and level in SEVERITY_LEVELS
 
 
-def _finding_from_result(result: dict[str, Any], rules: list[Any]) -> Finding | None:
-    """Build a `Finding` for one SARIF result, or None if it doesn't gate the PR."""
+def _finding_from_result(result: dict[str, Any], tool: dict[str, Any]) -> Finding | None:
+    """Build a `Finding` for one SARIF result, or None if it doesn't gate the PR.
+
+    A result whose rule reference cannot be resolved and that carries no explicit
+    security-severity gates as ``unresolved-rule`` rather than passing silently.
+    """
     if not isinstance(result, dict) or result.get("suppressions"):
         return None
-    rule = _rule_for_result(result, rules)
+    resolved = _rule_for_result(result, tool)
+    rule = resolved or {}
     result_properties = result.get("properties") or {}
     rule_properties = rule.get("properties") or {}
     raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
@@ -71,7 +123,9 @@ def _finding_from_result(result: dict[str, Any], rules: list[Any]) -> Finding | 
     level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
     tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
     security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
-    if not _is_medium_plus(score, level, security_rule):
+    if resolved is None and score is None:
+        level = UNRESOLVED_RULE_LEVEL
+    elif not _is_medium_plus(score, level, security_rule):
         return None
     physical = ((result.get("locations") or [{}])[0].get("physicalLocation") or {})
     artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
@@ -95,12 +149,12 @@ def gather_findings(root: Path) -> tuple[list[Finding], int, int]:
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
         for run in payload.get("runs") or []:
-            rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
+            tool = run.get("tool") if isinstance(run.get("tool"), dict) else {}
             for result in run.get("results") or []:
                 if not isinstance(result, dict):
                     continue
                 total_results += 1
-                finding = _finding_from_result(result, rules)
+                finding = _finding_from_result(result, tool)
                 if finding is not None:
                     findings.append(finding)
     return findings, total_results, len(paths)
