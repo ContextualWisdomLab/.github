@@ -44,3 +44,6 @@ compile step, then exceeded that test's 600-second limit on this concurrently
 loaded macOS host. That is incomplete local proof for the compile path; a
 terminal hosted rerun is required before claiming the coverage gate repaired.
 The targeted workflow contract suite passed 82 tests with `GITHUB_ACTIONS=true`.
+The fixture crate's own `cargo llvm-cov --all-features --fail-under-lines 100`
+run passed locally with one test and 100% line coverage, exercising its cached
+`itoa` and `ryu` dependencies.
