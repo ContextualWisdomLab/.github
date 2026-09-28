@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Produce a read-only, exact-head GitHub Actions queue-health report.
 
 The collector intentionally treats queued, cancelled, skipped, missing, and
@@ -9,16 +8,14 @@ turns an unavailable runner into a successful check.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import html
 import json
-from pathlib import Path
 import re
 import subprocess
-import sys
-import time
-from typing import Any, Callable, Sequence, TextIO
-
+from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 QUEUE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED"}
