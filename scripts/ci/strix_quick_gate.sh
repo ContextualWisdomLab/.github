@@ -2989,7 +2989,8 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if is_pull_request_event &&
+		# Synthetic changed-file inventories have no authenticated scope to attest.
+		if is_pull_request_event && [ "${STRIX_TEST_CHANGED_FILES_OVERRIDE+x}" != x ] &&
 			! python3 "$SCRIPT_DIR/strix_report_scope.py" "$STRIX_SCAN_OUTPUT_DIR" "${CHANGED_FILES[@]}"; then
 			echo "Strix completed without a report tied to a changed source file; failing closed." >&2
 			return 1
