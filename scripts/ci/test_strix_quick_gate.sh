@@ -7065,6 +7065,10 @@ if [[ " $* " != *" --instruction For this pull request scan, name at least one r
 	echo "Error: PR scan did not request source-specific report evidence" >&2
 	exit 69
 fi
+if [[ " $* " != *"Do not copy finish_scan parameter descriptions into the report"* ]]; then
+	echo "Error: PR scan did not reject finish-tool example prose" >&2
+	exit 70
+fi
 if [ ! -f "$scoped_file" ]; then
 	echo "Error: PR head scoped file missing ($scoped_file)" >&2
 	exit 61

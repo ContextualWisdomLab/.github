@@ -2681,7 +2681,7 @@ run_strix_once() {
 	local total_budget_limited_timeout=0
 	local report_scope_instruction=""
 	if is_pull_request_event; then
-		report_scope_instruction="For this pull request scan, name at least one repository-relative changed file that you actually inspected in the final report. State what you checked. If no changed file was inspected, say so and do not claim a completed source review. Report vulnerabilities normally."
+		report_scope_instruction="For this pull request scan, name at least one repository-relative changed file that you actually inspected in the final report. State what you checked. Do not copy finish_scan parameter descriptions into the report. If no changed file was inspected, say so and do not claim a completed source review. Report vulnerabilities normally."
 	fi
 	if [ "$RUN_START_EPOCH" -le 0 ]; then
 		RUN_START_EPOCH="$(date +%s)"
