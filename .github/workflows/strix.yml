@@ -445,10 +445,10 @@ jobs:
 
   strix:
     outputs:
-      transport_capacity_unavailable: ${{ steps.strix_sidecar_failure.outputs.transport_capacity_unavailable }}
-      transport_retry_eligible: ${{ steps.strix_sidecar_failure.outputs.transport_retry_eligible }}
-      transport_retry_delay_seconds: ${{ steps.strix_sidecar_failure.outputs.transport_retry_delay_seconds }}
-      transport_retry_next_attempt: ${{ steps.strix_sidecar_failure.outputs.transport_retry_next_attempt }}
+      transport_capacity_unavailable: ${{ steps.strix_scan.outputs.transport_capacity_unavailable || steps.strix_sidecar_failure.outputs.transport_capacity_unavailable }}
+      transport_retry_eligible: ${{ steps.strix_scan.outputs.transport_retry_eligible || steps.strix_sidecar_failure.outputs.transport_retry_eligible }}
+      transport_retry_delay_seconds: ${{ steps.strix_scan.outputs.transport_retry_delay_seconds || steps.strix_sidecar_failure.outputs.transport_retry_delay_seconds }}
+      transport_retry_next_attempt: ${{ steps.strix_scan.outputs.transport_retry_next_attempt || steps.strix_sidecar_failure.outputs.transport_retry_next_attempt }}
       provider_attempt_count: ${{ steps.strix_sidecar_failure.outputs.provider_attempt_count }}
       transport_http_status: ${{ steps.strix_sidecar_failure.outputs.transport_http_status }}
     needs: [changed-scope, admit-current-head]
@@ -1041,6 +1041,7 @@ jobs:
           echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
       - name: Run Strix (quick)
+        id: strix_scan
         if: steps.gate.outputs.enabled == 'true'
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
@@ -1078,6 +1079,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
         run: |
           export LLM_TIMEOUT=0
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
@@ -1088,6 +1090,9 @@ jobs:
           # Defined before the gate loop so the bounded retry decision below
           # can classify outcomes without duplicating the patterns later.
           backend_unavailable_signal='STRIX_PROVIDER_UNAVAILABLE|RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*500[^[:cntrl:]]*internal_error|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
+          # Only explicit connection/rate-limit failures qualify for a new
+          # attempt; scanner defects and sandbox bootstrap failures do not.
+          runtime_transport_signal='LLM CONNECTION FAILED|Could not establish connection to the language model|RateLimitError|Too many requests\. For more on scraping GitHub'
           # Scanner tooling breakage (Caido GraphQL query/cursor errors) is
           # not a provider outcome. It can occur while providers are healthy
           # and it can coexist with genuine provider rate limits, so it gets
@@ -1158,6 +1163,11 @@ jobs:
             || grep -Eq "$model_behavior_error_signal" "$strix_neutralization_scope_log" ) \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
             echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
+            if grep -Eiq "$runtime_transport_signal" "$strix_neutralization_scope_log" \
+              && ! grep -Eq "$tooling_error_signal" "$strix_neutralization_scope_log" \
+              && ! grep -Fq 'STRIX_SANDBOX_UNAVAILABLE' "$strix_neutralization_scope_log"; then
+              PYTHONPATH="$TRUSTED_STRIX_SOURCE" python3 -m scripts.ci.strix_runtime_capacity --expected-head "$PR_HEAD_SHA"
+            fi
             exit "$strix_rc"
           fi
 
