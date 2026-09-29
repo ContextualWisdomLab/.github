@@ -643,7 +643,7 @@ jobs:
             # PR-head source, credentials, lifecycle execution, or runner
             # command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
+            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
@@ -2387,6 +2387,21 @@ jobs:
           install -m 0644 "$GITHUB_OUTPUT" "${OPENCODE_SANDBOX_RESULT_DIR}/github-output"
           if [ "$failures" -ne 0 ]; then
             exit 1
+          fi
+
+      - name: Clean up coverage runner resources
+        if: always()
+        env:
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_BUILD_DIR: ${{ runner.temp }}/opencode-coverage-tool-build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # The sandbox writes as uid 65532; the runner cannot remove its files.
+          sudo rm -rf -- "$COVERAGE_SOURCE_WORKDIR"
+          sudo rm -rf -- "$COVERAGE_BUILD_DIR"
+          coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker image inspect "$coverage_tool_image" >/dev/null 2>&1; then
+            docker image rm "$coverage_tool_image"
           fi
 
   opencode-review-target:
