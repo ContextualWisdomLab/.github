@@ -9,13 +9,26 @@ import sys
 from pathlib import Path
 
 
+def _token(text: str) -> re.Pattern[str]:
+    """Match text only where it is not part of a longer name or path segment."""
+    return re.compile(rf"(?<![\w.-]){re.escape(text)}(?![\w-]|\.\w)")
+
+
 def names_changed_path(report: str, path: str) -> bool:
-    """Return whether the report names the path, or its file within its directory."""
+    """Return whether the report names the path, or its file within a named directory.
+
+    The directory may be the file's own directory or any ancestor of at least two
+    segments; a lone top-level name such as ``crates`` is too generic to scope a file.
+    """
     if path in report:
         return True
     directory, _, name = path.rpartition("/")
-    file_token = re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)")
-    return bool(directory) and f"{directory}/" in report and file_token.search(report) is not None
+    if not directory or _token(name).search(report) is None:
+        return False
+    if f"{directory}/" in report:
+        return True
+    parts = directory.split("/")
+    return any(_token("/".join(parts[:depth])).search(report) for depth in range(2, len(parts) + 1))
 
 
 def validate(output: Path, changed_paths: list[str]) -> None:
