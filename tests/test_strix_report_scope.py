@@ -159,6 +159,7 @@ def test_validate_accepts_file_name_within_a_reported_ancestor_directory(tmp_pat
     [
         "Scope: crates/ only. Reviewed two_tier_recursion.rs.\n",
         "Scope: crates/mlsirm-core-extra. Reviewed two_tier_recursion.rs.\n",
+        "Scope: crates/mlsirm-core. Reviewed two_tier_recursion.rs/notes.\n",
         "Scope: crates/mlsirm-core. Reviewed other_recursion.rs.\n",
     ],
 )
