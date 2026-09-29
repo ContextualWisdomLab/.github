@@ -54,10 +54,10 @@ class InventoryClient:
 
         self.names = names
 
-    def request(self, args, *, input_payload=None):
+    def request(self, args, *, input_payload=None, cancellation_event=None):
         """Return the organization inventory or one repository pull list."""
 
-        del input_payload
+        del input_payload, cancellation_event
         endpoint = args[0]
         if endpoint == "orgs/ContextualWisdomLab/repos":
             return [repository(name) for name in self.names]
@@ -126,6 +126,194 @@ def test_github_client_retries_a_completed_failure_with_backoff(monkeypatch) -> 
     assert result == {"ok": True}
     assert len(attempts) == 3
     assert sleeps == [5, 10]
+
+
+def test_github_client_cancellation_interrupts_rate_limit_backoff(monkeypatch) -> None:
+    """Sweep cancellation stops a retrying request before another subprocess."""
+
+    router = router_module()
+    attempts = []
+    waits = []
+
+    def rate_limited(command, **kwargs):
+        """Return one admission-time rate-limit response."""
+        del kwargs
+        attempts.append(command)
+        return SimpleNamespace(
+            stdout="",
+            stderr="gh: API rate limit exceeded for installation ID 1",
+            returncode=1,
+        )
+
+    class CancellationEvent:
+        """Expose the Event subset required by the request boundary."""
+
+        cancelled = False
+
+        def is_set(self) -> bool:
+            """Return whether the synthetic cancellation was observed."""
+            return self.cancelled
+
+        def wait(self, timeout: float) -> bool:
+            """Record the backoff and interrupt it immediately."""
+            waits.append(timeout)
+            self.cancelled = True
+            return True
+
+    monkeypatch.setattr(router.subprocess, "run", rate_limited)
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        router.GitHubClient("token").request(
+            ["repos/x/y"],
+            cancellation_event=CancellationEvent(),
+        )
+
+    assert len(attempts) == 1
+    assert waits == [5]
+
+
+def test_github_client_rejects_a_request_cancelled_before_subprocess(
+    monkeypatch,
+) -> None:
+    """A cancellation already set never starts another gh subprocess."""
+
+    router = router_module()
+    attempts = []
+
+    def forbidden_run(command, **kwargs):
+        """Record an unexpected subprocess; a cancelled request must not start one."""
+        del command, kwargs
+        attempts.append("ran")
+        raise AssertionError("cancelled request must not start gh")
+
+    monkeypatch.setattr(router.subprocess, "run", forbidden_run)
+    cancellation_event = threading.Event()
+    cancellation_event.set()
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        router.GitHubClient("token").request(
+            ["repos/x/y"],
+            cancellation_event=cancellation_event,
+        )
+
+    assert attempts == []
+
+
+def test_github_client_rejects_cancellation_observed_after_subprocess(
+    monkeypatch,
+) -> None:
+    """Cancellation observed after gh returns is not decoded as success."""
+
+    router = router_module()
+    cancellation_event = threading.Event()
+
+    def run_then_cancel(command, **kwargs):
+        """Finish the subprocess only after the shared cancellation is set."""
+        del command, kwargs
+        cancellation_event.set()
+        return SimpleNamespace(stdout='{"ok": true}\n', returncode=0)
+
+    monkeypatch.setattr(router.subprocess, "run", run_then_cancel)
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        router.GitHubClient("token").request(
+            ["repos/x/y"],
+            cancellation_event=cancellation_event,
+        )
+
+
+def test_github_client_retries_when_cancellation_backoff_expires(
+    monkeypatch,
+) -> None:
+    """An expired cancellation wait still retries a rate-limited request."""
+
+    router = router_module()
+    attempts = []
+    waits = []
+    sleeps = []
+
+    def flaky_run(command, **kwargs):
+        """Fail the first admission with a rate limit, then succeed."""
+        del kwargs
+        attempts.append(command)
+        if len(attempts) == 1:
+            return SimpleNamespace(
+                stdout="",
+                stderr="gh: API rate limit exceeded for installation ID 1",
+                returncode=1,
+            )
+        return SimpleNamespace(stdout='{"ok": true}\n', returncode=0)
+
+    class OpenCancellation:
+        """Stay unset so backoff expiry continues the retry loop."""
+
+        def is_set(self) -> bool:
+            """Report that the sweep has not cancelled this request."""
+            return False
+
+        def wait(self, timeout: float) -> bool:
+            """Record the backoff and report that it expired."""
+            waits.append(timeout)
+            return False
+
+    monkeypatch.setattr(router.subprocess, "run", flaky_run)
+    monkeypatch.setattr(router.time, "sleep", lambda seconds: sleeps.append(seconds))
+    result = router.GitHubClient("token").request(
+        ["repos/x/y"],
+        cancellation_event=OpenCancellation(),
+    )
+
+    assert result == {"ok": True}
+    assert len(attempts) == 2
+    assert waits == [5]
+    assert sleeps == []
+
+
+def test_sweep_process_exits_after_cooperative_worker_cancellation() -> None:
+    """Closing the real sweep generator also bounds interpreter shutdown."""
+
+    child_program = f'''
+import sys
+import threading
+import time
+sys.path.insert(0, {str(SCRIPTS)!r})
+import agent_mention_sweep as sweep
+
+worker_started = threading.Event()
+
+class Client:
+    def request(self, args, *, input_payload=None, cancellation_event=None):
+        del input_payload
+        endpoint = args[0]
+        if endpoint == "orgs/ContextualWisdomLab/repos":
+            return [
+                {{"full_name": "ContextualWisdomLab/fast", "owner": {{"login": "ContextualWisdomLab"}}, "archived": False, "disabled": False}},
+                {{"full_name": "ContextualWisdomLab/slow", "owner": {{"login": "ContextualWisdomLab"}}, "archived": False, "disabled": False}},
+            ]
+        if endpoint == "repos/ContextualWisdomLab/slow/pulls":
+            worker_started.set()
+            if cancellation_event is None:
+                time.sleep(5)
+            else:
+                cancellation_event.wait(5)
+            return []
+        assert worker_started.wait(1)
+        return [{{"number": 1, "updated_at": "2026-08-20T00:00:00Z"}}]
+
+generator = sweep.list_recent_pull_requests(
+    Client(),
+    organization="ContextualWisdomLab",
+    repository_source="organization",
+    since="2026-08-19T00:00:00Z",
+)
+assert next(generator)["number"] == 1
+generator.close()
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", child_program],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=2,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_github_client_fails_closed_after_exhausting_retries(monkeypatch) -> None:
@@ -234,10 +422,10 @@ def test_repository_fanout_yields_fast_repository_before_slow_one() -> None:
     class FairnessClient:
         """Block one repository while allowing the next one to complete."""
 
-        def request(self, args, *, input_payload=None):
+        def request(self, args, *, input_payload=None, cancellation_event=None):
             """Return the inventory or one deliberately paced pull list."""
 
-            del input_payload
+            del input_payload, cancellation_event
             endpoint = args[0]
             if endpoint == "orgs/ContextualWisdomLab/repos":
                 return [repository("alpha"), repository("bravo")]
@@ -310,14 +498,13 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
 
     sweep = sweep_module()
     page_two_started = threading.Event()
-    release_page_two = threading.Event()
     shutdown_started = threading.Event()
 
     class ClosingClient:
         """Keep the second repository in one bounded in-flight request."""
 
-        def request(self, args, *, input_payload=None):
-            """Return page one or pause page two until the closer releases it."""
+        def request(self, args, *, input_payload=None, cancellation_event=None):
+            """Return page one or pause page two until cancellation."""
             del input_payload
             endpoint = args[0]
             if endpoint == "orgs/ContextualWisdomLab/repos":
@@ -332,7 +519,8 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
                 return [pull(number) for number in range(100, 200)]
             if page == 2:
                 page_two_started.set()
-                assert release_page_two.wait(2)
+                assert cancellation_event is not None
+                assert cancellation_event.wait(2)
                 return [pull(number) for number in range(200, 300)]
             raise AssertionError(f"unexpected third page request: {args!r}")
 
@@ -374,7 +562,6 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
     closer = threading.Thread(target=generator.close)
     closer.start()
     assert shutdown_started.wait(2)
-    release_page_two.set()
     closer.join(2)
 
     assert not closer.is_alive()

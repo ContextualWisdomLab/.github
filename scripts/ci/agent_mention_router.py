@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -150,6 +151,7 @@ class GitHubClient:
         args: Sequence[str],
         *,
         input_payload: dict[str, Any] | None = None,
+        cancellation_event: threading.Event | None = None,
     ) -> Any:
         """Execute one bounded ``gh api`` request and decode optional JSON.
 
@@ -176,6 +178,8 @@ class GitHubClient:
         payload = None if input_payload is None else json.dumps(input_payload)
         attempt = 0
         while True:
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise RuntimeError("gh api request cancelled")
             attempt += 1
             try:
                 completed = subprocess.run(
@@ -193,6 +197,8 @@ class GitHubClient:
                     "gh api timed out after "
                     f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
                 ) from exc
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise RuntimeError("gh api request cancelled")
             return_code = int(getattr(completed, "returncode", 0))
             if not return_code:
                 output = completed.stdout.strip()
@@ -202,7 +208,11 @@ class GitHubClient:
                 diagnostic = "no stderr output"
             retryable = RATE_LIMIT_DIAGNOSTIC_RE.search(diagnostic) is not None
             if retryable and attempt < GITHUB_API_MAX_ATTEMPTS:
-                time.sleep(attempt * 5)
+                backoff_seconds = attempt * 5
+                if cancellation_event is None:
+                    time.sleep(backoff_seconds)
+                elif cancellation_event.wait(backoff_seconds):
+                    raise RuntimeError("gh api request cancelled")
                 continue
             suffix = f" after {attempt} attempts" if attempt > 1 else ""
             raise RuntimeError(

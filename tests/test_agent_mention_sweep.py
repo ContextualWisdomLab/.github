@@ -23,9 +23,10 @@ class FakeClient:
         self.responses = responses or {}
         self.calls = []
 
-    def request(self, args, *, input_payload=None):
+    def request(self, args, *, input_payload=None, cancellation_event=None):
         """Return the response registered for the first API argument."""
 
+        del cancellation_event
         self.calls.append((list(args), input_payload))
         return self.responses.get(args[0])
 
@@ -677,3 +678,56 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+
+def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
+    """Generator cleanup cancels workers and joins them before returning."""
+
+    sweep = module()
+    client = FakeClient()
+    monkeypatch.setattr(
+        sweep, "list_accessible_repositories", lambda *args, **kwargs: ["ContextualWisdomLab/repo", "ContextualWisdomLab/repo2"]
+    )
+
+    import concurrent.futures
+    import threading
+    shutdown_called_with_wait = False
+
+    # We need a latch to ensure the worker starts running before we close.
+    worker_started = threading.Event()
+    worker_can_finish = threading.Event()
+
+    def fake_request(args, *, input_payload=None, cancellation_event=None):
+        del input_payload
+        endpoint = args[0]
+        if endpoint.endswith("repo2/pulls"):
+            worker_started.set()
+            assert cancellation_event is not None
+            cancellation_event.wait(timeout=5)
+            worker_can_finish.set()
+            return []
+        assert worker_started.wait(timeout=2)
+        return [{"number": 1, "updated_at": "2026-08-05T00:00:00Z"}]
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    class MockExecutor(concurrent.futures.ThreadPoolExecutor):
+        def shutdown(self, wait=True, cancel_futures=False):
+            nonlocal shutdown_called_with_wait
+            if wait and cancel_futures:
+                shutdown_called_with_wait = True
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", MockExecutor)
+
+    gen = sweep.list_recent_pull_requests(
+        client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T00:00:00Z",
+    )
+
+    assert next(gen)["number"] == 1
+    assert worker_started.is_set()
+    gen.close()
+    assert shutdown_called_with_wait
+    assert worker_can_finish.is_set()

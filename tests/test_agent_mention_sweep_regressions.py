@@ -40,10 +40,10 @@ class PagingClient:
         self.responses = responses
         self.calls: list[list[str]] = []
 
-    def request(self, args, *, input_payload=None):
+    def request(self, args, *, input_payload=None, cancellation_event=None):
         """Return one endpoint/page response or raise its configured error."""
 
-        del input_payload
+        del input_payload, cancellation_event
         args = list(args)
         self.calls.append(args)
         endpoint = args[0]
