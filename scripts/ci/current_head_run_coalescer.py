@@ -426,12 +426,12 @@ def _associated_prs(
     if len(numbers) <= 1:
         return {number: _fetch_pr(repo, number) for number in sorted(numbers)}
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(numbers)))  # pragma: no cover
-    try:  # pragma: no cover
-        fetch_pr_for_repo = functools.partial(_fetch_pr, repo)  # pragma: no cover
-        results = executor.map(fetch_pr_for_repo, sorted(numbers))  # pragma: no cover
-        return dict(zip(sorted(numbers), results))  # pragma: no cover
-    finally:  # pragma: no cover
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(numbers)))
+    try:
+        fetch_pr_for_repo = functools.partial(_fetch_pr, repo)
+        results = executor.map(fetch_pr_for_repo, sorted(numbers))
+        return dict(zip(sorted(numbers), results))
+    finally:
         executor.shutdown(wait=False, cancel_futures=True)  # pragma: no cover
 
 
@@ -471,11 +471,11 @@ def _refresh_siblings(
     if len(sibling_ids) <= 1:
         return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(sibling_ids)))  # pragma: no cover
-    try:  # pragma: no cover
-        fetch_run_for_repo = functools.partial(_fetch_run, repo)  # pragma: no cover
-        return list(executor.map(fetch_run_for_repo, sibling_ids))  # pragma: no cover
-    finally:  # pragma: no cover
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(sibling_ids)))
+    try:
+        fetch_run_for_repo = functools.partial(_fetch_run, repo)
+        return list(executor.map(fetch_run_for_repo, sibling_ids))
+    finally:
         executor.shutdown(wait=False, cancel_futures=True)  # pragma: no cover
 
 
