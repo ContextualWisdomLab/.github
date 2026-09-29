@@ -122,6 +122,11 @@ def test_validate_accepts_changed_file_named_within_its_reported_directory(tmp_p
     scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
 
 
+def test_validate_accepts_file_name_ending_a_sentence(tmp_path: Path) -> None:
+    _scan(tmp_path, COMPLETED, "Scope: scripts/ci/. The review covered strix_quick_gate.sh.\n")
+    scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
+
+
 @pytest.mark.parametrize(
     "report",
     [

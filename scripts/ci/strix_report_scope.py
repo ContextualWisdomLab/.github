@@ -4,8 +4,18 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
+
+
+def names_changed_path(report: str, path: str) -> bool:
+    """Return whether the report names the path, or its file within its directory."""
+    if path in report:
+        return True
+    directory, _, name = path.rpartition("/")
+    file_token = re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)")
+    return bool(directory) and f"{directory}/" in report and file_token.search(report) is not None
 
 
 def validate(output: Path, changed_paths: list[str]) -> None:
@@ -29,7 +39,7 @@ def validate(output: Path, changed_paths: list[str]) -> None:
     if metadata.get("status") != "completed" or results.get("scan_completed") is not True or results.get("success") is not True:
         raise ValueError("scan report is incomplete")
     report = report_path.read_text(encoding="utf-8")
-    if not any(path in report for path in changed_paths):
+    if not any(names_changed_path(report, path) for path in changed_paths):
         raise ValueError("scan report does not identify a changed source file")
 
 
