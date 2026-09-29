@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import strix_runtime_capacity
 
 
@@ -132,10 +134,13 @@ def test_runtime_capacity_module_covers_head_and_retry_budget(tmp_path, monkeypa
     assert 'transport_retry_eligible=false' in output.read_text()
 
 
-def _consumer_dispatch(tmp_path, *, exchange_token):
-    """Run the re-dispatch shell as a consumer required workflow with fake network."""
-    source = Path('.github/workflows/strix.yml').read_text()
-    block = source.split('      - name: Schedule bounded Strix transport re-dispatch\n', 1)[1]
+CONTINUATIONS = [('strix.yml', 'Strix'), ('noema-review.yml', 'Noema')]
+
+
+def _consumer_dispatch(tmp_path, workflow, lane, *, exchange_token):
+    """Run a re-dispatch shell as a consumer required workflow with fake network."""
+    source = Path('.github/workflows', workflow).read_text()
+    block = source.split(f'      - name: Schedule bounded {lane} transport re-dispatch\n', 1)[1]
     shell = '\n'.join(line[10:] for line in block.split('        run: |\n', 1)[1].splitlines())
     bindir = tmp_path / 'bin'
     bindir.mkdir()
@@ -151,17 +156,19 @@ def _consumer_dispatch(tmp_path, *, exchange_token):
     return subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True)
 
 
-def test_consumer_redispatch_posts_with_org_app_token_not_target_token(tmp_path):
+@pytest.mark.parametrize(('workflow', 'lane'), CONTINUATIONS)
+def test_consumer_redispatch_posts_with_org_app_token_not_target_token(tmp_path, workflow, lane):
     """A target repository GITHUB_TOKEN cannot create .github repository_dispatch events."""
-    result = _consumer_dispatch(tmp_path, exchange_token='org-app-token')
+    result = _consumer_dispatch(tmp_path, workflow, lane, exchange_token='org-app-token')
     assert result.returncode == 0, result.stderr
     assert (tmp_path / 'post-token').read_text() == 'org-app-token'
     assert json.loads((tmp_path / 'post.json').read_text())['client_payload']['pr_number'] == 2031
 
 
-def test_consumer_redispatch_fails_closed_without_app_token(tmp_path):
+@pytest.mark.parametrize(('workflow', 'lane'), CONTINUATIONS)
+def test_consumer_redispatch_fails_closed_without_app_token(tmp_path, workflow, lane):
     """No cross-repository dispatch is attempted with the target repository token."""
-    result = _consumer_dispatch(tmp_path, exchange_token='')
+    result = _consumer_dispatch(tmp_path, workflow, lane, exchange_token='')
     assert result.returncode != 0
     assert 'app token' in result.stdout + result.stderr
     assert not (tmp_path / 'post.json').exists()

@@ -251,11 +251,22 @@ def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_
     fake_sleep = tmp_path / "sleep"
     fake_sleep.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     fake_sleep.chmod(0o755)
+    fake_curl = tmp_path / "curl"
+    fake_curl.write_text(
+        '#!/bin/bash\nif [[ "$*" == *exchange_github_app_token* ]]; then printf \'{"token":"app"}\'; '
+        'else printf \'{"value":"oidc"}\'; fi\n',
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
     head = "a" * 40
     base = "b" * 40
     env = {
         **os.environ,
         "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc.example/token",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://api.opencode.example",
         "GITHUB_REPOSITORY": "ContextualWisdomLab/demo",
         "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
         "PR_NUMBER": "7",
