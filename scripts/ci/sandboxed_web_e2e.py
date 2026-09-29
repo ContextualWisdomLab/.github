@@ -240,6 +240,7 @@ def _probe_isolation_capability(backend: str) -> None:
                 text=True,
                 timeout=10,
                 check=False,
+                shell=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
