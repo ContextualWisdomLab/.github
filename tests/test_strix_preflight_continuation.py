@@ -130,3 +130,38 @@ def test_runtime_capacity_module_covers_head_and_retry_budget(tmp_path, monkeypa
     monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '2')
     assert strix_runtime_capacity.main() == 0
     assert 'transport_retry_eligible=false' in output.read_text()
+
+
+def _consumer_dispatch(tmp_path, *, exchange_token):
+    """Run the re-dispatch shell as a consumer required workflow with fake network."""
+    source = Path('.github/workflows/strix.yml').read_text()
+    block = source.split('      - name: Schedule bounded Strix transport re-dispatch\n', 1)[1]
+    shell = '\n'.join(line[10:] for line in block.split('        run: |\n', 1)[1].splitlines())
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    (bindir / 'gh').write_text('#!/bin/bash\nif [[ "$*" == *"-X POST"* ]]; then printf %s "$GH_TOKEN" > "$POST_TOKEN"; cat > "$POSTED"; else cat "$LIVE"; fi\n')
+    (bindir / 'curl').write_text('#!/bin/bash\nif [[ "$*" == *exchange_github_app_token* ]]; then printf \'{"token":"%s"}\' "$EXCHANGE_TOKEN"; else printf \'{"value":"oidc-jwt"}\'; fi\n')
+    (bindir / 'sleep').write_text('#!/bin/bash\nexit 0\n')
+    for tool in bindir.iterdir():
+        tool.chmod(0o700)
+    repo = 'ContextualWisdomLab/fast-mlsirm'
+    head, base = 'a' * 40, 'b' * 40
+    (tmp_path / 'live.json').write_text(json.dumps({'state': 'open', 'draft': False, 'head': {'sha': head, 'repo': {'full_name': repo}}, 'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': repo}}}))
+    env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'], GITHUB_REPOSITORY=repo, GH_TOKEN='target-repository-token', TARGET_REPOSITORY=repo, PR_NUMBER='2031', EXPECTED_HEAD_SHA=head, EXPECTED_BASE_SHA=base, EXPECTED_BASE_REF='main', DELAY_SECONDS='60', NEXT_ATTEMPT='1', ACTIONS_ID_TOKEN_REQUEST_TOKEN='request-token', ACTIONS_ID_TOKEN_REQUEST_URL='https://oidc.example/token', OIDC_AUDIENCE='opencode-github-action', OPENCODE_API_BASE_URL='https://api.opencode.example', EXCHANGE_TOKEN=exchange_token, LIVE=str(tmp_path / 'live.json'), POSTED=str(tmp_path / 'post.json'), POST_TOKEN=str(tmp_path / 'post-token'))
+    return subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True)
+
+
+def test_consumer_redispatch_posts_with_org_app_token_not_target_token(tmp_path):
+    """A target repository GITHUB_TOKEN cannot create .github repository_dispatch events."""
+    result = _consumer_dispatch(tmp_path, exchange_token='org-app-token')
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / 'post-token').read_text() == 'org-app-token'
+    assert json.loads((tmp_path / 'post.json').read_text())['client_payload']['pr_number'] == 2031
+
+
+def test_consumer_redispatch_fails_closed_without_app_token(tmp_path):
+    """No cross-repository dispatch is attempted with the target repository token."""
+    result = _consumer_dispatch(tmp_path, exchange_token='')
+    assert result.returncode != 0
+    assert 'app token' in result.stdout + result.stderr
+    assert not (tmp_path / 'post.json').exists()

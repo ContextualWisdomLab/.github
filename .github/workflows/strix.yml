@@ -1522,10 +1522,14 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      id-token: write
     env:
-      # Consumer required workflows need the existing central dispatch credential.
-      # The central handler can use its repository-scoped token as fallback.
+      # Reads the live PR in its own repository. A consumer required workflow's
+      # GITHUB_TOKEN cannot create .github repository_dispatch events (HTTP 403),
+      # so the POST below uses the org OpenCode app token exchanged from OIDC.
       GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}
+      OIDC_AUDIENCE: opencode-github-action
+      OPENCODE_API_BASE_URL: https://api.opencode.ai
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
@@ -1573,6 +1577,25 @@ jobs:
             echo "::notice::Strix transport re-dispatch retired because the live PR head or base moved or closed."
             exit 0
           fi
+          dispatch_token="${GH_TOKEN:-}"
+          if [ "$GITHUB_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              echo "::error::Strix transport re-dispatch requires GitHub OIDC for the central app token."
+              exit 1
+            fi
+            separator='&'
+            [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+            oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+            dispatch_token=""
+            if [ -n "$oidc_token" ]; then
+              dispatch_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+            fi
+            if [ -z "$dispatch_token" ]; then
+              echo "::error::Strix transport re-dispatch could not obtain the central app token; no cross-repository dispatch was attempted."
+              exit 1
+            fi
+            echo "::add-mask::$dispatch_token"
+          fi
           jq -n \
             --arg target_repository "$TARGET_REPOSITORY" \
             --argjson pr_number "$PR_NUMBER" \
@@ -1590,5 +1613,5 @@ jobs:
                 pr_base_sha: $pr_base_sha,
                 transport_retry_attempt: $transport_retry_attempt
               }
-            }' | gh api -X POST "repos/ContextualWisdomLab/.github/dispatches" --input -
+            }' | GH_TOKEN="$dispatch_token" gh api -X POST "repos/ContextualWisdomLab/.github/dispatches" --input -
           echo "::notice::Scheduled Strix transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."
