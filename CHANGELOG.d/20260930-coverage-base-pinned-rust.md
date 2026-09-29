@@ -8,3 +8,7 @@
   (minimal profile plus `llvm-tools-preview`) and binds Rust coverage to that release's LLVM tools.
   Repositories without a pin keep the Debian toolchain, and a failed toolchain layer rebuilds the
   previous image. See `docs/doctoring/opencode-rust-coverage-runtime-boundary.md`.
+- The offline maturin build now also copies the wheel's compiled extension into the project's
+  `tool.maturin.python-source` package (`scripts/ci/place_maturin_extension.py`), as
+  `maturin develop` would. fast-mlsirm's pytest `pythonpath = ["python"]` imports the source tree
+  first, so a `_core` present only in site-packages stayed shadowed even after a successful build.

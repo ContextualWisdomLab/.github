@@ -1398,7 +1398,8 @@ jobs:
                 dist_dir="$(mktemp -d)"
                 python3 -m maturin build --offline --release -o "$dist_dir"
                 python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
-                rm -rf "$dist_dir"' bash "$project_dir"
+                python3 "$2" "$dist_dir"/*.whl .
+                rm -rf "$dist_dir"' bash "$project_dir" "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
           }
 
           run_python_test_coverage() {
