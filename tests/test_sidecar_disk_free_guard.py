@@ -40,11 +40,17 @@ def _run(tmp_path: Path, available_kib: int) -> subprocess.CompletedProcess[str]
     )
 
 
-def test_low_runner_disk_fails_before_provisioning(tmp_path: Path) -> None:
-    result = _run(tmp_path, available_kib=512 * 1024)
+def test_exhausted_runner_disk_fails_before_provisioning(tmp_path: Path) -> None:
+    result = _run(tmp_path, available_kib=256 * 1024)
     assert result.returncode == 1
     assert "runner disk" in result.stderr
     assert "vendoring contextual-orchestrator" not in result.stdout
+
+
+def test_low_runner_disk_warns_but_still_provisions(tmp_path: Path) -> None:
+    result = _run(tmp_path, available_kib=1024 * 1024)
+    assert "::warning::" in result.stdout and "runner disk" in result.stdout
+    assert "vendoring contextual-orchestrator" in result.stdout
 
 
 def test_sufficient_runner_disk_proceeds_to_provisioning(tmp_path: Path) -> None:

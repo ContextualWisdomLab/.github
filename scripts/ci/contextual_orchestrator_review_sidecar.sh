@@ -70,14 +70,19 @@ fi
 log "provider secrets present: $provider_secret_count of 5"
 
 # A full self-hosted runner disk (cwlab-s1-04, 2026-09-29) surfaced as a venv or
-# pip failure and was misread as a provider outage. Name the cause up front.
-SIDECAR_MIN_FREE_KIB=$((2 * 1024 * 1024))
+# pip failure and was misread as a provider outage. Name the cause up front:
+# warn when space is low, stop only when the venv install cannot fit.
+SIDECAR_LOW_FREE_KIB=$((2 * 1024 * 1024))
+SIDECAR_MIN_FREE_KIB=$((512 * 1024))
 runner_temp_free_kib="$(df -Pk "${RUNNER_TEMP:-/tmp}" | awk 'NR == 2 { print $4 }')"
 case "$runner_temp_free_kib" in
   ''|*[!0-9]*) fail "could not read free space for ${RUNNER_TEMP:-/tmp}" ;;
 esac
 if [ "$runner_temp_free_kib" -lt "$SIDECAR_MIN_FREE_KIB" ]; then
-  fail "runner disk has $((runner_temp_free_kib / 1024)) MiB free under ${RUNNER_TEMP:-/tmp}; sidecar provisioning needs at least 2048 MiB. Reclaim runner disk before rerunning."
+  fail "runner disk has $((runner_temp_free_kib / 1024)) MiB free under ${RUNNER_TEMP:-/tmp}; sidecar provisioning needs at least 512 MiB. Reclaim runner disk before rerunning."
+elif [ "$runner_temp_free_kib" -lt "$SIDECAR_LOW_FREE_KIB" ]; then
+  printf '::warning::runner disk has %s MiB free under %s; reclaim runner disk before it fills.\n' \
+    "$((runner_temp_free_kib / 1024))" "${RUNNER_TEMP:-/tmp}"
 fi
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
