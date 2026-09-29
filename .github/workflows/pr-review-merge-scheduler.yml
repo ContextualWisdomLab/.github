@@ -101,15 +101,18 @@ jobs:
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
+    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
     if: >-
       (
-        github.event_name != 'pull_request_target' ||
-        github.event.action != 'closed'
-      ) &&
-      (
-        github.event_name != 'repository_dispatch' ||
-        github.event.client_payload.org_sweep != true
-      )
+        (
+          github.event_name != 'pull_request_target' ||
+          github.event.action != 'closed'
+        ) &&
+        (
+          github.event_name != 'repository_dispatch' ||
+          github.event.client_payload.org_sweep != true
+        )
+      ) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     # The group admits only trusted central main workflows, including reusable
     # callers. Keep admission/dispatch off pools occupied by model execution.
     runs-on:

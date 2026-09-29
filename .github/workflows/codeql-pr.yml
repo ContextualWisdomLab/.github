@@ -58,7 +58,8 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    if: github.event.action != 'closed'
+    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
+    if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
