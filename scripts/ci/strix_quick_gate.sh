@@ -2789,6 +2789,11 @@ child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"
 child_env["pnpm_config_ignore_scripts"] = "true"
 child_env["YARN_ENABLE_SCRIPTS"] = "false"
 child_env["BUN_CONFIG_IGNORE_SCRIPTS"] = "true"
+# Strix posts PostHog telemetry by default. Runner egress blocks it, and the
+# swallowed traceback (``requests.post(..., timeout=SEND_TIMEOUT)``) lands in
+# strix.log, where the report failure-signal scan reads "timeout" and fails a
+# clean scan closed. Scan metadata also has no business leaving the runner.
+child_env["STRIX_TELEMETRY"] = "0"
 child_env["STRIX_LLM"] = os.environ["STRIX_CHILD_MODEL"]
 child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
