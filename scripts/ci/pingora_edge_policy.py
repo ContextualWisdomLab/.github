@@ -340,7 +340,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
 
     pure = PurePosixPath(path)
     lower_name = pure.name.lower()
-    if lower_name in LICENSE_NAMES or (
+    if pure.as_posix() == "LICENSE-THIRD-PARTY" or lower_name in LICENSE_NAMES or (
         _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_SUFFIXES
     ):
         return True
