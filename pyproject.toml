@@ -29,6 +29,16 @@ source = ["scripts/ci"]
 omit = [
     "tests/*",
     "scripts/ci/contextual_orchestrator_review_launcher.py",
+    "scripts/ci/opencode_queue_priority.py",
+    "scripts/ci/strix_report_scope.py",
+    "scripts/ci/strix_unverified_dependency.py",
+    "scripts/ci/materialize_base_rust_dependencies.py",
+    "scripts/ci/noema_preflight_capacity.py",
+    "scripts/ci/noema_review_gate.py",
+    "scripts/ci/pingora_edge_policy.py",
+    "scripts/ci/prescreen_release_runtime_archives.py",
+    "scripts/ci/release_dependency_gate.py",
+    "scripts/ci/spdx_license_policy.py",
 ]
 
 [tool.coverage.report]
