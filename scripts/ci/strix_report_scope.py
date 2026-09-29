@@ -32,7 +32,7 @@ def validate(output: Path, changed_paths: list[str]) -> None:
         raise ValueError("scan report does not identify a changed source file")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     try:
         validate(Path(sys.argv[1]), sys.argv[2:])
     except (IndexError, OSError, ValueError, TypeError) as error:
