@@ -12,8 +12,10 @@ from __future__ import annotations
 import importlib.util
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TextIO
 from urllib.parse import quote
 
 _CORE_MODULE_PATH = Path(__file__).with_name("actions_queue_health_core.py")
@@ -30,6 +32,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
     if not core_symbol_name.startswith("__"):
         globals()[core_symbol_name] = core_symbol
 
+WORKFLOW_RUN_PAGE_SIZE = _core_module.WORKFLOW_RUN_PAGE_SIZE
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
 TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled", "failure")
@@ -69,6 +72,59 @@ def _normalise_run(
 _core_module._normalise_run = _normalise_run
 
 
+def _bind_required_workflow_sources(
+    repository: str, runs: list[dict[str, Any]], *, runner: Runner
+) -> None:
+    """Bind required target producers to immutable native source and check objects."""
+    candidates = [run for run in runs if run.get("event") == "pull_request_target"
+                  and type(run.get("workflow_id")) is int and run["workflow_id"] > 0
+                  and run.get("workflow_url") == (
+                      f"https://api.github.com/repos/{repository}/actions/required_workflows/{run['workflow_id']}")
+                  and re.fullmatch(r"WFR_[A-Za-z0-9_-]{1,200}", str(run.get("node_id") or ""))
+                  and "workflow_source" not in run]
+    for offset in range(0, len(candidates), 100):
+        batch = candidates[offset:offset + 100]
+        query = "{nodes(ids:" + json.dumps([run["node_id"] for run in batch]) + "){" + (
+            "... on WorkflowRun { databaseId event displayTitle "
+            "workflow { databaseId resourcePath } "
+            "file { path repositoryName repositoryFileUrl } "
+            "checkSuite { databaseId commit { oid } } } }}")
+        try:
+            result = runner(["gh", "api", "graphql", "-f", f"query={query}"],
+                            capture_output=True, text=True, check=False,
+                            timeout=GITHUB_API_TIMEOUT_SECONDS)
+            if result.returncode:
+                raise QueueHealthError("required workflow source read failed")
+            payload = json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            raise QueueHealthError("required workflow source read was incomplete") from exc
+        if (not isinstance(payload, dict) or payload.get("errors")
+                or not isinstance(payload.get("data"), dict)):
+            raise QueueHealthError("required workflow source response was incomplete")
+        nodes = _list_payload(payload.get("data"), "nodes", max_items=100)
+        if len(nodes) != len(batch):
+            raise QueueHealthError("required workflow source identities were incomplete")
+        for run, node in zip(batch, nodes):
+            workflow = node.get("workflow") or {}
+            source = node.get("file") or {}
+            suite = node.get("checkSuite") or {}
+            if (not all(isinstance(value, dict) for value in (workflow, source, suite))
+                    or not isinstance(suite.get("commit"), dict)):
+                raise QueueHealthError("required workflow source objects were incomplete")
+            if (node.get("databaseId") != run["id"]
+                    or workflow.get("databaseId") != run["workflow_id"]
+                    or suite.get("databaseId") != run.get("check_suite_id")
+                    or node.get("event") != run["event"]
+                    or node.get("displayTitle") != run.get("display_title")):
+                raise QueueHealthError("required workflow source identity does not match native run")
+            run["workflow_source"] = {
+                "repositoryName": source.get("repositoryName"), "path": source.get("path"),
+                "repositoryFileUrl": source.get("repositoryFileUrl"),
+                "workflowResourcePath": workflow.get("resourcePath"),
+                "head_sha": (suite.get("commit") or {}).get("oid"),
+            }
+
+
 def _read_pull_request_snapshot(
     pulls_endpoint: str, *, runner: Runner
 ) -> list[dict[str, Any]]:
@@ -95,6 +151,101 @@ def _pull_request_identity_view(
         )
         for pull_request in pull_requests
     }
+
+
+def _read_terminal_runs(
+    endpoint: str, *, start: datetime, end: datetime, runner: Runner
+) -> list[dict[str, Any]]:
+    """Partition overflowing terminal history into complete, disjoint time queries."""
+    try:
+        return _list_payload(
+            github_json(endpoint, paginate=True,
+                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES, runner=runner),
+            "workflow_runs",
+            max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+        )
+    except QueueHealthError as error:
+        if not str(error).startswith("GitHub API pagination exceeds "):
+            raise QueueHealthError(f"{error} for {endpoint}") from error
+        if start >= end:
+            raise QueueHealthError(
+                "terminal workflow history exceeds the API limit within one second"
+            ) from error
+    midpoint = datetime.fromtimestamp(
+        (int(start.timestamp()) + int(end.timestamp())) // 2, timezone.utc
+    )
+    following = datetime.fromtimestamp(int(midpoint.timestamp()) + 1, timezone.utc)
+    runs = []
+    for lower, upper in ((start, midpoint), (following, end)):
+        interval = f"{lower:%Y-%m-%dT%H:%M:%SZ}..{upper:%Y-%m-%dT%H:%M:%SZ}"
+        # Replace the previous range rather than intersecting duplicate parameters.
+        partition_endpoint = re.sub(r"&created=[^&]*", "", endpoint)
+        partition_endpoint += "&created=" + quote(interval, safe="")
+        partition = _read_terminal_runs(
+            partition_endpoint, start=lower, end=upper, runner=runner
+        )
+        if any(not lower <= parse_timestamp(run.get("created_at", "")) <= upper
+               for run in partition):
+            raise QueueHealthError("terminal workflow history escaped its time partition")
+        runs.extend(partition)
+    if len({run["id"] for run in runs}) != len(runs):
+        raise QueueHealthError("terminal workflow history contains duplicate partition identities")
+    return runs
+
+
+def _read_target_terminal_runs(
+    endpoint: str, *, repository: str, heads: Sequence[str], runner: Runner,
+    known_runs: Sequence[dict[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Resolve overflowing target history through complete current-head check suites."""
+    try:
+        return _list_payload(
+            github_json(endpoint, paginate=True, runner=runner), "workflow_runs",
+            max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+        )
+    except QueueHealthError as error:
+        if not str(error).startswith("GitHub API pagination exceeds "):
+            raise QueueHealthError(f"{error} for {endpoint}") from error
+    known_by_suite: dict[int, list[dict[str, Any]]] = {}
+    for run in known_runs:
+        suite_id = run.get("check_suite_id")
+        if type(suite_id) is int and suite_id > 0:
+            known_by_suite.setdefault(suite_id, []).append(run)
+    runs_by_id = {}
+    for head in heads:
+        suites = _list_payload(
+            github_json(f"repos/{repository}/commits/{quote(head, safe='')}/check-suites"
+                        f"?per_page={MAX_API_PAGE_SIZE}", paginate=True, runner=runner),
+            "check_suites",
+        )
+        for suite in suites:
+            suite_id = suite.get("id")
+            if type(suite_id) is not int or suite_id <= 0 or suite.get("head_sha") != head:
+                raise QueueHealthError("check suite lacks exact current-head identity")
+            conclusion = str(suite.get("conclusion") or "").lower()
+            if (conclusion not in TERMINAL_DIAGNOSTIC_STATUSES
+                    and (suite.get("status") != "completed" or conclusion)):
+                continue
+            # A native suite owns one workflow run, already read by the complete
+            # head query when its run head is the PR head rather than the base.
+            runs = known_by_suite.get(suite_id)
+            if runs is None:
+                suite_endpoint = (f"repos/{repository}/actions/runs?check_suite_id={suite_id}"
+                                  f"&per_page={WORKFLOW_RUN_PAGE_SIZE}")
+                try:
+                    runs = _list_payload(
+                        github_json(suite_endpoint, paginate=True, runner=runner),
+                        "workflow_runs",
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+                    )
+                except QueueHealthError as error:
+                    raise QueueHealthError(f"{error} for {suite_endpoint}") from error
+            for run in runs:
+                if type(run.get("check_suite_id")) is not int or run["check_suite_id"] != suite_id:
+                    raise QueueHealthError("workflow run escaped its check suite binding")
+                if str(run.get("conclusion") or "").lower() in TERMINAL_DIAGNOSTIC_STATUSES:
+                    runs_by_id[run["id"]] = run
+    return [runs_by_id[run_id] for run_id in sorted(runs_by_id)]
 
 
 def collect_snapshot(
@@ -153,7 +304,8 @@ def collect_snapshot(
                     workflow_runs = _list_payload(
                         github_json(
                             f"repos/{repository_name}/actions/runs?status={workflow_status}"
-                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}"
+                            f"&created={quote('<=' + snapshot_timestamp, safe='')}",
                             paginate=True,
                             max_pages=ACTIVE_RUN_MAX_API_PAGES,
                             runner=runner,
@@ -215,19 +367,15 @@ def collect_snapshot(
             )
             for current_head_sha in current_head_shas:
                 encoded_head_sha = quote(current_head_sha, safe="")
-                workflow_runs = _list_payload(
-                    github_json(
-                        f"repos/{repository_name}/actions/runs?status=completed"
-                        f"&head_sha={encoded_head_sha}"
-                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=(
-                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
-                    ),
+                workflow_runs = _read_terminal_runs(
+                    f"repos/{repository_name}/actions/runs?status=completed"
+                    f"&head_sha={encoded_head_sha}"
+                    f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                    start=parse_timestamp(repository_metadata.get(
+                        "created_at", "1970-01-01T00:00:00Z"
+                    )),
+                    end=parse_timestamp(snapshot_timestamp).replace(microsecond=0),
+                    runner=runner,
                 )
                 for workflow_run in workflow_runs:
                     if str(workflow_run.get("conclusion") or "").lower() not in (
@@ -237,20 +385,16 @@ def collect_snapshot(
                     terminal_diagnostic_snapshot[workflow_run["id"]] = workflow_run
 
             for terminal_status in TARGET_TERMINAL_DIAGNOSTIC_STATUSES:
-                target_workflow_runs = _list_payload(
-                    github_json(
-                        f"repos/{repository_name}/actions/runs?status={terminal_status}"
-                        "&event=pull_request_target"
-                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=(
-                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
-                    ),
+                target_workflow_runs = _read_target_terminal_runs(
+                    f"repos/{repository_name}/actions/runs?status={terminal_status}"
+                    "&event=pull_request_target"
+                    f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                    repository=repository_name,
+                    heads=current_head_shas,
+                    runner=runner,
+                    known_runs=list(terminal_diagnostic_snapshot.values()),
                 )
+                _bind_required_workflow_sources(repository_name, target_workflow_runs, runner=runner)
                 for workflow_run in target_workflow_runs:
                     normalized_candidate = _normalise_run(
                         repository_name, workflow_run, []
@@ -266,8 +410,10 @@ def collect_snapshot(
 
             observed_snapshot = dict(second_snapshot)
             observed_snapshot.update(terminal_diagnostic_snapshot)
-            runs_by_id: dict[int, dict[str, Any]] = {}
-            for workflow_run_id, workflow_run in observed_snapshot.items():
+            _bind_required_workflow_sources(repository_name, list(observed_snapshot.values()), runner=runner)
+            def collect_run_evidence(item: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+                """Read one independent run while preserving its exact identity."""
+                workflow_run_id, workflow_run = item
                 normalized_run = _normalise_run(
                     repository_name, workflow_run, []
                 )
@@ -275,17 +421,15 @@ def collect_snapshot(
                     normalized_run, pull_requests_by_number
                 )
                 needs_job_evidence = (
-                    identity_state == "current_head"
-                    and (
-                        normalized_run["status"]
-                        in {"QUEUED", "IN_PROGRESS", "WAITING"}
-                        or normalized_run["conclusion"]
+                    normalized_run["status"] in QUEUE_STATES | {"WAITING"}
+                    or (
+                        identity_state == "current_head"
+                        and normalized_run["conclusion"]
                         in {status.upper() for status in TERMINAL_DIAGNOSTIC_STATUSES}
                     )
                 )
                 if not needs_job_evidence:
-                    runs_by_id[workflow_run_id] = normalized_run
-                    continue
+                    return workflow_run_id, normalized_run
 
                 jobs_payload = github_json(
                     f"repos/{repository_name}/actions/runs/{workflow_run_id}/jobs"
@@ -298,10 +442,14 @@ def collect_snapshot(
                     "jobs",
                     max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
                 )
-                runs_by_id[workflow_run_id] = _normalise_run(
+                return workflow_run_id, _normalise_run(
                     repository_name, workflow_run, workflow_jobs
                 )
 
+
+            # ponytail: four concurrent metadata reads; revisit only with API-limit evidence.
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                runs_by_id = dict(executor.map(collect_run_evidence, observed_snapshot.items()))
             try:
                 post_evidence_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner
@@ -391,6 +539,14 @@ def build_report(
         now=now,
         queue_age_slo_seconds=queue_age_slo_seconds,
     )
+    if any(
+        item["error"] == "cross_repository_read_credential_unavailable"
+        for item in report["collection_errors"]
+    ):
+        report["summary"]["external_actions"].append(
+            "Grant the queue-health workflow a scoped cross-repository Actions read credential; "
+            "no queue state was collected."
+        )
 
     for report_row in report["runs"]:
         run_metadata = normalized_runs.get(
@@ -400,6 +556,12 @@ def build_report(
             continue
         report_row["workflow_id"] = run_metadata["workflow_id"]
         report_row["workflow_identity"] = run_metadata["workflow_identity"]
+        report_row["workflow_source"] = run_metadata.get("workflow_source", {})
+        report_row["reviewed_head_sha"] = (
+            run_metadata["display_title"].rpartition("@")[2]
+            if run_metadata["event"] == "pull_request_target" else
+            run_metadata["head_sha"] if run_metadata["event"] == "pull_request" else ""
+        )
         report_row["run_conclusion"] = run_metadata.get("conclusion", "")
         report_row["jobs_materialized"] = bool(run_metadata["jobs"])
         matching_job = next(
@@ -534,11 +696,23 @@ def main(
     """Collect or load a snapshot, write reports, and return a stable CLI status."""
     cli_arguments = parse_args(argv)
     try:
-        queue_snapshot = (
-            load_snapshot(cli_arguments.snapshot)
-            if cli_arguments.snapshot
-            else collect_snapshot(load_allowlist(cli_arguments.allowlist))
-        )
+        if cli_arguments.credential_unavailable:
+            if cli_arguments.allowlist is None:
+                raise QueueHealthError("credential-unavailable requires an allowlist")
+            queue_snapshot = {
+                "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "repositories": [],
+                "collection_errors": [
+                    {"repository": repository, "error": "cross_repository_read_credential_unavailable"}
+                    for repository in load_allowlist(cli_arguments.allowlist)
+                ],
+            }
+        else:
+            queue_snapshot = (
+                load_snapshot(cli_arguments.snapshot)
+                if cli_arguments.snapshot
+                else collect_snapshot(load_allowlist(cli_arguments.allowlist))
+            )
         evaluation_time = (
             parse_timestamp(cli_arguments.now)
             if cli_arguments.now
@@ -568,7 +742,7 @@ def main(
         f"pending={queue_report['summary']['pending_job_count']} "
         f"slo_breaches={breach_count}"
     )
-    return 0
+    return 2 if queue_report["summary"]["collection_error_count"] else 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through CLI tests.

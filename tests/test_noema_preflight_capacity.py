@@ -290,6 +290,9 @@ def test_preflight_reader_refuses_links_and_fifo_without_blocking(tmp_path):
     link = tmp_path / 'link.json'
     link.symlink_to(path)
     assert capacity.load_preflight_report(link) is None
+    linked_parent = tmp_path / 'linked-parent'
+    linked_parent.symlink_to(tmp_path, target_is_directory=True)
+    assert capacity.load_preflight_report(linked_parent / path.name) is None
     fifo = tmp_path / 'fifo.json'
     os.mkfifo(fifo)
     assert capacity.load_preflight_report(fifo) is None

@@ -15,7 +15,7 @@ SELECT_STEP_NAME = "Select target CodeQL analysis-read credential"
 VERIFY_STEP_NAME = "Verify GHAS base/head CodeQL configuration identity"
 
 
-def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess.CompletedProcess[str]:
+def _run_selector(tmp_path: Path, *, succeeding_token: str | None, noema_token: str = "noema-analysis-token") -> subprocess.CompletedProcess[str]:
     """Execute the extracted selector with fixed Bash identity and a fake ``gh`` boundary."""
     assert Path("/bin/bash").is_file(), "/bin/bash is required to run this workflow-contract test"
 
@@ -55,7 +55,7 @@ def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess
         "SUCCEEDING_TOKEN": succeeding_token or "",
         "TARGET_REPOSITORY": "ContextualWisdomLab/OriginWeave",
         "TARGET_APP_TOKEN": "content-token",
-        "NOEMA_ANALYSIS_TOKEN": "noema-analysis-token",
+        "NOEMA_ANALYSIS_TOKEN": noema_token,
         "PR_REVIEW_MERGE_TOKEN": "security-token",
         "OPENCODE_APPROVE_TOKEN": "approve-token",
         "WORKFLOW_TOKEN": "workflow-token",
@@ -75,7 +75,7 @@ def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess
 
 def test_ghas_analysis_read_falls_through_content_only_target_app_token(tmp_path: Path) -> None:
     """A content-capable app token must not mask a later GHAS-capable credential."""
-    result = _run_selector(tmp_path, succeeding_token="security-token")
+    result = _run_selector(tmp_path, succeeding_token="security-token", noema_token="")
 
     assert result.returncode == 0, result.stdout + result.stderr
     output = result.output_path.read_text(encoding="utf-8")
@@ -153,3 +153,12 @@ def test_optional_noema_reader_requires_both_credentials(tmp_path: Path) -> None
             assert output.read_text() == "repository=OriginWeave\navailable=true\n"
         else:
             assert not output.exists()
+
+
+def test_noema_reader_private_key_excludes_target_build_hooks() -> None:
+    """Both key-bearing steps are restricted to static language shards."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    for name in ("Detect optional Noema analysis-read credential", "Mint target-scoped Noema analysis-read token"):
+        block = workflow.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+        assert "matrix.build-mode == 'none'" in block
+        assert "contains(fromJSON('[\"actions\",\"python\",\"javascript-typescript\"]'), matrix.language)" in block

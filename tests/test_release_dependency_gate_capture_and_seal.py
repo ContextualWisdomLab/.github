@@ -38,7 +38,7 @@ from tests.test_release_dependency_gate import (
 
 def test_gate_import_and_toml_parsing_without_stdlib_tomllib(monkeypatch):
     """Exercise the complete module import with the Python 3.10 TOML parser."""
-    tomli = pytest.importorskip("tomli")
+    import tomli
     original = builtins.__import__
 
     def import_without_tomllib(name, *args, **kwargs):

@@ -7,6 +7,8 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from tests.test_actions_queue_health import api_fixture_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
@@ -41,7 +43,7 @@ def _runner_with_post_evidence_identity_reads(*, persistent: bool):
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Serve stable queue evidence with a transient or persistent final identity gap."""
         nonlocal pull_reads
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
@@ -112,7 +114,7 @@ def test_collector_rejects_invalid_run_ids_and_ignores_unrelated_terminal_runs(
 ) -> None:
     """Bad identities fail closed; unrelated terminal runs do not become current-head evidence."""
     def runner(args: list[str], **_kwargs: object) -> CompletedProcess[str]:
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
@@ -147,7 +149,7 @@ def test_final_pull_identity_retry_failure_is_bounded(monkeypatch: pytest.Monkey
 
     def runner(args: list[str], **_kwargs: object) -> CompletedProcess[str]:
         nonlocal pull_reads
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":

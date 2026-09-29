@@ -53,6 +53,7 @@ jobs:
       id-token: write
     outputs:
       target_repository: ${{ steps.validate.outputs.target_repository }}
+      target_repository_name: ${{ steps.validate.outputs.target_repository_name }}
       pr_number: ${{ steps.validate.outputs.pr_number }}
       base_ref: ${{ steps.validate.outputs.base_ref }}
       base_sha: ${{ steps.validate.outputs.base_sha }}
@@ -410,6 +411,7 @@ jobs:
 
           {
             printf 'target_repository=%s\n' "$TARGET_REPOSITORY"
+            printf 'target_repository_name=%s\n' "${TARGET_REPOSITORY#*/}"
             printf 'pr_number=%s\n' "$PR_NUMBER"
             printf 'base_ref=%s\n' "$live_base_ref"
             printf 'base_sha=%s\n' "$live_base_sha"
@@ -589,7 +591,7 @@ jobs:
 
       - name: Detect optional Noema analysis-read credential
         id: noema_analysis_config
-        if: always() && steps.live_metadata.outcome == 'success'
+        if: always() && steps.live_metadata.outcome == 'success' && matrix.build-mode == 'none' && contains(fromJSON('["actions","python","javascript-typescript"]'), matrix.language)
         env:
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           NOEMA_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
@@ -603,7 +605,8 @@ jobs:
 
       - name: Mint target-scoped Noema analysis-read token
         id: noema_analysis_token
-        if: steps.gate.outcome == 'success' && steps.noema_analysis_config.outputs.available == 'true'
+        if: steps.gate.outcome == 'success' && matrix.build-mode == 'none' && contains(fromJSON('["actions","python","javascript-typescript"]'), matrix.language) && steps.noema_analysis_config.outputs.available == 'true'
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}

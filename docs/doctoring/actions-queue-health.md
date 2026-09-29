@@ -2,12 +2,25 @@
 
 The scheduled `actions-queue-health.yml` workflow reads a fixed allowlist of
 CWL repositories once per hour and publishes a JSON report plus a keyboard-
-readable HTML report as an artifact. The collector uses only `gh api` reads
-through the configured cross-repository `PR_REVIEW_MERGE_TOKEN` or
-`OPENCODE_APPROVE_TOKEN`; it fails visibly when neither credential is present.
+readable HTML report as an artifact. It mints a short-lived, Actions-read, Checks-read and
+pull-request-read `cwl-noema-review` installation token scoped to the reviewed
+allowlist. The existing cross-repository `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN` remain fallbacks; all collector calls are `gh api` reads.
 It does not cancel runs, mutate branches, dispatch workflows, or alter merge
 gates, and it never relies on the central repository's scoped `GITHUB_TOKEN`
 for sibling-repository reads.
+
+On 2026-09-24, scheduled run `35983954568` reached a hosted runner but had an
+empty `GH_TOKEN`: neither named cross-repository secret was available to the
+workflow. The organization already has an all-repository `cwl-noema-review`
+installation with Actions-read access and the matching private key/client ID.
+The workflow now scopes a temporary read-only token to its reviewed allowlist.
+If minting and both fallbacks are unavailable, it writes a fail-closed JSON/HTML
+artifact listing every allowlisted repository as uncollected and naming the
+credential action; the job still fails. The 2026-09-24 run proves missing
+credentials in that workflow, not the cause of the wider queue.
+Any repository collection error also leaves the artifact but fails the job,
+so a partial census cannot appear as successful monitoring.
 
 The report schema is `actions.queue_health.v1`. Each observed run records its
 repository, pull-request number, head SHA, event, run attempt, concurrency
@@ -19,18 +32,19 @@ presentation data. Older/offline v1 snapshots that lack `workflow_id` retain a
 compatibility fallback of `workflow_name:<name>`. A malformed present
 `workflow_id` fails closed instead of being coerced.
 
-A run is `current_head` only when its linked open pull request and head SHA
-match. The match compares the open pull request's head SHA against the *linked*
-pull-request entry's head SHA carried on the run (`run.pull_requests[].head.sha`),
-never against the run-level `head_sha`. `pull_request_target`-triggered runs
-report the base-branch commit that was checked out as their run-level
-`head_sha`, so comparing against that value would misclassify a genuinely
-active, current required-workflow run as obsolete and skip its job evidence.
-Stale linked runs are `obsolete`; runs without a pull-request link are
-`unlinked`. Queued evidence remains incomplete even when a report is
-successfully produced. GitHub's `waiting` job status (paused on an environment
-or deployment approval) is also treated as pending evidence, distinct from a
-runner-capacity blocker.
+A run is `current_head` only when its linked open pull request and reviewed
+head SHA match. For `pull_request`, the run-level `head_sha` identifies the
+immutable generation. A live 2026-09-27 census found 17 superseded runs whose
+`pull_requests[].head.sha` had already changed to the current PR head; that
+mutable link must not turn an older run into current evidence.
+For `pull_request_target`, the run-level head is the trusted base and must
+never be compared directly with the PR head; its existing linked-head handling
+remains a limitation requiring independent event/run-name provenance before
+operational cancellation. `repository_dispatch` runs without PR links remain
+`unlinked`; this slice does not infer their target from the control-plane head.
+Stale linked runs are `obsolete`. Queued evidence remains incomplete even when
+a report is successfully produced. GitHub's `waiting` job status also remains
+pending evidence, distinct from a runner-capacity blocker.
 
 Pull-request identity is sampled before and after the bounded active-run
 sweeps. The repository snapshot is accepted only when the open pull-request
@@ -52,13 +66,19 @@ GitHub has not supplied job detail.
 Two bounded active-status sweeps run in opposite orders and must agree before
 the snapshot is accepted. This prevents historical completed runs from
 exhausting the bound while rejecting evidence that changes between partitioned
-reads. Each status read is capped at one 50-run page, limiting collection to ten
-run-list calls per repository; exceeding the cap is reported as incomplete
-evidence. Current-head `in_progress` and `waiting` runs make the additional jobs
-API read needed to distinguish concrete runner assignment from an environment
-or deployment approval wait.
+reads. Each status read uses up to 20 pages of 50 runs, reusing the existing
+list-pagination bound. This covers an observed queue of more than 600 runs
+without truncating it at the first page. Exceeding the bound, duplicate page
+identities, and incomplete pagination still produce incomplete evidence. Every
+active run makes the additional jobs API read, including obsolete or unlinked
+runs and `pending`/`requested` states. Actual job state and runner assignment
+remain visible even when the PR identity is unknown or the parent run is stale.
+On 2026-09-27, native dispatch run `36308627125` had no PR links but job
+`108600597308` was running on an assigned runner; a current-head-only read
+omitted that evidence. This change retains the unknown PR identity and does
+not authorize cancellation.
 
-List endpoints use collector-controlled GitHub API pagination with at most 20
+Each list query uses collector-controlled GitHub API pagination with at most 20
 explicit page reads; the collector never asks GitHub CLI to download an
 unbounded page set and never requests page 21. Pull-request and job lists use
 pages of 100 records; workflow-run lists use pages of 50 so a large Actions
@@ -67,6 +87,13 @@ larger response is recorded as repository-scoped incomplete evidence and the
 collector continues with the remaining allowlisted repositories; it never
 silently claims that the visible page is the whole queue. The JSON and HTML
 reports expose each collection error explicitly.
+
+Independent job-evidence reads use at most four worker threads per repository.
+Every selected run is still inspected; concurrency does not reduce the evidence
+set or change the page limits. Report rows remain sorted by run ID, and the
+final pull-request identity read happens after all job reads finish. A failed
+job read invalidates the repository snapshot exactly as a sequential failure
+does. Model calls and their execution budgets are unaffected.
 
 Every external `gh api` read has a 30-second subprocess timeout, and the
 collector job has a 30-minute execution ceiling. A timeout is typed as
@@ -104,3 +131,100 @@ https://www.rfc-editor.org/rfc/rfc9110
 
 OWASP Foundation. (n.d.). *Path traversal*. Retrieved August 20, 2026, from
 https://owasp.org/www-community/attacks/Path_Traversal
+
+Active-run pagination fixes its upper creation bound to the report's
+`generated_at` timestamp with GitHub's native `created<=timestamp` filter.
+Runs created later belong to the next collection; they cannot shift the
+current pages. Both opposite-order sweeps use the same bound. Status changes,
+duplicate IDs, page overflow, and PR identity changes still reject incomplete
+evidence. Terminal diagnostics retain their head-specific queries.
+
+The 2026-09-27 whole-allowlist collection found seven repositories whose
+cancelled `pull_request_target` history exceeded GitHub's 1,000-result search
+limit. An overflowing terminal query is now split into disjoint, inclusive
+whole-second creation ranges, bounded by repository creation and collection
+start. An overflowing declared total is rejected on the first page, before spending
+requests on pages that cannot complete the query. Every leaf retains the same
+20-page limit and complete-count validation.
+A single second exceeding that limit, escaped timestamps, duplicate identities,
+API failures, or inconsistent pages still reject the repository snapshot.
+This collects the entire selected history rather than treating the first
+1,000 runs as complete. Small terminal queries keep their existing path;
+active-run consistency checks and cancellation authority are unchanged.
+
+
+The corrected 2026-09-27 collection still exhausted the shared REST quota while
+reading the central repository's cancelled history; all 14 repositories were
+incomplete. Splitting that history made each query complete but did not make
+the hourly collection practical. An oversized target-history query now resolves
+terminal evidence through every bounded page of the open PR heads' check suites,
+then through the native `check_suite_id` workflow-run filter. Suite heads and
+returned run-to-suite IDs must match exactly; missing permissions, malformed
+identities and partial lists remain collection failures. Failed and cancelled
+suite evidence is retained, including runs with no materialized jobs. This
+avoids enumerating unrelated closed/superseded terminal history. All active
+statuses remain repository-wide, so closed or superseded expensive work remains
+visible. Small target-history queries and the head-specific terminal queries
+retain their existing path. The installation token adds only Checks-read,
+scoped to the same reviewed repository allowlist.
+
+
+### Reuse complete current-head evidence
+
+The live `3f38bb36d` full collection ended with one of fourteen repositories
+collected. Central pagination was incomplete, ConceptWeave changed PR identity
+during evidence collection, and the shared user quota expired during LineageWeave.
+Zero pending jobs in that partial receipt is not organization-wide queue proof.
+
+Two native LineageWeave queries independently returned the same cancelled run
+`35841889134`, suite `97047968656`, head
+`182d3c9d4c5f2a8ab2d63e77b8a9ced663a183f6`: the complete head-specific query
+and the suite-specific fallback. The fallback now reuses already collected
+terminal runs by exact suite identity, fetching only suites not already owned
+by that complete read. Successful suites require no terminal diagnostic read;
+completed suites without a conclusion still receive startup-failure inspection.
+Malformed identities, missing pages, and unreadable unknown suites still fail
+closed. Terminal pagination errors now include the native query endpoint so a
+future incomplete response can be reproduced directly. This reduces redundant
+reads; it does not claim that the shared user quota, concurrent PR movement, or
+scoped installation-token runtime has been resolved.
+
+## Immutable target-event identity
+
+A native observation of Noema run `36329401441` showed its PR association
+updated to `8f870fdef8f3b6633312b2586ad50647ebaa3e6a` after a push, while
+its protected `run-name` still bound the request to
+`e28b6978b67fd9805eaf3500d58ca8eb934c42ec`. Its native GitHub Actions
+check suite `98371086029` also remained on the older commit. The previous
+reader incorrectly classified that run as current using the refreshed link.
+
+For `pull_request_target`, the reader accepts the central repository's
+known Noema, OpenCode and Strix workflow paths and their exact producer
+prefixes, repository, native associated PR number, and lowercase full commit.
+It preserves that producer identity through collect/report normalization. Neither
+the run's base SHA nor the mutable linked head proves the reviewed commit.
+Unknown producers, arbitrary PR titles, malformed identities and missing native
+associations remain unlinked. This does not infer targets for unlinked dispatches
+or authorize cancellation. A matching association alone is insufficient.
+
+Consumer repositories bind required central producers through native GraphQL
+`WorkflowRun` objects, in batches of at most 100. The run, workflow and check-suite
+IDs, event and immutable title must match the REST record. The source must name
+`ContextualWisdomLab/.github`, the same known workflow path and an exact full
+commit file URL; the native workflow route must name that central required
+producer in the target repository. Its check-suite commit must equal the
+declared event head. Unknown sources remain unlinked; partial/error responses
+reject the repository snapshot. Normalization retains only those bounded source
+fields, including through offline report round trips. JSON report rows export
+`workflow_source` and `reviewed_head_sha` separately from the native run-level
+`head_sha`, which can name the base. Unknown target producers export no reviewed
+head or source proof. Source reads happen before
+current-head cancelled-run filtering so consumer pre-runner cancellations remain
+visible. This read-only trace is not a Noema/OpenCode approval or cancellation
+authorization.
+
+Native consumer run `36328534902` provided the central Strix source at
+`e07c7e1e6ddb7c2704ca1c51bdafb4b81b68e6b7` and check-suite target
+`e655c530e659b1875a195fa78f96d0228ccf3b68`. The live PR identity was stable
+across this bounded verification and the PR remained Draft. This is one-run
+integration evidence, not whole-allowlist scheduled/App runtime acceptance.

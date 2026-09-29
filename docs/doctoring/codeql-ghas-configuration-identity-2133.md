@@ -60,3 +60,24 @@ central producer/handler/settlement layer (`codeql-pr.yml` →
 `codeql-scan-dispatch.yml`, coordinated with `#2106` / `#2040` / `#1929`). Do
 not copy CodeQL workflows into consumer repositories or reinterpret a transient
 neutral GHAS comparison as GREEN.
+
+
+## Existing read-authority routing (#2276, #712)
+
+On 2026-09-27, public App registration metadata reported no code-scanning
+analysis-read permission for `opencode-agent`, but `cwl-noema-review` already
+advertised `security_events: read`. Registration metadata alone is not proof
+that an installation token can read a particular target repository.
+
+The central handler reuses the pinned token-mint action with the validated
+target repository name and only `permission-security-events: read`. It retains
+automatic token revocation. This mint is limited to `build-mode: none` shards
+for Actions, Python, and JavaScript/TypeScript; shards that can execute target
+build hooks never receive the App private key through this route.
+
+The existing selector proves access with a real target CodeQL analyses read
+before exporting a credential to the unchanged base/head pairing contract.
+Missing configuration, mint failure, or denied reads still fall through the
+configured credentials and fail closed when none succeeds. This does not grant
+cross-repository status publication or Actions recovery writes; those remain
+distinct #1929 prerequisites. Hosted proof on an unchanged head remains required.

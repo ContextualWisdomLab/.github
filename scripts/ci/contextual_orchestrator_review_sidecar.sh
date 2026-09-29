@@ -55,6 +55,44 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
+if [ -L "$ORCHESTRATOR_WORK" ]; then
+  fail "sidecar work directory must not be a symbolic link"
+fi
+if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -L "$GITHUB_WORKSPACE" ]; then
+  fail "sidecar workspace must not be a symbolic link"
+fi
+if [ -L "$STRIX_EVIDENCE_DIR" ]; then
+  fail "Strix evidence directory must not be a symbolic link"
+fi
+if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
+  fail "sidecar log sanitizer must be a regular, non-symlink file"
+fi
+mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
+catalog_file="$ORCHESTRATOR_WORK/agents.review.json"
+policy_report="$ORCHESTRATOR_WORK/policy-report.json"
+# Reset only this producer's outputs before even credential or dependency
+# admission can fail. Self-hosted workspaces may retain a previous job's files.
+for evidence_file in \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-discovery.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-agents.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-policy.json" \
+  "$discovery_report" "$catalog_file" "$policy_report"; do
+  if [ -L "$evidence_file" ] || { [ -e "$evidence_file" ] && [ ! -f "$evidence_file" ]; }; then
+    fail "sidecar evidence output must be a regular file, never a symbolic link"
+  fi
+  evidence_tmp="$(umask 077; mktemp "${evidence_file%/*}/.${evidence_file##*/}.XXXXXX")" ||
+    fail "cannot prepare sidecar evidence output"
+  if ! mv -fT -- "$evidence_tmp" "$evidence_file"; then
+    rm -f -- "$evidence_tmp"
+    fail "cannot replace sidecar evidence output"
+  fi
+done
+
 # Require at least one of the five provider secrets so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
 # unregistered provider — matching the review gateway contract.
@@ -81,14 +119,6 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 fi
 
-if [ -L "$STRIX_EVIDENCE_DIR" ]; then
-  fail "Strix evidence directory must not be a symbolic link"
-fi
-if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
-  fail "sidecar log sanitizer must be a regular, non-symlink file"
-fi
-mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
-chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
 token_file="$ORCHESTRATOR_WORK/bearer.token"
 (
   umask 077
@@ -247,10 +277,7 @@ finally:
     thread.join(timeout=5)
 PY
 
-discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
-catalog_file="$ORCHESTRATOR_WORK/agents.review.json"
-policy_report="$ORCHESTRATOR_WORK/policy-report.json"
 preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"
 sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"
 sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"
@@ -327,9 +354,9 @@ export ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"
 # pipe and silently show an empty/truncated diagnostic (the exact class of bug
 # this sanitizer exists to avoid: see the 2026-08-30 sidecar-diagnostics gap
 # baseline entry).
-exec {orchestrator_stdout_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
+exec {orchestrator_stdout_fd}> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
 stdout_sanitizer_pid=$!
-exec {orchestrator_stderr_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
+exec {orchestrator_stderr_fd}> >("$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
 stderr_sanitizer_pid=$!
 wait_for_sidecar_sanitizers() {
   wait "$stdout_sanitizer_pid" 2>/dev/null || true

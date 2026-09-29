@@ -1665,8 +1665,8 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
     assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
-    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
-    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
+    assert '"$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
+    assert '"$sidecar_python" -S -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
 
 

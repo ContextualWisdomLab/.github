@@ -8,6 +8,9 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from tests.test_actions_queue_health import api_fixture_path
+
+
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
 SPEC = importlib.util.spec_from_file_location("actions_queue_health_consistency", MODULE_PATH)
@@ -53,7 +56,7 @@ def _runner_with_pull_transition(final_pulls: list[dict]):
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Serve metadata, pull identities, and empty active-run partitions."""
         nonlocal pull_reads
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == "repos/owner/repo":
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
@@ -193,3 +196,11 @@ def test_queue_health_workflow_does_not_grant_unused_pull_request_permission() -
     workflow = (ROOT / ".github/workflows/actions-queue-health.yml").read_text(encoding="utf-8")
     assert "\n  pull-requests: read\n" not in workflow
     assert "\n      pull-requests: read\n" not in workflow
+
+
+def test_pull_request_run_uses_immutable_head_when_rest_link_has_moved() -> None:
+    """GitHub refreshes PR links on old runs; the run head still proves the generation."""
+    run = _run(1, 501)
+    run["head_sha"] = "old-head"
+    normalized = queue_health._normalise_run("owner/repo", run, [])
+    assert queue_health._run_identity(normalized, {1: {"head_sha": "head"}}) == ("obsolete", 1)

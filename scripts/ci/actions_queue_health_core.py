@@ -25,7 +25,7 @@ SCHEMA_VERSION = "actions.queue_health.v1"
 MAX_API_PAGE_SIZE = 100
 WORKFLOW_RUN_PAGE_SIZE = 50
 MAX_API_PAGES = 20
-ACTIVE_RUN_MAX_API_PAGES = 1
+ACTIVE_RUN_MAX_API_PAGES = MAX_API_PAGES
 GITHUB_API_TIMEOUT_SECONDS = 30
 PULL_REQUEST_RETRY_DELAY_SECONDS = 1
 PAGINATED_PAGES_KEY = "_queue_health_pages"
@@ -194,6 +194,10 @@ def github_json(
         total_count = payload.get("total_count") if isinstance(payload, dict) else None
         if isinstance(payload, dict):
             values = next((value for value in payload.values() if isinstance(value, list)), None)
+        if type(total_count) is int and total_count > page_size * max_pages:
+            raise QueueHealthError(
+                f"GitHub API pagination exceeds {max_pages} pages for {path}"
+            )
         if not isinstance(values, list):
             raise QueueHealthError(f"GitHub API page has no bounded array for {page_path}")
         collected = sum(
@@ -347,10 +351,12 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         if not isinstance(head, dict):
             raise QueueHealthError("workflow run pull request head must be an object")
         links.append({"number": number, "head_sha": str(head.get("sha") or "")})
-    return {
+    normalized_run = {
         "repository": repository,
         "id": run_id,
         "workflow_name": str(run.get("name") or run.get("workflow_name") or "unnamed workflow"),
+        "workflow_path": str(run.get("path") or run.get("workflow_path") or ""),
+        "display_title": str(run.get("display_title") or ""),
         "event": str(run.get("event") or "unknown"),
         "status": str(run.get("status") or "").upper(),
         "conclusion": str(run.get("conclusion") or "").upper(),
@@ -362,6 +368,14 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         "pull_requests": sorted(links, key=lambda item: item["number"]),
         "jobs": sorted((_normalise_job(job) for job in jobs), key=lambda item: item["id"]),
     }
+    source = run.get("workflow_source")
+    if repository != "ContextualWisdomLab/.github" and isinstance(source, dict):
+        normalized_run["workflow_source"] = {key: source.get(key) for key in (
+            "repositoryName", "path", "repositoryFileUrl", "workflowResourcePath", "head_sha")}
+    if run.get("event") != "pull_request_target" or _run_identity(normalized_run, {})[0] == "unlinked":
+        normalized_run["display_title"] = ""
+        normalized_run.pop("workflow_source", None)
+    return normalized_run
 
 
 def load_snapshot(path: Path) -> dict[str, Any]:
@@ -376,23 +390,52 @@ def load_snapshot(path: Path) -> dict[str, Any]:
 
 
 def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]]) -> tuple[str, int | None]:
-    """Resolve one run to current-head, obsolete, or unlinked identity.
+    """Resolve one run using the event-specific reviewed head.
 
-    Compares the open pull request's head SHA against the *linked*
-    pull-request head SHA carried on the run (``run["pull_requests"][*]
-    ["head_sha"]``), never against the run-level ``head_sha``. For
-    ``pull_request_target``-triggered runs, GitHub reports the run-level
-    ``head_sha`` as the base-branch commit that was checked out, not the
-    pull request's head commit; only the linked pull-request entry carries
-    the real head SHA that was reviewed. Using the run-level value there
-    would misclassify a genuinely current, active required-workflow run as
-    ``obsolete`` and skip fetching its job evidence.
+    For ``pull_request``, the immutable run head is authoritative: GitHub
+    refreshes linked PR head fields on older runs after a push. Target events
+    require the protected producer's immutable identity and a native PR number;
+    their run-level base SHA and refreshed links cannot prove the reviewed head.
     """
     links = run.get("pull_requests") or []
+    if run.get("event") == "pull_request_target":
+        repository = str(run.get("repository") or "")
+        path = run.get("workflow_path")
+        source = run.get("workflow_source") or {}
+        required_source = (
+            isinstance(source, dict) and REPOSITORY_PATTERN.fullmatch(repository)
+            and repository.startswith("ContextualWisdomLab/")
+            and source.get("repositoryName") == "ContextualWisdomLab/.github"
+            and source.get("path") == path
+            and source.get("workflowResourcePath") == (
+                f"/{repository}/actions/workflows/required/ContextualWisdomLab/.github/{path}")
+            and re.fullmatch(r"https://github\.com/ContextualWisdomLab/\.github/blob/[0-9a-f]{40}/"
+                             + re.escape(str(path)), str(source.get("repositoryFileUrl") or ""))
+        )
+        # Only these protected central producers declare this immutable event
+        # identity. A PR title or a refreshed association is not head evidence.
+        prefix = {
+            ".github/workflows/noema-review.yml": "Required Noema Review",
+            ".github/workflows/opencode-review.yml": "Required OpenCode Review",
+            ".github/workflows/strix.yml": "Strix Security Scan",
+        }.get(path) if repository == "ContextualWisdomLab/.github" or required_source else None
+        identity = re.fullmatch(
+            rf"{re.escape(prefix or '')} {re.escape(repository)}#([1-9][0-9]*)@([0-9a-f]{{40}})",
+            str(run.get("display_title") or ""),
+        )
+        number = next((link["number"] for link in links
+                       if type(link.get("number")) is int and str(link["number"]) == identity[1]), None) if identity else None
+        if not prefix or not identity or number is None:
+            return "unlinked", None
+        if required_source and source.get("head_sha") != identity[2]:
+            return "unlinked", None
+        pull_request = pull_requests.get(number)
+        return ("current_head" if pull_request and pull_request.get("head_sha") == identity[2] else "obsolete"), number
     for link in links:
         number = link.get("number")
         pull_request = pull_requests.get(number)
-        if pull_request and pull_request.get("head_sha") == link.get("head_sha"):
+        reviewed_head = run.get("head_sha") if run.get("event") == "pull_request" else link.get("head_sha")
+        if pull_request and pull_request.get("head_sha") == reviewed_head:
             return "current_head", number
     if links:
         return "obsolete", links[0].get("number")
@@ -640,7 +683,12 @@ def render_html(report: dict[str, Any]) -> str:
             )
             + "</tr>"
         )
-    body = "".join(table_rows) or '<tr><th scope="row" colspan="9">No queued or in-progress jobs observed.</th></tr>'
+    empty_message = (
+        "Run evidence could not be collected."
+        if report.get("collection_errors")
+        else "No queued or in-progress jobs observed."
+    )
+    body = "".join(table_rows) or f'<tr><th scope="row" colspan="9">{empty_message}</th></tr>'
     collection_error_section = ""
     if report.get("collection_errors"):
         collection_error_section = (
@@ -650,10 +698,21 @@ def render_html(report: dict[str, Any]) -> str:
                 "<li>"
                 + html.escape(str(item["repository"]))
                 + ": "
-                + html.escape(str(item["error"]))
+                + html.escape(
+                    "Cross-repository read access is unavailable."
+                    if item["error"] == "cross_repository_read_credential_unavailable"
+                    else str(item["error"])
+                )
                 + "</li>"
                 for item in report["collection_errors"]
             )
+            + "</ul></section>"
+        )
+    external_action_section = ""
+    if summary["external_actions"]:
+        external_action_section = (
+            '<section aria-labelledby="operator-actions"><h2 id="operator-actions">Operator actions</h2><ul>'
+            + "".join(f"<li>{html.escape(str(action))}</li>" for action in summary["external_actions"])
             + "</ul></section>"
         )
     return (
@@ -666,6 +725,7 @@ def render_html(report: dict[str, Any]) -> str:
         '<main aria-live="polite">'
         "<h1>GitHub Actions queue health</h1>"
         + collection_error_section
+        + external_action_section
         + f"<p>Evaluated at <time>{html.escape(report['evaluated_at'])}</time>; queue-age SLO: {report['queue_age_slo_seconds']} seconds.</p>"
         f"<p>Observed jobs: {summary['observed_job_count']}; current-head pending: {summary['current_head_pending_count']}; SLO breaches: {summary['unassigned_slo_breached_count']}.</p>"
         '<table><caption>Run and job evidence; queued evidence is not a passing check.</caption>'
@@ -694,6 +754,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--snapshot", type=Path)
     source.add_argument("--allowlist", type=Path)
+    parser.add_argument("--credential-unavailable", action="store_true")
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-html", type=Path, required=True)
     parser.add_argument("--queue-age-slo-seconds", type=int, default=DEFAULT_QUEUE_AGE_SLO_SECONDS)

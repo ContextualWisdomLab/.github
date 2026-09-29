@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+
+from tests.test_actions_queue_health import api_fixture_path
 from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -81,7 +83,7 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment(monk
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic GitHub REST fixtures for the collector."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
@@ -149,18 +151,20 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment(monk
 
 
 def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -> None:
-    """A target-triggered cancellation uses linked PR head identity, not base SHA."""
-    repository_name = "owner/repo"
+    """A target-triggered cancellation requires protected event identity, not a refreshed link or base SHA."""
+    repository_name = "ContextualWisdomLab/.github"
     pull_request = {
         "number": 23,
         "state": "open",
         "base": {"ref": "main", "repo": {"full_name": repository_name}},
-        "head": {"sha": "exact-target-head"},
+        "head": {"sha": "a" * 40},
         "updated_at": "2026-09-02T13:20:00Z",
     }
     cancelled_run = {
         "id": 2301,
-        "name": "Target Review",
+        "name": "Required Noema Review",
+        "path": ".github/workflows/noema-review.yml",
+        "display_title": f"Required Noema Review {repository_name}#23@{'a' * 40}",
         "workflow_id": 9023,
         "event": "pull_request_target",
         "status": "completed",
@@ -170,7 +174,7 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
         "updated_at": "2026-09-02T13:05:00Z",
         "run_attempt": 1,
         "pull_requests": [
-            {"number": 23, "head": {"sha": "exact-target-head"}}
+            {"number": 23, "head": {"sha": "a" * 40}}
         ],
     }
     cancelled_job = {
@@ -185,7 +189,7 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
     }
     head_terminal_path = (
         f"repos/{repository_name}/actions/runs?status=completed"
-        "&head_sha=exact-target-head&per_page=50"
+        f"&head_sha={'a' * 40}&per_page=50"
     )
     target_cancelled_path = (
         f"repos/{repository_name}/actions/runs?status=cancelled"
@@ -194,7 +198,7 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Model GitHub target runs whose run-level SHA is the base commit."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
@@ -284,7 +288,7 @@ def test_collect_snapshot_rejects_head_change_after_target_evidence_read() -> No
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Advance the PR head only after terminal/job evidence has been read."""
         nonlocal pull_read_count
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+
+from tests.test_actions_queue_health import api_fixture_path
 from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -48,7 +50,7 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic GitHub REST fixtures for the collector."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         requested_paths.append(path)
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}
@@ -76,6 +78,8 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
             "repository": repository_name,
             "id": 701,
             "workflow_name": "CodeQL PR",
+            "workflow_path": "",
+            "display_title": "",
             "event": "pull_request",
             "status": "COMPLETED",
             "conclusion": "STARTUP_FAILURE",
@@ -137,7 +141,7 @@ def test_collect_snapshot_retains_old_failure_for_unchanged_current_head() -> No
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return an old but still current-head terminal failure by exact SHA."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         requested_paths.append(path)
         if path == f"repos/{repository_name}":
             payload: object = {"default_branch": "main"}

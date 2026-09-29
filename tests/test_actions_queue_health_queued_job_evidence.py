@@ -3,6 +3,9 @@
 from datetime import datetime, timezone
 import importlib.util
 import json
+import pytest
+
+from tests.test_actions_queue_health import api_fixture_path
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -57,14 +60,38 @@ def _queued_job() -> dict:
     }
 
 
-def test_queued_current_head_fetches_job_evidence_and_uses_job_queue_start() -> None:
-    """Time a materialized queued job from its own eligibility, not the parent run."""
+@pytest.mark.parametrize(
+    "run_status,identity,job_status",
+    [
+        ("queued", "current", "queued"),
+        ("queued", "obsolete", "queued"),
+        ("in_progress", "unlinked", "in_progress"),
+        ("requested", "current", "queued"),
+        ("pending", "current", "queued"),
+        ("in_progress", "obsolete", "completed"),
+        ("completed", "unlinked", "completed"),
+    ],
+)
+def test_active_run_fetches_actual_job_evidence(
+    run_status: str, identity: str, job_status: str,
+) -> None:
+    """Read actual jobs even when the active run is obsolete or unlinked."""
     queued_run = _queued_run()
     queued_job = _queued_job()
+    queued_run["status"] = run_status
+    if run_status == "completed":
+        queued_run["conclusion"] = "failure"
+    queued_job["status"] = job_status
+    if identity == "obsolete":
+        queued_run["head_sha"] = "old-head"
+    elif identity == "unlinked":
+        queued_run["event"] = "repository_dispatch"
+        queued_run["pull_requests"] = []
+    if job_status == "completed":
+        queued_job["conclusion"] = "success"
     responses: dict[str, object] = {
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [_pull_request()],
-        "repos/owner/repo/actions/runs?status=queued&per_page=50": [queued_run],
         "repos/owner/repo/actions/runs?status=completed&head_sha=head&per_page=50": [],
         "repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50": [],
         "repos/owner/repo/actions/runs/910/jobs?per_page=100": {
@@ -72,14 +99,17 @@ def test_queued_current_head_fetches_job_evidence_and_uses_job_queue_start() -> 
             "jobs": [queued_job],
         },
     }
-    for status in ("in_progress", "pending", "requested", "waiting"):
+    for status in ("queued", "in_progress", "pending", "requested", "waiting"):
         responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = []
+    responses[f"repos/owner/repo/actions/runs?status={run_status}&per_page=50"] = [queued_run]
+    if run_status == "completed":
+        responses["repos/owner/repo/actions/runs?status=completed&head_sha=head&per_page=50"] = [queued_run]
 
     requested_paths: list[str] = []
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic REST payloads and retain the exact evidence reads."""
-        path = args[-1]
+        path = api_fixture_path(args[-1])
         requested_paths.append(path)
         if path not in responses:
             raise AssertionError(f"unexpected endpoint: {path}")
@@ -92,6 +122,13 @@ def test_queued_current_head_fetches_job_evidence_and_uses_job_queue_start() -> 
     )
     assert snapshot["collection_errors"] == []
     observed_run = snapshot["repositories"][0]["runs"][0]
+    if run_status == "completed":
+        assert "repos/owner/repo/actions/runs/910/jobs?per_page=100" not in requested_paths
+        assert observed_run["jobs"] == []
+        report = queue_health.build_report(snapshot)
+        assert report["runs"][0]["identity_state"] == "unlinked"
+        assert report["runs"][0]["is_pending"] is False
+        return
     assert "repos/owner/repo/actions/runs/910/jobs?per_page=100" in requested_paths
     assert [job["id"] for job in observed_run["jobs"]] == [912]
     assert observed_run["jobs"][0]["created_at"] == "2026-09-17T02:58:00Z"
@@ -102,6 +139,8 @@ def test_queued_current_head_fetches_job_evidence_and_uses_job_queue_start() -> 
     )
     row = report["runs"][0]
     assert row["job_id"] == 912
+    assert row["is_pending"] is (job_status != "completed")
+    assert row["identity_state"] == {"current": "current_head", "obsolete": "obsolete", "unlinked": "unlinked"}[identity]
     assert row["queue_age_source"] == "job_created_at"
     assert row["queue_age_started_at"] == "2026-09-17T02:58:00Z"
     assert row["queue_age_seconds"] == 120
