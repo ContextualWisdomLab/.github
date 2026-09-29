@@ -95,3 +95,33 @@ def test_missing_cargo_warns_readably(tmp_path: Path) -> None:
     result = _run(_step("Expose runner Rust toolchain")["run"], tmp_path, home=tmp_path / "home", path_dirs=[])
     assert result.returncode == 0
     assert "::warning::cargo is not installed" in result.stdout
+
+
+def test_reclaim_removes_only_old_coverage_workspaces(tmp_path: Path) -> None:
+    """Root-owned sandbox workspaces left by earlier jobs are swept with sudo."""
+    fake_bin = tmp_path / "bin"
+    _fake(fake_bin, "docker", "exit 0\n")
+    _fake(fake_bin, "sudo", 'exec "$@"\n')
+    runner_temp = tmp_path / "runner_temp"
+    old = runner_temp / "opencode-coverage-111-1"
+    old_build = runner_temp / "opencode-coverage-tool-build-111-1"
+    fresh = runner_temp / "opencode-coverage-222-1"
+    current = runner_temp / "opencode-coverage-333-1"
+    unrelated = runner_temp / "other-old"
+    shared = [runner_temp / f"opencode-coverage-{n}" for n in ("artifact", "sandbox-result", "source", "tool-build")]
+    for d in (old, old_build, fresh, current, unrelated, *shared):
+        (d / "x").mkdir(parents=True)
+    for d in (old, old_build, current, unrelated, *shared):
+        os.utime(d, (0, 0))
+    script = _step("Reclaim stale coverage images")["run"]
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "RUNNER_TEMP": str(runner_temp),
+             "GITHUB_RUN_ID": "333", "HOME": str(tmp_path)},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not old.exists() and not old_build.exists()
+    assert fresh.exists() and current.exists() and unrelated.exists()
+    # Shared, non-run directories are never swept, however old.
+    assert all(d.exists() for d in shared)
