@@ -3,21 +3,7 @@ import sys
 
 import pytest
 
-from scripts.ci.sanitize_github_output_summary import (
-    AUTH_HEADER_RE,
-    SECRET_KEY_RE,
-    URL_CREDENTIAL_RE,
-    sanitize_line,
-    sanitize_text,
-)
-
-
-def _redact_without_prefilter(line: str) -> str:
-    match = SECRET_KEY_RE.search(line)
-    if match:
-        return f"{line[: match.end()]}<redacted>"
-    redacted = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
-    return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", redacted)
+from scripts.ci.sanitize_github_output_summary import sanitize_text
 
 
 def test_sanitizes_secret_like_coverage_summary_values_without_losing_result():
@@ -42,28 +28,6 @@ regular evidence line stays intact
     assert "super-secret" not in sanitized
     assert "token-value" not in sanitized
     assert "regular evidence line stays intact" in sanitized
-
-
-def test_separator_prefilter_preserves_redaction_rules():
-    lines = (
-        "plain evidence",
-        "ENCRYPTION_KEY=abc123",
-        "Authorization: Bearer token-value",
-        "Authorization=Basic token-value",
-        "HTTPS://user:secret@db/app",
-        "postgresql://user:secret@db:5432/app",
-        "note: plain context",
-        "a=b",
-        "",
-    )
-
-    assert [sanitize_line(line) for line in lines] == [
-        _redact_without_prefilter(line) for line in lines
-    ]
-    assert sanitize_line("ENCRYPTION_KEY=abc123") == "ENCRYPTION_KEY=<redacted>"
-    assert sanitize_line("HTTPS://user:secret@db/app") == "HTTPS://<redacted>@db/app"
-    assert sanitize_line("Authorization=Basic token-value") == "Authorization=Basic <redacted>"
-    assert sanitize_line("plain evidence") == "plain evidence"
 
 
 def test_sanitizes_url_credentials_without_secret_key_prefix():

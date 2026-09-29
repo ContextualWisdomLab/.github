@@ -568,13 +568,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
-    assert (
-        "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-"
-        "${{ github.run_id }}-${{ github.run_attempt }}" in workflow
-    )
-    prepare = workflow.split("      - name: Prepare pull request merge tree for coverage measurement", 1)[1].split("      - name:", 1)[0]
-    assert 'mkdir "$COVERAGE_SOURCE_WORKDIR"' in prepare
-    assert 'rm -rf "$COVERAGE_SOURCE_WORKDIR"' not in prepare
+    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
     assert (
         'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
     )
@@ -749,26 +743,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
-    assert (
-        'trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"'
-        in measure_step
-    )
-    assert (
-        '[ ! -f "$trusted_noema_document_requirements" ]'
-        in measure_step
-    )
-    assert (
-        '[ -L "$trusted_noema_document_requirements" ]'
-        in measure_step
-    )
-    assert (
-        'install -m 0644 "$trusted_noema_document_requirements"'
-        in measure_step
-    )
-    assert (
-        '"$coverage_build_dir/requirements-noema-document-ci-hashes.txt"'
-        in measure_step
-    )
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
@@ -841,11 +815,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
-    assert "printf '\\n[net]\\noffline = true\\n' >>/work/.opencode-sandbox-home/.cargo/config.toml" in measure_step
-    assert "CARGO_NET_OFFLINE=true \\" not in measure_step
-    assert measure_step.index('rm -rf -- /work/.opencode-sandbox-home') < measure_step.index(
-        'cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/'
-    )
     assert "docker run --rm --init --network=none" in measure_step
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1

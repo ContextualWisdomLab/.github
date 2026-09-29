@@ -136,19 +136,21 @@ gate only when they do not compete to upload the same SARIF. The central native
 dispatch handler analyzes the target head without making the target repository's
 default-setup upload path its source of truth.
 
-### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL
+### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
 
-**This subsection records the original July rollout, not current guidance.**
-That plan invoked `github/codeql-action` directly inside a required workflow,
-which GitHub does not support. The old entrypoint was removed on 2026-09-03.
-The 2026-09-04 correction above restores a different, dispatch-safe
-`codeql-pr.yml`: it sends the scan to a native workflow and consumes an
-app-authored exact-head status. This restored entrypoint is in the current
-seven-workflow ruleset. Native default setup is a repository-local safety net,
-not a replacement for that central gate. The table below remains only the
-2026-07-04 snapshot of repositories with a local `codeql.yml`; it does not
-identify present-day adoption gaps.
-
+**This entire subsection describes a plan that did not work and is not
+current guidance.** It assumed `codeql-pr.yml` would become a functioning
+central required check once ruleset `18156473` included it; the "Correction
+(2026-09-03)" note under "Code scanning required workflow posture" above
+explains why that assumption was wrong — `codeql-action` cannot run inside a
+required workflow at all, so `codeql-pr.yml` was removed from the ruleset,
+not fixed. "Centralizing through `codeql-pr.yml` fixes every inherited
+repository in one ruleset change" (below) never happened and never could.
+Coverage for repositories without a local CodeQL workflow now comes from
+GitHub's native `code-scanning/default-setup` instead (see the 2026-09-03
+"Evidence from this rollout" entry) — do not read the table below as
+"repositories still needing the ruleset update to land"; treat it only as a
+2026-07-04 point-in-time snapshot of which repositories had a local `codeql.yml`.
 
 Org audit of default-branch workflow files as of 2026-07-04.
 

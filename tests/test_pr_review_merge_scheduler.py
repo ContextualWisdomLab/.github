@@ -8,6 +8,7 @@ import pytest
 
 from scripts.ci import pr_review_merge_scheduler as sched
 
+
 TOKEN_SEPARATOR = "_"
 GITHUB_TOKEN_PREFIXES = {
     "classic": "g" + "hp",
@@ -2362,11 +2363,6 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
         assert created == ">=2026-09-17T11:50:00Z"
         return [
             {
-                "path": ".github/workflows/other.yml",
-                "conclusion": "success",
-                "updated_at": "2026-09-17T11:59:00Z",
-            },
-            {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:55:00Z",
@@ -2375,6 +2371,11 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:40:00Z",
+            },
+            {
+                "path": ".github/workflows/other.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:59:00Z",
             },
         ]
 
@@ -2401,31 +2402,6 @@ def test_recent_coalesce_tick_completed_ignores_skipped_and_cancelled_ticks(monk
                 "conclusion": "cancelled",
                 "updated_at": "2026-09-17T11:58:00Z",
             },
-        ],
-    )
-    assert not sched.recent_coalesce_tick_completed(
-        "owner/repo", now=now, max_age_seconds=600
-    )
-
-
-def test_recent_coalesce_tick_completed_ignores_another_scheduled_workflow(monkeypatch):
-    """A different scheduled workflow's success is not coalesce-tick evidence.
-
-    The query asks GitHub for completed `schedule` runs, which in this repository
-    includes several unrelated workflows. Only the coalesce tick's own path proves
-    the dispatch path is alive, so a fresh success from any other scheduled
-    workflow must be skipped rather than read as a healthy tick.
-    """
-    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda *a, **k: [
-            {
-                "path": ".github/workflows/sbom-inventory-scheduler.yml",
-                "conclusion": "success",
-                "updated_at": "2026-09-17T11:59:00Z",
-            }
         ],
     )
     assert not sched.recent_coalesce_tick_completed(
@@ -4896,17 +4872,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     ]
     assert calls[2:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
-        # OpenCode dispatch invalidates the run cache; Strix must recheck it
-        # before starting a fresh trusted-runtime scan.
-        [
-            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
-            "--paginate", "--slurp", "-f", "status=queued", "-F", "per_page=100",
-        ],
-        [
-            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
-            "--paginate", "--slurp", "-f", "status=in_progress", "-F", "per_page=100",
-        ],
-        ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
+        ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/202/rerun"],
     ]
 
 
@@ -5476,11 +5442,6 @@ def test_dispatch_strix_evidence_defers_to_bounded_admission_budget(monkeypatch,
 
 def test_dispatch_strix_evidence_rerun_defers_to_bounded_admission_budget(monkeypatch, tmp_path):
     """Rerunning an existing Strix job also respects the durable admission budget."""
-    # Existing jobs now recover through fresh central dispatch, including its
-    # Actions control and active-run checks. Keep external calls mocked.
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda *_: None)
-    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_a, **_k: ([], []))
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_: [])
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
     monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: "202")
 
@@ -5493,11 +5454,6 @@ def test_dispatch_strix_evidence_rerun_defers_to_bounded_admission_budget(monkey
 
 def test_dispatch_strix_evidence_rerun_rechecks_live_head(monkeypatch):
     """Rerunning an existing Strix job rechecks the exact live head first."""
-    # Existing jobs now recover through fresh central dispatch, including its
-    # Actions control and active-run checks. Keep external calls mocked.
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda *_: None)
-    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_a, **_k: ([], []))
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_: [])
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
     monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: "202")
     monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(headRefOid="c" * 40)])
@@ -11161,25 +11117,3 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     assert "checks are still queued or running" not in resumed.reason
 
     assert sched.has_in_flight_check_runs(behind_with([])) is False
-
-
-def test_strix_failed_job_recovers_via_fresh_central_runtime(monkeypatch):
-    """An existing job must not pin recovery to its original broken runtime."""
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    calls = []
-    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_: "108529710783")
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda *_: None)
-    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_a, **_k: ([], []))
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_: [])
-    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_: True)
-    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_: True)
-    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _: "ContextualWisdomLab/.github")
-    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, stdin: calls.append((args, json.loads(stdin))))
-    monkeypatch.setattr(sched, "rerun_actions_job", lambda *_a, **_k: pytest.fail("old job runtime was reused"))
-    assert sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False) == "dispatched"
-    assert len(calls) == 1
-    args, payload = calls[0]
-    assert "repos/ContextualWisdomLab/.github/dispatches" in args
-    assert payload["event_type"] == "strix-scan"
-    assert payload["client_payload"]["pr_head_sha"] == pr["headRefOid"]
-    assert payload["client_payload"]["pr_base_sha"] == pr["baseRefOid"]

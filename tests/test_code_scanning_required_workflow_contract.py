@@ -45,6 +45,4 @@ def test_ruleset_requires_dispatch_safe_codeql_pr() -> None:
 
     assert workflow_path in audit.REQUIRED_WORKFLOW_PATHS
     assert "uses: github/codeql-action" not in workflow
-    assert "event_type:\"codeql-scan-v2\"" in workflow
-    assert 'pr_head:{schema:"1",ref:$pr_head_ref,sha:$pr_head_sha}' in workflow
-    assert "producer_source_sha:$producer_source_sha" in workflow
+    assert "event_type:\"codeql-scan\"" in workflow

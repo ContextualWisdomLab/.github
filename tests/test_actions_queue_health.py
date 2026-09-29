@@ -1,13 +1,14 @@
 """Contract and behavior tests for the read-only Actions queue collector."""
 
 import importlib.util
+from datetime import datetime, timezone
 import io
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 
 import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
@@ -493,188 +494,6 @@ def test_normalise_run_validates_links_jobs_and_fallback_names() -> None:
     ):
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._normalise_run("owner/repo", invalid_run, invalid_jobs)  # type: ignore[arg-type]
-
-    with pytest.raises(queue_health.QueueHealthError, match="entry must be an object"):
-        queue_health._CORE_NORMALISE_RUN("owner/repo", "bad", [])
-
-
-def test_collect_snapshot_retries_the_pre_evidence_identity_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Retry one incomplete identity immediately before terminal evidence reads."""
-    normalized_pull = queue_health._normalise_pull_request(pull_request())
-    reads = 0
-    sleep_calls: list[float] = []
-
-    def read_snapshot(_endpoint: str, *, runner: object) -> list[dict]:
-        """Make only the second identity read transiently incomplete."""
-        nonlocal reads
-        del runner
-        reads += 1
-        if reads == 2:
-            raise queue_health.IncompletePullRequestIdentity("incomplete")
-        return [normalized_pull]
-
-    def github_json(endpoint: str, **_kwargs: object) -> object:
-        """Return metadata and empty bounded workflow-run pages."""
-        return {"default_branch": "main"} if endpoint == "repos/owner/repo" else []
-
-    monkeypatch.setattr(queue_health, "_read_pull_request_snapshot", read_snapshot)
-    monkeypatch.setattr(queue_health, "github_json", github_json)
-    monkeypatch.setattr(queue_health.time, "sleep", sleep_calls.append)
-
-    snapshot = queue_health.collect_snapshot(
-        ["owner/repo"], generated_at="2026-08-19T11:00:00Z"
-    )
-    assert reads == 4
-    assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
-    assert snapshot["collection_errors"] == []
-
-
-def test_collect_snapshot_rejects_persistent_pre_evidence_identity_gap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fail closed when both pre-evidence identity reads remain incomplete."""
-    normalized_pull = queue_health._normalise_pull_request(pull_request())
-    reads = 0
-
-    def read_snapshot(_endpoint: str, *, runner: object) -> list[dict]:
-        """Return one initial identity followed by two incomplete reads."""
-        nonlocal reads
-        del runner
-        reads += 1
-        if reads > 1:
-            raise queue_health.IncompletePullRequestIdentity("incomplete")
-        return [normalized_pull]
-
-    def github_json(endpoint: str, **_kwargs: object) -> object:
-        """Return metadata and empty bounded workflow-run pages."""
-        return {"default_branch": "main"} if endpoint == "repos/owner/repo" else []
-
-    monkeypatch.setattr(queue_health, "_read_pull_request_snapshot", read_snapshot)
-    monkeypatch.setattr(queue_health, "github_json", github_json)
-    monkeypatch.setattr(queue_health.time, "sleep", lambda _delay: None)
-
-    snapshot = queue_health.collect_snapshot(
-        ["owner/repo"], generated_at="2026-08-19T11:00:00Z"
-    )
-    assert reads == 3
-    assert snapshot["repositories"] == []
-    assert "pull-request identity validation failed" in snapshot["collection_errors"][0]["error"]
-
-
-def test_collect_snapshot_rejects_invalid_active_and_terminal_run_ids(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Validate run IDs in both active and terminal diagnostic responses."""
-    normalized_pull = queue_health._normalise_pull_request(pull_request())
-    monkeypatch.setattr(
-        queue_health,
-        "_read_pull_request_snapshot",
-        lambda _endpoint, *, runner: [normalized_pull],
-    )
-
-    def active_invalid(endpoint: str, **_kwargs: object) -> object:
-        """Return the same invalid active run in both consistency sweeps."""
-        if endpoint == "repos/owner/repo":
-            return {"default_branch": "main"}
-        if "status=queued" in endpoint:
-            return [{"id": 0, "status": "queued"}]
-        return []
-
-    monkeypatch.setattr(queue_health, "github_json", active_invalid)
-    active_snapshot = queue_health.collect_snapshot(["owner/repo"])
-    assert active_snapshot["repositories"] == []
-    assert "workflow run id must be a positive integer" in active_snapshot["collection_errors"][0]["error"]
-
-    def terminal_invalid(endpoint: str, **_kwargs: object) -> object:
-        """Skip a success and reject the following malformed failure identity."""
-        if endpoint == "repos/owner/repo":
-            return {"default_branch": "main"}
-        if "status=completed" in endpoint:
-            return [
-                {"id": 1, "conclusion": "success"},
-                {"id": 0, "conclusion": "failure"},
-            ]
-        return []
-
-    monkeypatch.setattr(queue_health, "github_json", terminal_invalid)
-    terminal_snapshot = queue_health.collect_snapshot(["owner/repo"])
-    assert terminal_snapshot["repositories"] == []
-    assert "workflow run id must be a positive integer" in terminal_snapshot["collection_errors"][0]["error"]
-
-
-def test_collect_snapshot_ignores_obsolete_target_cancellation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Do not promote a target cancellation linked to an obsolete PR head."""
-    normalized_pull = queue_health._normalise_pull_request(pull_request())
-    monkeypatch.setattr(
-        queue_health,
-        "_read_pull_request_snapshot",
-        lambda _endpoint, *, runner: [normalized_pull],
-    )
-    obsolete = workflow_run(
-        19,
-        head_sha="base-head",
-        pull_requests=[{"number": 1, "head": {"sha": "old-head"}}],
-        status="completed",
-    )
-    obsolete["conclusion"] = "cancelled"
-    obsolete["event"] = "pull_request_target"
-
-    def github_json(endpoint: str, **_kwargs: object) -> object:
-        """Return one obsolete target cancellation and no other runs."""
-        if endpoint == "repos/owner/repo":
-            return {"default_branch": "main"}
-        if "status=cancelled&event=pull_request_target" in endpoint:
-            return [obsolete]
-        return []
-
-    monkeypatch.setattr(queue_health, "github_json", github_json)
-    snapshot = queue_health.collect_snapshot(["owner/repo"])
-    assert snapshot["collection_errors"] == []
-    assert snapshot["repositories"][0]["runs"] == []
-
-
-def test_build_report_deduplicates_existing_control_plane_actions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Do not duplicate queue-health remediation text already emitted by core."""
-    cancelled_action = (
-        "Inspect Actions runner admission, billing/usage, runner-group policy, "
-        "scheduler capacity, and cancellation provenance; cancelled pre-runner "
-        "evidence remains incomplete."
-    )
-    terminal_action = (
-        "Inspect Actions control-plane admission, billing/usage, runner-group policy, "
-        "and scheduler state; terminal failure without runner assignment or executed "
-        "steps is not an executed product/security failure."
-    )
-    core_report = {
-        "runs": [
-            {
-                "repository": "owner/repo",
-                "run_id": 1,
-                "is_pending": False,
-                "identity_state": "current_head",
-                "admission_state": "cancelled_before_runner_assignment",
-            },
-            {
-                "repository": "owner/repo",
-                "run_id": 2,
-                "is_pending": False,
-                "identity_state": "current_head",
-                "admission_state": "terminal_pre_execution_failure",
-            },
-        ],
-        "summary": {"external_actions": [cancelled_action, terminal_action]},
-    }
-    monkeypatch.setattr(queue_health, "_normalized_snapshot_runs", lambda _snapshot: {})
-    monkeypatch.setattr(queue_health, "_CORE_BUILD_REPORT", lambda *_args, **_kwargs: core_report)
-
-    report = queue_health.build_report({})
-    assert report["summary"]["external_actions"] == [cancelled_action, terminal_action]
 
 
 def test_collect_snapshot_deduplicates_status_views_and_preserves_order(

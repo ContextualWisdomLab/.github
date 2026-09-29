@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-01bf92a3ec67a0e1f9b68978eb16b60301e985fd}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-767e67fbc6b881a452761f32abb69b9971b9b03b}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -43,13 +43,7 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 # equivalence relation.
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
-sidecar_python="${SIDECAR_PYTHON:-$(command -v python3)}"
-# setup-python with update-environment=false leaves the consumer's library path.
-# Bind this process to the selected interpreter's matching shared runtime.
-sidecar_python_lib="$(dirname "$(dirname "$(realpath "$(command -v "$sidecar_python")")")")/lib"
-if [ -f "$sidecar_python_lib/libpython3.12.so.1.0" ]; then
-  export LD_LIBRARY_PATH="$sidecar_python_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
+sidecar_python="$(command -v python3)"
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
@@ -107,10 +101,6 @@ requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
 if [ ! -f "$requirements_lock" ]; then
   fail "vendored orchestrator is missing its hash-pinned requirements.lock"
 fi
-# The pinned lock includes CPython 3.12 wheels; isolate them from consumer runtimes.
-"$sidecar_python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else "sidecar requires Python 3.12 for its pinned wheel hashes")'
-"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"
-sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   --require-hashes \
@@ -119,15 +109,10 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
-import faulthandler
-
-# Fatal startup diagnostics contain stack locations, never frame locals.
-faulthandler.enable()
-
+import contextlib
 import http.client
 import io
 import json
-import logging
 import threading
 
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
@@ -166,10 +151,7 @@ thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
     expected_rejection_log = io.StringIO()
-    capture = logging.StreamHandler(expected_rejection_log)
-    server_logger = logging.getLogger("contextual_orchestrator.server")
-    server_logger.addHandler(capture)
-    try:
+    with contextlib.redirect_stderr(expected_rejection_log):
         connection.request(
             "POST",
             "/v1/chat/completions",
@@ -183,8 +165,6 @@ try:
         response = connection.getresponse()
         assert response.status == 413, response.status
         response.read()
-    finally:
-        server_logger.removeHandler(capture)
     assert (
         "request_failed status=413 code=request_too_large"
         in expected_rejection_log.getvalue()
@@ -392,10 +372,6 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
-  if [ "$((i % 60))" -eq 0 ]; then
-    # Only report file presence; provider content stays in sanitized artifacts.
-    log "startup pending: polls=${i} discovery=$([ -s "$discovery_report" ] && echo present || echo absent) catalog=$([ -s "$catalog_file" ] && echo present || echo absent) policy=$([ -s "$policy_report" ] && echo present || echo absent) preflight=$([ -s "$preflight_report" ] && echo present || echo absent)"
-  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then

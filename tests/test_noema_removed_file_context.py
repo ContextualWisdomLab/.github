@@ -46,7 +46,7 @@ def test_removed_file_context_uses_merge_base_content(monkeypatch):
         if target == f"repos/owner/repo/compare/{base_sha}...{head_sha}":
             return merge_base_sha
         if f"contents/fuzz/fuzz_opencode_normalize_output.py?ref={merge_base_sha}" in target:
-            return json.dumps({"content": encoded, "encoding": "base64", "size": len(base64.b64decode(encoded))})
+            return encoded
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
