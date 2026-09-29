@@ -1,0 +1,206 @@
+name: Source Fix Dispatch
+run-name: >-
+  Source Fix ${{ github.event.client_payload.target_repository }}#${{
+  github.event.client_payload.pr_number }}@${{ github.event.client_payload.pr_head_sha }}
+
+on:
+  repository_dispatch:
+    types: [agent-source-fix]
+
+concurrency:
+  group: >-
+    source-fix-${{ github.event.client_payload.target_repository }}-${{
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+jobs:
+  source-fix:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
+      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+      PR_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+      PR_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
+      PR_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
+      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
+      SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
+      INSTRUCTION_SHA256: ${{ github.event.client_payload.instruction_sha256 || '' }}
+      INVOCATION_KEY: ${{ github.event.client_payload.invocation_key || '' }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Check out trusted source-fix implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted-source-fix
+
+      - name: Validate immutable invocation claim
+        run: python3 trusted-source-fix/scripts/ci/agent_source_fix_worker.py --validate-only
+
+      - name: Inspect exact invocation ledger
+        id: ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ledger_name="cwl-source-fix-invocation-${INVOCATION_KEY}"
+          response="${RUNNER_TEMP}/source-fix-artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            -X GET -f "name=${ledger_name}" -f per_page=100 >"$response"
+          python3 - "$response" "$ledger_name" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          response_path = Path(sys.argv[1])
+          expected_name = sys.argv[2]
+          payload = json.loads(response_path.read_text(encoding="utf-8"))
+          if not isinstance(payload, dict):
+              raise SystemExit("artifact response must be an object")
+          total_count = payload.get("total_count")
+          artifacts = payload.get("artifacts")
+          if type(total_count) is not int or total_count < 0 or not isinstance(artifacts, list):
+              raise SystemExit("artifact response is malformed")
+          if total_count != len(artifacts):
+              raise SystemExit("artifact response is truncated or inconsistent")
+          live = False
+          for artifact in artifacts:
+              if not isinstance(artifact, dict):
+                  raise SystemExit("artifact response contains a non-object record")
+              if artifact.get("name") != expected_name or type(artifact.get("expired")) is not bool:
+                  raise SystemExit("artifact response contains a mismatched record")
+              live = live or not artifact["expired"]
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write(f"claim={'false' if live else 'true'}\n")
+          if not live:
+              claim_dir = Path(os.environ["RUNNER_TEMP"]) / "source-fix-claim"
+              claim_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+              claim = {
+                  "repository": os.environ["TARGET_REPOSITORY"],
+                  "pr_number": int(os.environ["PR_NUMBER"]),
+                  "head_sha": os.environ["PR_HEAD_SHA"],
+                  "base_sha": os.environ["PR_BASE_SHA"],
+                  "requested_by": os.environ["REQUESTED_BY"],
+                  "source_comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+                  "instruction_sha256": os.environ["INSTRUCTION_SHA256"],
+                  "invocation_key": os.environ["INVOCATION_KEY"],
+              }
+              (claim_dir / "claim.json").write_text(
+                  json.dumps(claim, sort_keys=True, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Claim invocation in durable artifact ledger
+        if: steps.ledger.outputs.claim == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cwl-source-fix-invocation-${{ env.INVOCATION_KEY }}
+          path: ${{ runner.temp }}/source-fix-claim/claim.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+      - name: Exchange OpenCode app token for target repository writes
+        if: steps.ledger.outputs.claim == 'true'
+        id: target_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          mark_unavailable() { echo "available=false" >>"$GITHUB_OUTPUT"; }
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            mark_unavailable
+            exit 0
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"; case "$request_url" in *\?*) ;; *) separator="?" ;; esac
+          if ! oidc_response="$(curl -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}")"; then
+            mark_unavailable
+            exit 0
+          fi
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then mark_unavailable; exit 0; fi
+          if ! token_response="$(curl -fsS --connect-timeout 10 --max-time 30 -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token")"; then
+            mark_unavailable
+            exit 0
+          fi
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then mark_unavailable; exit 0; fi
+          echo "::add-mask::$app_token"
+          echo "available=true" >>"$GITHUB_OUTPUT"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Require a mutation credential
+        if: steps.ledger.outputs.claim == 'true'
+        env:
+          USER_TOKEN_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
+          APP_TOKEN_AVAILABLE: ${{ steps.target_app_token.outputs.available == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ "$USER_TOKEN_AVAILABLE" != "true" ] && [ "$APP_TOKEN_AVAILABLE" != "true" ]; then
+            echo "::error::Source-fix requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or an exchanged OpenCode app token."
+            exit 1
+          fi
+
+      - name: Install OpenCode CLI
+        if: steps.ledger.outputs.claim == 'true'
+        env:
+          OPENCODE_VERSION: "1.17.13"
+          OPENCODE_SHA256: 157afa289d1a8d9372de0ce19ac726119b937a1f6b201808d46f06e4e59bb348
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/opencode-linux-x64.tar.gz"
+          install_dir="${HOME}/.opencode/bin"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$archive" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          printf '%s  %s\n' "$OPENCODE_SHA256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          install -m 0755 "${RUNNER_TEMP}/opencode" "${install_dir}/opencode"
+          echo "$install_dir" >>"$GITHUB_PATH"
+
+      - name: Provision contextual-orchestrator sidecar
+        if: steps.ledger.outputs.claim == 'true'
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/trusted-source-fix/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
+      - name: Execute bounded source repair
+        if: steps.ledger.outputs.claim == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/trusted-source-fix/scripts/ci/load_contextual_orchestrator_token.sh"
+          python3 "$GITHUB_WORKSPACE/trusted-source-fix/scripts/ci/agent_source_fix_worker.py"
