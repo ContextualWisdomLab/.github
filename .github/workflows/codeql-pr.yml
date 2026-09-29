@@ -108,10 +108,12 @@ jobs:
           REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR: ${{ github.event.pull_request.number }}
           EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -uo pipefail
           code=true
+          changed_complete=false
           if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
             changed=""
             for attempt in 1 2 3; do
@@ -124,6 +126,7 @@ jobs:
             # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
             # source files behind a doc-only verdict, so require an exact count.
             if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              changed_complete=true
               code=false
               while IFS= read -r changed_path; do
                 case "$changed_path" in
@@ -133,6 +136,68 @@ jobs:
               done <<<"$changed"
             else
               echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          # JSON evaluation receipts are not executable CodeQL source. Only an
+          # exact, complete, regular-blob content tree can use this exemption.
+          # Keep the shared changed-path allowlist and every other scanner intact.
+          if [ "$code" = "true" ] && [ "$changed_complete" = "true" ]; then
+            if python3 -I -S - <<'PY_CONTENT_ONLY'
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          def content_only(raw: bytes) -> bool:
+              """Accept only a complete NUL-framed inventory of plain content blobs."""
+              if not raw or not raw.endswith(b"\0"):
+                  return False
+              names = {b".gitignore", b"LICENSE", b"LICENSE.txt", b"COPYING",
+                       b"COPYING.txt", b"NOTICE", b"NOTICE.txt"}
+              for entry in raw[:-1].split(b"\0"):
+                  metadata, separator, path = entry.partition(b"\t")
+                  fields = metadata.split(b" ")
+                  if (not separator or len(fields) != 3
+                          or fields[:2] != [b"100644", b"blob"]
+                          or re.fullmatch(rb"[0-9a-f]{40}", fields[2]) is None):
+                      return False
+                  if (any(part in (b"", b".", b"..") for part in path.split(b"/"))
+                          or any(char in path for char in (b"\n", b"\r", b"\t"))):
+                      return False
+                  if not (path in names or path.endswith((b".md", b".markdown", b".rst"))
+                          or (path.startswith(b"evaluations/") and path.endswith(b".json"))):
+                      return False
+              return True
+
+          try:
+              expected = os.environ.get("PR_HEAD_SHA", "")
+              if re.fullmatch(r"[0-9a-f]{40}", expected) is None:
+                  sys.exit(1)
+              head = subprocess.run(
+                  ["git", "rev-parse", "--verify", "HEAD"], check=True,
+                  capture_output=True, text=True, shell=False, timeout=30,
+              ).stdout.strip()
+              if head != expected:
+                  sys.exit(1)
+              with tempfile.TemporaryFile() as inventory:
+                  subprocess.run(
+                      ["git", "ls-tree", "-r", "-z", "--full-tree", expected],
+                      check=True, stdout=inventory, stderr=subprocess.PIPE,
+                      shell=False, timeout=30,
+                  )
+                  inventory.seek(0)
+                  raw = inventory.read(4 * 1024 * 1024 + 1)
+              if len(raw) > 4 * 1024 * 1024 or not content_only(raw):
+                  sys.exit(1)
+          except (OSError, UnicodeError, subprocess.SubprocessError):
+              sys.exit(1)
+          file_count = raw.count(b"\0")
+          print(f"CodeQL content-only inventory: head={expected}; files={file_count}")
+          PY_CONTENT_ONLY
+            then
+              code=false
+              echo "::notice::CodeQL not applicable: exact head contains only plain documents, known metadata, and evaluation JSON. Other security gates remain required; no CodeQL scan verdict is asserted."
             fi
           fi
           echo "code=${code}" >> "$GITHUB_OUTPUT"
