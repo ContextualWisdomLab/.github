@@ -39,7 +39,7 @@ def test_sanitizes_url_credentials_without_secret_key_prefix():
 def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
     source = tmp_path / "coverage.md"
     destination = tmp_path / "coverage-output.md"
-    source.write_text("DATABASE_URL=postgresql://user:secret@db/app\n- Result: PASS\n", encoding="utf-8")
+    source.write_text("DATABASE_URL=postgresql://user:secret@db/app\n- Result: PASS", encoding="utf-8")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -50,8 +50,9 @@ def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
         ],
     )
 
-    with pytest.raises(SystemExit) as excinfo:
-        runpy.run_path("scripts/ci/sanitize_github_output_summary.py", run_name="__main__")
+    from scripts.ci.sanitize_github_output_summary import main
 
-    assert excinfo.value.code == 0
-    assert destination.read_text(encoding="utf-8") == "DATABASE_URL=<redacted>\n- Result: PASS\n"
+    result = main()
+
+    assert result == 0
+    assert destination.read_text(encoding="utf-8") == "DATABASE_URL=<redacted>\n- Result: PASS"
