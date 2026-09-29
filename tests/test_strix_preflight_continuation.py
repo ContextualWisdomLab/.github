@@ -77,8 +77,8 @@ def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp
     script = '\n'.join((
         'strix_terminal_log="$RUNNER_TEMP/strix_gate_console.log"',
         'strix_rc=1',
-        "backend_unavailable_signal='LLM CONNECTION FAILED|STRIX_PROVIDER_UNAVAILABLE'",
-        "runtime_transport_signal='LLM CONNECTION FAILED'",
+        'backend_unavailable_signal=' + source.split('          backend_unavailable_signal=', 1)[1].splitlines()[0],
+        'runtime_transport_signal=' + source.split('          runtime_transport_signal=', 1)[1].splitlines()[0],
         "model_behavior_error_signal='ModelBehaviorError'",
         "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|severity[[:space:]]*:'",
         "tooling_error_signal='STRIX_TOOLING_ERROR'",
@@ -92,6 +92,29 @@ def test_runtime_provider_failure_emits_bounded_continuation_without_passing(tmp
     assert emitted['transport_retry_next_attempt'] == '1'
 
     output.unlink()
+    log.write_text("STRIX_PROVIDER_UNAVAILABLE: orchestrator/free exhausted\nError code: 503 - {'error': {'code': 'concurrency_limit_exceeded'}}\n")
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert 'transport_retry_eligible=true' in output.read_text()
+
+    output.unlink()
+    log.write_text(
+        "STRIX_PROVIDER_UNAVAILABLE: orchestrator/free exhausted\n"
+        "Error code: 503 - {'error': {'code': 'concurrency_limit_exceeded'}}\n"
+        "Error code: 503 - {'error': {'code': 'provider_outcome_unknown'}}\n"
+    )
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+    output.unlink(missing_ok=True)
+    log.write_text("STRIX_PROVIDER_UNAVAILABLE: orchestrator/free exhausted\nError code: 503 - {'error': {'code': 'provider_outcome_unknown'}}\n")
+    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert not output.exists()
+
+    log.write_text('LLM CONNECTION FAILED\nError: Request timed out.\n')
+
     result = subprocess.run(['bash', '-c', script], env=env | {'NOEMA_TRANSPORT_RETRY_ATTEMPT': '2'}, capture_output=True, text=True)
     assert result.returncode == 1
     assert 'transport_retry_eligible=false' in output.read_text()
