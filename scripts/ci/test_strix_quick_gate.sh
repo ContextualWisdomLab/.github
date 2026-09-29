@@ -525,7 +525,8 @@ assert_strix_llm_file_read_is_literal_data() {
 }
 
 assert_strix_child_target_uses_constant_argument() {
-	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'REPORT_SCOPE_INSTRUCTION = (' "strix gate asks the scanner to name reviewed files so strix_report_scope.py can attest PR scope on a clean scan"
 	assert_file_contains "$GATE_SCRIPT" 'cwd=str(scan_working_dir)' "strix gate runs the child process outside the scan target"
 	assert_file_contains "$GATE_SCRIPT" 'make_pull_request_scope_dir()' "strix gate creates PR scopes under its private runtime directory"
 	assert_file_contains "$GATE_SCRIPT" 'scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"' "strix gate keeps PR scopes inside the private runtime directory"

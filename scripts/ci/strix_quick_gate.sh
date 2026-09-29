@@ -2918,7 +2918,14 @@ scan_output_dir.mkdir()
 # Keep scanner-created state and relative report files outside the untrusted
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
-command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
+# strix_report_scope.py only accepts a completed PR scan whose report names a
+# changed file. A clean scan's report otherwise mentions paths at the model's
+# discretion, so ask for them explicitly; the attestation check is unchanged.
+REPORT_SCOPE_INSTRUCTION = (
+    "In the final penetration test report, list every source file you reviewed "
+    "by its path relative to the scan target, including files with no findings."
+)
+command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]
 
 try:
     process = subprocess.Popen(
