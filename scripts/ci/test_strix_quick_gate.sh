@@ -3364,6 +3364,7 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
+scan_args="$*"
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -5302,6 +5303,10 @@ EOS
 		esac
 		;;
 	pr-changed-scope-bounded)
+		if [[ "$scan_args" != *"--instruction"*"repository-relative path"* ]]; then
+			echo "Error: PR scan did not request repository-relative source evidence" >&2
+			exit 44
+		fi
 		if [ -z "$target_path" ]; then
 			echo "Error: target path missing" >&2
 			exit 41
@@ -5829,6 +5834,15 @@ PY
 			STRIX_EXECUTABLE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
 		)
 	fi
+	if [ "$scenario" = "pr-changed-scope-bounded" ]; then
+		local fake_strix_sha256
+		fake_strix_sha256="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$fake_strix")"
+		env_cmd+=(
+			IS_PR_EVIDENCE_RUN="true"
+			STRIX_EXECUTABLE_ROOT="$bin_dir"
+			STRIX_EXECUTABLE_SHA256="$fake_strix_sha256"
+		)
+	fi
 	if [ "$scenario" = "pr-executable-root-group-writable" ]; then
 		local fake_strix_sha256
 		fake_strix_sha256="$(python3 - "$fake_strix" <<'PY'
@@ -6166,6 +6180,29 @@ run_github_models_http410_case() {
 		"1"
 }
 
+run_pr_changed_scope_bounded_case() {
+	run_gate_case "pr-changed-scope-bounded" \
+		"openai/gpt-4o-mini" \
+		"" \
+		"0" \
+		"scan ok with bounded changed-file scope" \
+		"1" \
+		"openai/gpt-4o-mini" \
+		"https://example.invalid" \
+		"vertex_ai" \
+		"__DEFAULT__" \
+		"" \
+		"0" \
+		"CRITICAL" \
+		"0" \
+		"" \
+		"" \
+		"1200" \
+		"0" \
+		"pull_request" \
+		"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+}
+
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
@@ -6180,6 +6217,9 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	pr-changed-scope-bounded)
+		run_pr_changed_scope_bounded_case
 		;;
 	contextual-orchestrator-missing-api-base-fails-closed)
 		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
@@ -11687,26 +11727,7 @@ run_timeout_cleanup_case
 
 run_total_timeout_case
 
-run_gate_case "pr-changed-scope-bounded" \
-	"openai/gpt-4o-mini" \
-	"" \
-	"0" \
-	"scan ok with bounded changed-file scope" \
-	"1" \
-	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
-	"vertex_ai" \
-	"__DEFAULT__" \
-	"" \
-	"0" \
-	"CRITICAL" \
-	"0" \
-	"" \
-	"" \
-	"1200" \
-	"0" \
-	"pull_request" \
-	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+run_pr_changed_scope_bounded_case
 
 run_gate_case "scan-working-directory-isolated" \
 	"openai/gpt-4o-mini" \

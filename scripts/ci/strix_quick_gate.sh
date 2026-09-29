@@ -2914,6 +2914,14 @@ scan_output_dir.mkdir()
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
 command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
+if require_integrity:
+    command.extend([
+        "--instruction",
+        "Inspect changed source in the supplied PR target. In the final technical "
+        "analysis, name the repository-relative path of at least one source file "
+        "you actually inspected. If source inspection was not possible, state "
+        "that limitation.",
+    ])
 
 try:
     process = subprocess.Popen(
