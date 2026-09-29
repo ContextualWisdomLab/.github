@@ -14,6 +14,11 @@ def _token(text: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w.-]){re.escape(text)}(?![\w-]|\.\w)")
 
 
+def _file_token(text: str) -> re.Pattern[str]:
+    """Match a file name only when no longer name or child path continues it."""
+    return re.compile(rf"(?<![\w.-]){re.escape(text)}(?![\w/-]|\.\w)")
+
+
 def names_changed_path(report: str, path: str) -> bool:
     """Return whether the report names the path, or its file within a named directory.
 
@@ -23,7 +28,7 @@ def names_changed_path(report: str, path: str) -> bool:
     if path in report:
         return True
     directory, _, name = path.rpartition("/")
-    if not directory or _token(name).search(report) is None:
+    if not directory or _file_token(name).search(report) is None:
         return False
     if f"{directory}/" in report:
         return True
