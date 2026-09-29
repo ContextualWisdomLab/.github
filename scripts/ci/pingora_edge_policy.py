@@ -24,14 +24,14 @@ Suffix decision: most research-data formats (``.xlsx``, ``.sav``, ``.rds``,
 ``.npz``, ...) have no entry in ``BINARY_DOCUMENT_MAGIC``, which only knows
 ``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
 format, a file under a declared prefix whose suffix has no magic entry is
-admitted on the stricter complement of the UTF-8 decode this module already
-performs for every ordinarily-scanned file: no diff patch available, *and* the
-fetched bytes fail to decode as UTF-8. That keeps the module's central
-guarantee honest -- a file that decodes as valid UTF-8 is never treated as a
-binary artifact, since scanning exactly that content is what this module
-exists to do -- while still admitting genuinely opaque research binaries
-without maintaining an open-ended magic-byte catalog. A suffix that *does*
-have a magic entry keeps that entry's existing structural evidence check
+admitted only when no diff patch is available, the fetched bytes fail to decode
+as UTF-8, and their replacement-decoded text contains no prohibited runtime
+pattern. That keeps the module's central guarantee honest -- a file that
+decodes as valid UTF-8 is never treated as a binary artifact, and one stray
+invalid byte cannot conceal a readable runtime command -- while still
+admitting genuinely opaque research binaries without maintaining an open-ended
+magic-byte catalog. A suffix that *does* have a magic entry keeps that entry's
+existing structural evidence check
 (``_is_complete_png``, ``_is_complete_hwpx``, or the raw magic-prefix check for
 ``.pdf``) even under a declared prefix.
 """
@@ -58,6 +58,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
 MAX_BLOB_BYTES = 100_000_000
+# Decoded-pixel bound for PNG validation, separate from the HTTP response cap:
+# a valid 2238x2052 RGBA screenshot decodes to 18.4 MB. 128 MiB covers 16-bit
+# RGBA up to 4K and 8-bit RGBA up to 6K while keeping zlib output bounded.
+MAX_PNG_DECODED_BYTES = 134_217_728
 REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # A base ref threaded into evaluate_pull_request may be either a branch name
@@ -672,6 +676,8 @@ def _binary_documentation_evidence_confirms(
     bytes that decode cleanly are never admitted this way, so a valid-UTF-8
     file cannot be mistaken for a binary artifact merely by sitting under a
     declared prefix -- it still reaches the normal content scan instead.
+    Inspect readable text even when other bytes are invalid UTF-8, so a stray
+    binary byte cannot conceal an active runtime command.
     """
 
     try:
@@ -687,7 +693,8 @@ def _binary_documentation_evidence_confirms(
         try:
             raw.decode("utf-8")
         except UnicodeDecodeError:
-            return True
+            readable = raw.decode("utf-8", errors="replace")
+            return not any(pattern.search(readable) for _, pattern in CONTENT_RULES)
         return False
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
 
@@ -830,7 +837,7 @@ def _is_complete_png(raw: bytes) -> bool:
                 pass_height = (height - y_start + y_step - 1) // y_step
                 row_bytes = (pass_width * channels * bit_depth + 7) // 8
                 expected_size += pass_height * (row_bytes + 1)
-                if expected_size > MAX_RESPONSE_BYTES:
+                if expected_size > MAX_PNG_DECODED_BYTES:
                     return False
                 scanlines.append((pass_height, row_bytes, pass_width))
             decoder = zlib.decompressobj()

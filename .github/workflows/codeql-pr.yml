@@ -6,11 +6,14 @@
 # runner, then one coordinator POSTs repository_dispatch to
 # codeql-scan-dispatch.yml (native, unrestricted, in
 # ContextualWisdomLab/.github) with the remaining language matrix. The
-# handler publishes codeql-dispatch/<language> and reruns only that exact
-# failed job. On rerun the shard reads the terminal status once. Design:
+# handler publishes a base/run/source-bound codeql-dispatch receipt and reruns
+# only that exact failed job. On rerun the shard reads the terminal status once. Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
+# Only the trusted main workflow uses the control group. PR-authored workflow
+# revisions retain hosted execution; organization group restrictions also enforce
+# the exact main path. Heavy scans stay on the dedicated CodeQL runner.
 name: CodeQL PR
 
 on:
@@ -56,7 +59,8 @@ jobs:
   detect-languages:
     name: Detect CodeQL languages
     if: github.event.action != 'closed'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -148,8 +152,11 @@ jobs:
     # dependency exactly; the only case where it's genuinely skipped is a
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    # Verdict reads have exceeded five minutes; retain the ten-minute control budget.
+    timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       id-token: write
       pull-requests: read
@@ -160,7 +167,7 @@ jobs:
     steps:
       - name: Read current-head CodeQL dispatch verdict
         # Shards never dispatch. They re-check the live head, consume an
-        # authenticated codeql-dispatch/<language> verdict when one exists,
+        # authenticated base/run/source-bound CodeQL verdict when one exists,
         # and otherwise fail pending so the runner is released. One
         # coordinator job POSTs the remaining language matrix after every
         # shard has a job id.
@@ -179,21 +186,34 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
+          live_merge="$(printf '%s' "$live_pr" | jq -r '.merge_commit_sha // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
-          if [ -z "$live_head" ] || [ -z "$live_state" ]; then
+          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ && "$live_head" =~ ^[0-9a-fA-F]{40}$ ]] || [[ "$live_state" != "open" && "$live_state" != "closed" ]]; then
             echo "::error::Could not validate live pull request state before CodeQL dispatch."
             exit 1
           fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head CodeQL scan is not requested."
+            echo "verdict=obsolete" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ]; then
+            # A lagging API read or diverged history must not retire the current scan.
+            comparison="$(gh api "repos/${TARGET_REPOSITORY}/compare/${PR_HEAD_SHA}...${live_head}")"
+            if ! printf '%s' "$comparison" | jq -e '
+              .status == "ahead" and .behind_by == 0 and
+              ((.ahead_by | type) == "number") and .ahead_by >= 1
+            ' >/dev/null; then
+              echo "::error::Live head does not prove this CodeQL shard was superseded."
+              exit 1
+            fi
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
+            echo "verdict=obsolete" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Could not validate live pull request base SHA before CodeQL verdict read."
+          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_merge" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not validate live pull request base/source SHA before CodeQL verdict read."
             exit 1
           fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
@@ -202,13 +222,17 @@ jobs:
           fi
 
           statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
-          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
+          expected_context="codeql-dispatch/${LANGUAGE}/${live_base}"
+          expected_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${live_merge}"
+          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "$expected_context" --arg description "$expected_description" '
             [
               .[]
               | select(.context == $ctx)
+              | select(.description == $description)
               | select(
                   (.creator.login // "" | ascii_downcase) as $creator
                   | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                  or $creator == "cwl-noema-review" or $creator == "cwl-noema-review[bot]"
                 )
             ]
             | first // {} | .state // empty
@@ -221,9 +245,15 @@ jobs:
               ;;
           esac
 
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}/${live_merge}"
           expected_job="CodeQL dispatch scan (${LANGUAGE})"
-          runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
+          # A dispatch bound to this required run cannot predate its creation.
+          required_created_at="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}" --jq .created_at)"
+          if ! [[ "$required_created_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::error::Could not validate required run creation time before CodeQL verdict lookup."
+            exit 1
+          fi
+          runs_json="$(gh api --method GET --paginate -f per_page=100 -f event=repository_dispatch -f created=">=${required_created_at}" "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs" | jq -s .)"
           run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
             [
               .[] | .workflow_runs[]
@@ -236,7 +266,7 @@ jobs:
             | .id // empty
           ')"
           if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
-            jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
+            jobs_json="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs" | jq -s .)"
             dispatch_job="$(printf '%s' "$jobs_json" | jq -c --arg name "$expected_job" '
               [.[] | .jobs[] | select(.name == $name)]
               | if length == 1 then .[0] else empty end
@@ -245,11 +275,20 @@ jobs:
               gate_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
                 (.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion) // empty
               ')"
+              ghas_identity_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
+                (.steps[]? | select(.name == "Verify GHAS base/head CodeQL configuration identity") | .conclusion) // empty
+              ')"
+              sarif_upload_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
+                (.steps[]? | select(.name == "Preserve CodeQL SARIF evidence") | .conclusion) // empty
+              ')"
               case "$gate_conclusion" in
                 success)
-                  echo "verdict=success" >>"$GITHUB_OUTPUT"
-                  echo "Found completed CodeQL dispatch scan gate for ${LANGUAGE}: success."
-                  exit 0
+                  if [ "$ghas_identity_conclusion" = "success" ] &&
+                    [ "$sarif_upload_conclusion" = "success" ]; then
+                    echo "verdict=success" >>"$GITHUB_OUTPUT"
+                    echo "Found completed CodeQL dispatch proof for ${LANGUAGE}: gate, GHAS identity, and SARIF evidence succeeded."
+                    exit 0
+                  fi
                   ;;
                 failure|cancelled|skipped)
                   echo "verdict=failure" >>"$GITHUB_OUTPUT"
@@ -269,7 +308,7 @@ jobs:
           fi
 
           if [ "$RUN_ATTEMPT" != "1" ]; then
-            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
+            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict; GHAS identity and preserved SARIF are required for authenticated terminal proof."
             exit 1
           fi
           echo "verdict=pending" >>"$GITHUB_OUTPUT"
@@ -287,6 +326,9 @@ jobs:
             exit 1
           fi
           case "$VERDICT_STATE" in
+            obsolete)
+              echo "Closed or superseded PR shard; no scan verdict is asserted."
+              ;;
             success)
               echo "Current-head CodeQL dispatch verdict for ${LANGUAGE}: success."
               ;;
@@ -313,7 +355,8 @@ jobs:
       && github.event.pull_request.state != 'closed'
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator') && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    timeout-minutes: 5
     permissions:
       contents: read
       id-token: write
@@ -339,6 +382,7 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
+          live_merge="$(printf '%s' "$live_pr" | jq -r '.merge_commit_sha // empty')"
           live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref // empty')"
           live_head_ref="$(printf '%s' "$live_pr" | jq -r '.head.ref // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
@@ -358,8 +402,10 @@ jobs:
             echo "::error::CodeQL dispatch requires a canonical current run id."
             exit 1
           fi
-          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "$live_base_ref" ] || [ -z "$live_head_ref" ]; then
-            echo "::error::Could not validate live pull request base identity before CodeQL dispatch."
+          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_merge" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ -z "$live_base_ref" ] || [ -z "$live_head_ref" ]; then
+            echo "::error::Could not validate live pull request base/source identity before CodeQL dispatch."
             exit 1
           fi
 
@@ -396,13 +442,17 @@ jobs:
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
-            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${language}" '
+            expected_context="codeql-dispatch/${language}/${live_base}"
+            expected_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${live_merge}"
+            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "$expected_context" --arg description "$expected_description" '
               [
                 .[]
                 | select(.context == $ctx)
+                | select(.description == $description)
                 | select(
                     (.creator.login // "" | ascii_downcase) as $creator
                     | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                    or $creator == "cwl-noema-review" or $creator == "cwl-noema-review[bot]"
                   )
               ]
               | first // {} | .state // empty
@@ -460,5 +510,6 @@ jobs:
             --argjson matrix "$pending_matrix" \
             --arg required_run_id "$REQUIRED_RUN_ID" \
             --argjson required_jobs "$required_jobs" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
+            --arg producer_source_sha "$live_merge" \
+            '{event_type:"codeql-scan-v2",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head:{schema:"1",ref:$pr_head_ref,sha:$pr_head_sha},producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -

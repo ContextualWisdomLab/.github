@@ -644,6 +644,36 @@ def test_valid_utf8_file_under_declared_prefix_is_still_scanned() -> None:
     assert [item.rule for item in result] == ["nginx_runtime_path"]
 
 
+@pytest.mark.parametrize("name", ["deploy.sh", "deploy.dat", "deploy.txt"])
+def test_declared_prefix_does_not_admit_binary_marked_nginx_runtime(name: str) -> None:
+    """A stray non-UTF-8 byte cannot hide readable runtime commands."""
+
+    raw = b"#!/bin/sh\nnginx -c /etc/nginx/nginx.conf\n# \xff\n"
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2197/files" in url:
+            return [{"filename": f"docs/delivery_interim_20260920/{name}", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("docs/delivery_interim_20260920/\n")
+        assert f"/contents/docs/delivery_interim_20260920/{name}" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=2197,
+            head_sha="e" * 40,
+            event_action="opened",
+            token="token",
+            base_ref="main",
+            opener=opener,
+        )
+
+
 @pytest.mark.parametrize(
     ("declaration_text", "message"),
     [
@@ -764,6 +794,33 @@ def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
     assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
 
 
+def test_png_decoded_size_is_not_bounded_by_the_http_response_cap() -> None:
+    """A valid 2238x2052 RGBA screenshot decodes past 16 MiB and is still a PNG.
+
+    Regression for late-life-anxiety-reanalysis#257: five macOS window
+    screenshots under a declared artifact prefix were rejected, then reported
+    as "not valid UTF-8", because the decoded-pixel bound reused the HTTP
+    response cap.
+    """
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    width, height = 2238, 2052
+    decoded = (b"\0" + b"\0" * (width * 4)) * height
+    assert len(decoded) > policy.MAX_RESPONSE_BYTES
+    header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    raw = (
+        policy.PNG_SIGNATURE
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(decoded))
+        + chunk(b"IEND", b"")
+    )
+    assert len(raw) < policy.MAX_FILE_BYTES
+    assert policy._is_complete_png(raw)
+
+
 def test_png_semantic_validation_fails_closed() -> None:
     """CRC-valid chunks still need a valid bounded PNG image stream."""
 
@@ -835,7 +892,7 @@ def test_png_semantic_validation_fails_closed() -> None:
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0") + b"x"), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
-    huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    huge = (policy.MAX_PNG_DECODED_BYTES // 4).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
     assert not policy._is_complete_png(png(huge, image, end))
 
     adam7 = (8).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
