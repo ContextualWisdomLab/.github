@@ -112,6 +112,7 @@ def test_document_text_truncation_and_cli(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 4)
     assert document._bounded_text("ééé").startswith("éé\n[document text truncated;")
     assert document._bounded_text("ok") == "ok"
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 256 * 1024)
 
     path = tmp_path / "review.docx"
     path.write_bytes(_docx(_body("<w:p><w:r><w:t>ok</w:t></w:r></w:p>")))
