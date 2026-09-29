@@ -798,3 +798,98 @@ def test_dispatched_agents_reuses_the_caller_owned_cache() -> None:
 
     assert observed == frozenset({"cwl-noema-review"})
     assert len(client.calls) == 1
+
+def test_github_client_cancellation_event_cancels_before_request(monkeypatch) -> None:
+    """The client checks cancellation before the request."""
+    module = load_module()
+    client = module.GitHubClient("token")
+
+    event_before = module.threading.Event()
+    event_before.set()
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        client.request(["repos/x/y"], cancellation_event=event_before)
+
+def test_github_client_cancellation_event_cancels_after_request(monkeypatch) -> None:
+    """The client checks cancellation after the request."""
+    module = load_module()
+    client = module.GitHubClient("token")
+
+    event_after = module.threading.Event()
+    def fake_run_after(*args, **kwargs):
+        event_after.set()
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+    monkeypatch.setattr(module.subprocess, "run", fake_run_after)
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        client.request(["repos/x/y"], cancellation_event=event_after)
+
+def test_github_client_cancellation_event_cancels_during_timeout(monkeypatch) -> None:
+    """The client checks cancellation during a timeout exception."""
+    module = load_module()
+    client = module.GitHubClient("token")
+
+    event_after = module.threading.Event()
+    def fake_run_timeout(*args, **kwargs):
+        event_after.set()
+        raise module.subprocess.TimeoutExpired(cmd=args[0], timeout=30)
+    monkeypatch.setattr(module.subprocess, "run", fake_run_timeout)
+    with pytest.raises(RuntimeError, match="gh api request cancelled"):
+        client.request(["repos/x/y"], cancellation_event=event_after)
+
+def test_github_client_cancellation_event_does_not_cancel_during_backoff(monkeypatch) -> None:
+    """The client checks cancellation during sleep but does not raise if not set."""
+    module = load_module()
+    client = module.GitHubClient("token")
+
+    event = module.threading.Event()
+    attempts = []
+
+    def fake_run(*args, **kwargs):
+        attempts.append(args)
+        if len(attempts) == 1:
+            return SimpleNamespace(stdout="", stderr="API rate limit exceeded", returncode=1)
+        return SimpleNamespace(stdout='{"ok": true}', stderr="", returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    result = client.request(["repos/x/y"], cancellation_event=event)
+    assert result == {"ok": True}
+    assert len(attempts) == 2
+
+def test_dispatched_agents_aborts_concurrent_fetches_on_failure(monkeypatch) -> None:
+    """A failure during concurrent fetches cleanly cancels the executor."""
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+
+    import threading
+    worker_started = threading.Event()
+    worker_can_finish = threading.Event()
+
+    def fetch_with_error(args, *, input_payload=None, cancellation_event=None):
+        name_param = args[4]
+        if "opencode-agent" in name_param or "008f5" in name_param:
+            worker_started.set()
+            if cancellation_event is not None:
+                cancellation_event.wait(timeout=5)
+            worker_can_finish.set()
+            return {"artifacts": [], "total_count": 0}
+        assert worker_started.wait(timeout=2)
+        raise RuntimeError("simulated artifact failure")
+
+    monkeypatch.setattr(client, "request", fetch_with_error)
+    shutdown_called_with_wait = False
+    real_executor = module.concurrent.futures.ThreadPoolExecutor
+
+    class MockExecutor(real_executor):
+        def shutdown(self, wait=True, cancel_futures=False):
+            nonlocal shutdown_called_with_wait
+            if not wait and cancel_futures:
+                shutdown_called_with_wait = True
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(module.concurrent.futures, "ThreadPoolExecutor", MockExecutor)
+    with pytest.raises(RuntimeError, match="simulated artifact failure"):
+        module.dispatched_agents(request, client)
+    assert shutdown_called_with_wait

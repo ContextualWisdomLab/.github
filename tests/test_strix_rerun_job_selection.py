@@ -19,8 +19,8 @@ def _strix_job(name: str, job_id: int, conclusion: str) -> dict:
     }
 
 
-def test_strix_job_selection_excludes_sibling_publisher() -> None:
-    """A skipped status-publisher sibling must not count as the scan job."""
+def test_dispatch_strix_reruns_scan_job_not_sibling_publisher(monkeypatch) -> None:
+    """A skipped status-publisher sibling must never be selected as the Strix rerun target."""
     pr = {
         "number": 1055,
         "statusCheckRollup": {
@@ -32,4 +32,27 @@ def test_strix_job_selection_excludes_sibling_publisher() -> None:
             }
         },
     }
-    assert sched.matching_actions_job_id(pr, sched.is_strix_scan_check_run) == "99212031836"
+    reruns: list[tuple[str, str, str]] = []
+
+    def record_rerun(repo: str, job_id: str, *, dry_run: bool, action: str) -> None:
+        reruns.append((repo, job_id, action))
+
+    monkeypatch.setattr(sched, "rerun_actions_job", record_rerun)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
+
+    assert (
+        sched.dispatch_strix_evidence(
+            "ContextualWisdomLab/bandscope",
+            "Strix Security Scan",
+            pr,
+            dry_run=False,
+        )
+        == "rerun"
+    )
+    assert reruns == [
+        (
+            "ContextualWisdomLab/bandscope",
+            "99212031836",
+            "rerun-strix-evidence",
+        )
+    ]

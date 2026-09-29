@@ -1,9 +1,0 @@
-[package]
-name = "coverage-cargo-fixtures"
-version = "0.0.0"
-edition = "2021"
-
-[dependencies]
-itoa = "=1.0.15"
-ryu = "=1.0.20"
-pyo3 = { version = "=0.22.6", features = ["extension-module", "abi3-py310"] }

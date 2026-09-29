@@ -193,6 +193,8 @@ class GitHubClient:
                     timeout=GITHUB_API_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired as exc:
+                if cancellation_event is not None and cancellation_event.is_set():
+                    raise RuntimeError("gh api request cancelled") from exc
                 raise RuntimeError(
                     "gh api timed out after "
                     f"{GITHUB_API_TIMEOUT_SECONDS} seconds"

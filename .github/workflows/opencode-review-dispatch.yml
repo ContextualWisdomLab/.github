@@ -53,9 +53,7 @@ jobs:
     # inside a 13h57m run, ~97.5% of which was queue wait between exactly
     # these job boundaries).
     if: github.event_name == 'repository_dispatch'
-    runs-on:
-      group: CWL central OpenCode
-      labels: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -396,9 +394,7 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on:
-      group: CWL central OpenCode
-      labels: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -454,15 +450,6 @@ jobs:
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
-          # Persistent runners retain old files and Git configuration between jobs.
-          if [ -z "${GITHUB_WORKSPACE:-}" ] || [ -z "${RUNNER_WORKSPACE:-}" ] ||
-            [ -L "$GITHUB_WORKSPACE" ] || [ "$RUNNER_WORKSPACE" = / ] ||
-            [ "$(realpath "$GITHUB_WORKSPACE")" != "$(pwd -P)" ] ||
-            [ "$(dirname "$(realpath "$GITHUB_WORKSPACE")")" != "$(realpath "$RUNNER_WORKSPACE")" ]; then
-            echo "::error::Coverage workspace is outside the current runner job directory."
-            exit 1
-          fi
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
           git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
@@ -479,11 +466,11 @@ jobs:
       - name: Prepare pull request merge tree for coverage measurement
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
         run: |
           set -euo pipefail
-          # Each attempt owns a fresh tree; never delete another job's checkout.
-          mkdir "$COVERAGE_SOURCE_WORKDIR"
+          rm -rf "$COVERAGE_SOURCE_WORKDIR"
+          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
@@ -533,7 +520,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -568,7 +555,7 @@ jobs:
       - name: Enforce changed-file syntax gate
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
         run: |
           set -euo pipefail
           # Deterministic per-file syntax check on the PR's changed files. The
@@ -600,7 +587,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
           # Apply wheel-only resolution in the same step that consumes
           # pull-request dependency metadata. A value on an earlier step does
           # not cross the GitHub Actions step boundary.
@@ -645,15 +632,10 @@ jobs:
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
-            trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
             trusted_vcs_import_root_resolver="${GITHUB_WORKSPACE}/scripts/ci/resolve_opencode_base_vcs_import_root.sh"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
-              exit 1
-            fi
-            if [ ! -f "$trusted_noema_document_requirements" ] || [ -L "$trusted_noema_document_requirements" ]; then
-              echo "::error::Trusted Noema document requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
@@ -669,26 +651,10 @@ jobs:
             chmod 0700 "$coverage_build_dir"
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
-            install -m 0644 "$trusted_noema_document_requirements" \
-              "$coverage_build_dir/requirements-noema-document-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
             install -m 0755 "$trusted_vcs_import_root_resolver" \
               "$coverage_build_dir/resolve-opencode-base-vcs-import-root.sh"
-            trusted_cargo_fixture="${GITHUB_WORKSPACE}/tests/fixtures/coverage-cargo"
-            if [ -L "$trusted_cargo_fixture" ] || [ -L "$trusted_cargo_fixture/src" ]; then
-              echo "::error::Trusted Cargo coverage fixture directories must not be symlinks."
-              exit 1
-            fi
-            for fixture_file in Cargo.toml Cargo.lock src/lib.rs; do
-              if [ ! -f "$trusted_cargo_fixture/$fixture_file" ] ||
-                [ -L "$trusted_cargo_fixture/$fixture_file" ]; then
-                echo "::error::Trusted Cargo coverage fixture is missing or not a regular file."
-                exit 1
-              fi
-              install -D -m 0644 "$trusted_cargo_fixture/$fixture_file" \
-                "$coverage_build_dir/coverage-cargo-fixtures/$fixture_file"
-            done
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -747,30 +713,10 @@ jobs:
             # the generic Python coverage path failed at collection with `ImportError: cannot
             # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
             # even when the pull request itself introduced no regression.
-            rust_lock_args=()
-            rust_change_files="${RUNNER_TEMP}/opencode-rust-change-files"
-            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --no-renames --name-only -z \
-              "$PR_BASE_SHA" "$PR_HEAD_SHA" >"$rust_change_files"; then
-              echo "::error::Could not classify exact-head Cargo changes." >&2
-              exit 1
-            fi
-            rust_lock_changed=0
-            rust_manifest_changed=0
-            while IFS= read -r -d '' changed_path; do
-              case "${changed_path##*/}" in
-                Cargo.lock) rust_lock_changed=1 ;;
-                Cargo.toml) rust_manifest_changed=1 ;;
-              esac
-            done <"$rust_change_files"
-            if [ "$rust_lock_changed" -eq 1 ] && [ "$rust_manifest_changed" -eq 0 ]; then
-              # The trusted materializer still rejects non-base pins and changed graphs.
-              rust_lock_args=(--head-sha "$PR_HEAD_SHA")
-            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
               --output-dir "$coverage_build_dir/base-rust-dependencies" \
-              "${rust_lock_args[@]}" \
               --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
@@ -797,11 +743,6 @@ jobs:
               vulkan-tools \
               xz-utils \
             && rm -rf /var/lib/apt/lists/*
-          COPY coverage-cargo-fixtures /tmp/coverage-cargo-fixtures
-          RUN CARGO_HOME=/opt/coverage-cargo-home cargo fetch --locked \
-                --manifest-path /tmp/coverage-cargo-fixtures/Cargo.toml \
-            && rm -rf /tmp/coverage-cargo-fixtures \
-            && chmod -R a+rX /opt/coverage-cargo-home
           ENV LLVM_COV=/usr/bin/llvm-cov-19
           ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
           ENV COREPACK_HOME=/opt/corepack
@@ -992,7 +933,6 @@ jobs:
             chown -R root:root /work/.git
             chmod -R go-w /work/.git
           fi
-          rm -rf -- /work/.opencode-sandbox-home
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
@@ -1000,15 +940,12 @@ jobs:
           # the read-only image -- so the baked offline vendor config from
           # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
           # copied there explicitly rather than set as an image ENV default.
-          mkdir -p /work/.opencode-sandbox-home/.cargo
-          cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/
           if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
-            install -m 0644 /opt/base-rust-dependencies/cargo-config.toml \
+            mkdir -p /work/.opencode-sandbox-home/.cargo
+            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
               /work/.opencode-sandbox-home/.cargo/config.toml
+            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           fi
-          printf '\n[net]\noffline = true\n' >>/work/.opencode-sandbox-home/.cargo/config.toml
-          chmod 0444 /work/.opencode-sandbox-home/.cargo/config.toml
-          chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
@@ -2403,9 +2340,7 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on:
-      group: CWL central OpenCode
-      labels: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -2522,16 +2457,8 @@ jobs:
           printf 'Validated exact-head OpenCode review source for %s#%s (%s).\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$head_repository"
 
-      - name: Set up lock-compatible sidecar Python
-        id: sidecar_python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-          update-environment: false
-
       - name: Provision contextual-orchestrator review sidecar
         env:
-          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
@@ -4063,7 +3990,7 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
                   "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
@@ -5372,9 +5299,13 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            # Infrastructure failure is not a source-backed product verdict.
-            # COMMENT preserves diagnostics while coverage and receipt gates fail closed.
-            event="COMMENT"
+            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
+            # FORMAL_STATES, so the required workflow's "Fail closed without a
+            # current-head OpenCode verdict" job never sees a receipt, the
+            # rerun step gated on that receipt is skipped, and the required
+            # check fails closed forever instead of settling on an honest
+            # verdict.
+            event="REQUEST_CHANGES"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5385,7 +5316,10 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # Retain the coverage blocker independently of the diagnostic review.
+            # create_pull_review REQUEST_CHANGES rewrites the status comment to
+            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
+            # never looks finished; next action stays "fix coverage evidence,
+            # then rerun".
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }
