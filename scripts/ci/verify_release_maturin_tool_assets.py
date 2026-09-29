@@ -32,6 +32,7 @@ MAX_BINARY_BYTES = 32 * 1024 * 1024
 
 
 def _download(filename: str) -> bytes:
+    """Download one pinned-version maturin release asset within the size limit."""
     url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
     with urlopen(Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60) as response:
         raw = response.read(MAX_ASSET_BYTES + 1)
@@ -41,6 +42,7 @@ def _download(filename: str) -> bytes:
 
 
 def _binary(raw: bytes, filename: str) -> bytes:
+    """Extract the single expected maturin executable within the size limit."""
     if filename.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
@@ -95,6 +97,7 @@ def verify_assets(evidence: dict, reader: str, fetch=_download) -> None:
 
 
 def main() -> None:
+    """Verify pinned maturin asset evidence using downloaded or supplied archives."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--asset-root", type=Path)
     args = parser.parse_args()
