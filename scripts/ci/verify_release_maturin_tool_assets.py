@@ -33,8 +33,11 @@ MAX_BINARY_BYTES = 32 * 1024 * 1024
 
 def _download(filename: str) -> bytes:
     url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
-    # URL is a fixed https://github.com prefix; only the vetted asset filename varies.
-    with urlopen(Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60) as response:  # nosec B310
+    # URL is a fixed https://github.com prefix; only the asset filename varies, and
+    # verify_assets admits only the fixed maturin v1.15.0 filename set before fetching.
+    with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60
+    ) as response:
         raw = response.read(MAX_ASSET_BYTES + 1)
     if len(raw) > MAX_ASSET_BYTES:
         raise ValueError("maturin release asset exceeds inspection limit")
