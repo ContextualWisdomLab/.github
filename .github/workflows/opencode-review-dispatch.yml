@@ -866,6 +866,27 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
+          ARG OPENCODE_RUST_TOOLCHAIN=
+          RUN set -eu; \
+            [ -n "$OPENCODE_RUST_TOOLCHAIN" ] || exit 0; \
+            printf '%s\n' "$OPENCODE_RUST_TOOLCHAIN" | grep -Eqx '1\.[0-9]{1,3}\.[0-9]{1,3}'; \
+            curl --proto '=https' --tlsv1.2 -fsSLo /tmp/rustup-init \
+              https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init; \
+            echo 'dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init' | sha256sum -c -; \
+            chmod 0755 /tmp/rustup-init; \
+            RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/rustup/cargo /tmp/rustup-init -y --no-modify-path \
+              --profile minimal --default-toolchain "$OPENCODE_RUST_TOOLCHAIN" --component llvm-tools-preview; \
+            rm -f /tmp/rustup-init; \
+            toolchain="/usr/local/rustup/toolchains/${OPENCODE_RUST_TOOLCHAIN}-x86_64-unknown-linux-gnu"; \
+            ln -s "$toolchain/bin/cargo" /usr/local/bin/cargo; \
+            ln -s "$toolchain/bin/rustc" /usr/local/bin/rustc; \
+            mkdir -p /usr/local/libexec/opencode-rust; \
+            ln -s "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-cov" /usr/local/libexec/opencode-rust/llvm-cov; \
+            ln -s "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata" /usr/local/libexec/opencode-rust/llvm-profdata; \
+            chmod -R a+rX /usr/local/rustup; \
+            test "$(/usr/local/bin/rustc --version | cut -d ' ' -f 2)" = "$OPENCODE_RUST_TOOLCHAIN"; \
+            /usr/local/libexec/opencode-rust/llvm-cov --version >/dev/null; \
+            /usr/local/libexec/opencode-rust/llvm-profdata --version >/dev/null
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
               mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
@@ -956,10 +977,32 @@ jobs:
             && rm -f /usr/local/libexec/install-base-python-locks.py
           COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
-            if ! docker build --pull --no-cache --network=default \
-              --tag "$coverage_tool_image" \
-              --file "$coverage_build_dir/Dockerfile" \
-              "$coverage_build_dir"; then
+            # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
+            # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
+            # release installed at build time. Unpinned repositories keep Debian's.
+            base_rust_toolchain="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/resolve_base_rust_toolchain.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" --base-sha "$PR_BASE_SHA")"
+            build_coverage_tool_image() {
+              docker build --pull --no-cache --network=default \
+                --build-arg "OPENCODE_RUST_TOOLCHAIN=$1" \
+                --tag "$coverage_tool_image" \
+                --file "$coverage_build_dir/Dockerfile" \
+                "$coverage_build_dir"
+            }
+            coverage_llvm_cov=/usr/bin/llvm-cov-19
+            coverage_llvm_profdata=/usr/bin/llvm-profdata-19
+            if [ -n "$base_rust_toolchain" ] && build_coverage_tool_image "$base_rust_toolchain"; then
+              coverage_llvm_cov=/usr/local/libexec/opencode-rust/llvm-cov
+              coverage_llvm_profdata=/usr/local/libexec/opencode-rust/llvm-profdata
+            elif [ -n "$base_rust_toolchain" ]; then
+              # Rollback: a failed toolchain layer must not cost the repository its
+              # previous Debian-toolchain image.
+              echo "::warning::Rust ${base_rust_toolchain} layer failed; rebuilding with the Debian toolchain."
+              if ! build_coverage_tool_image ""; then
+                echo "::error::Trusted coverage tool image build failed before PR execution."
+                exit 1
+              fi
+            elif ! build_coverage_tool_image ""; then
               echo "::error::Trusted coverage tool image build failed before PR execution."
               exit 1
             fi
@@ -997,8 +1040,8 @@ jobs:
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
-              --env LLVM_COV=/usr/bin/llvm-cov-19 \
-              --env LLVM_PROFDATA=/usr/bin/llvm-profdata-19 \
+              --env LLVM_COV="$coverage_llvm_cov" \
+              --env LLVM_PROFDATA="$coverage_llvm_profdata" \
               "$coverage_tool_image" \
               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
 
@@ -1355,7 +1398,8 @@ jobs:
                 dist_dir="$(mktemp -d)"
                 python3 -m maturin build --offline --release -o "$dist_dir"
                 python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
-                rm -rf "$dist_dir"' bash "$project_dir"
+                python3 "$2" "$dist_dir"/*.whl .
+                rm -rf "$dist_dir"' bash "$project_dir" "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
           }
 
           run_python_test_coverage() {
@@ -2077,13 +2121,17 @@ jobs:
           }
 
           ensure_rust_toolchain() {
-            if [ "${LLVM_COV:-}" != "/usr/bin/llvm-cov-19" ] || \
-              [ "${LLVM_PROFDATA:-}" != "/usr/bin/llvm-profdata-19" ] || \
+            case "${LLVM_COV:-}:${LLVM_PROFDATA:-}" in
+              /usr/bin/llvm-cov-19:/usr/bin/llvm-profdata-19) llvm_pair_reviewed=1 ;;
+              /usr/local/libexec/opencode-rust/llvm-cov:/usr/local/libexec/opencode-rust/llvm-profdata) llvm_pair_reviewed=1 ;;
+              *) llvm_pair_reviewed=0 ;;
+            esac
+            if [ "$llvm_pair_reviewed" != 1 ] || \
               ! test -x "$LLVM_COV" || ! test -x "$LLVM_PROFDATA"; then
               append "### Rust coverage toolchain"
               append ""
               append "- Result: FAIL"
-              append "- Reason: the networkless coverage runtime did not preserve the reviewed LLVM 19 tool paths."
+              append "- Reason: the networkless coverage runtime did not preserve the reviewed LLVM tool paths (Debian LLVM 19 or the base-pinned Rust toolchain)."
               append "- Fix: rebuild the trusted coverage image and preserve the exact LLVM bindings at the Docker boundary."
               append ""
               failures=$((failures + 1))

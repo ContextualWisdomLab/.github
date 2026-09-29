@@ -27,6 +27,8 @@ _NIM_CONTRACT_PATH = (
 )
 _LLVM_COV_PATH = "/usr/bin/llvm-cov-19"
 _LLVM_PROFDATA_PATH = "/usr/bin/llvm-profdata-19"
+_PINNED_LLVM_COV_PATH = "/usr/local/libexec/opencode-rust/llvm-cov"
+_PINNED_LLVM_PROFDATA_PATH = "/usr/local/libexec/opencode-rust/llvm-profdata"
 _BLOB_SHA_PATTERN = re.compile(
     r'^REVIEW_DISPATCH_BLOB_SHA = "([0-9a-f]{40})"$',
     re.MULTILINE,
@@ -75,8 +77,12 @@ def test_isolated_runtime_receives_reviewed_llvm_constants() -> None:
 
     dispatch = _dispatch_text()
     helper = _helper_text()
-    assert f"              --env LLVM_COV={_LLVM_COV_PATH} \\\n" in dispatch
-    assert f"              --env LLVM_PROFDATA={_LLVM_PROFDATA_PATH} \\\n" in dispatch
+    assert '              --env LLVM_COV="$coverage_llvm_cov" \\\n' in dispatch
+    assert '              --env LLVM_PROFDATA="$coverage_llvm_profdata" \\\n' in dispatch
+    assert f"            coverage_llvm_cov={_LLVM_COV_PATH}\n" in dispatch
+    assert f"            coverage_llvm_profdata={_LLVM_PROFDATA_PATH}\n" in dispatch
+    assert f"              coverage_llvm_cov={_PINNED_LLVM_COV_PATH}\n" in dispatch
+    assert f"              coverage_llvm_profdata={_PINNED_LLVM_PROFDATA_PATH}\n" in dispatch
     assert _LLVM_COV_PATH in helper
     assert _LLVM_PROFDATA_PATH in helper
     assert "unversioned" not in helper
@@ -89,16 +95,54 @@ def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
 
     dispatch = _dispatch_text()
     helper = _helper_text()
-    assert f'[ "${{LLVM_COV:-}}" != "{_LLVM_COV_PATH}" ]' in dispatch
-    assert f'[ "${{LLVM_PROFDATA:-}}" != "{_LLVM_PROFDATA_PATH}" ]' in dispatch
+    assert f"              {_LLVM_COV_PATH}:{_LLVM_PROFDATA_PATH}) llvm_pair_reviewed=1 ;;\n" in dispatch
+    assert (
+        f"              {_PINNED_LLVM_COV_PATH}:{_PINNED_LLVM_PROFDATA_PATH}) llvm_pair_reviewed=1 ;;\n"
+        in dispatch
+    )
+    assert "              *) llvm_pair_reviewed=0 ;;\n" in dispatch
     assert 'test -x "$LLVM_COV"' in dispatch
     assert 'test -x "$LLVM_PROFDATA"' in dispatch
-    assert "networkless coverage runtime did not preserve the reviewed LLVM 19" in dispatch
+    assert "networkless coverage runtime did not preserve the reviewed LLVM tool paths" in dispatch
     assert f'LLVM_COV_PATH="{_LLVM_COV_PATH}"' in helper
     assert f'LLVM_PROFDATA_PATH="{_LLVM_PROFDATA_PATH}"' in helper
     assert '"${LLVM_COV:-}" != "$LLVM_COV_PATH"' in helper
     assert '"${LLVM_PROFDATA:-}" != "$LLVM_PROFDATA_PATH"' in helper
     assert "exit 1" in helper
+
+
+def test_base_pinned_rust_layer_is_verified_offline_and_optional() -> None:
+    """A base pin installs one exact release from a hash-verified rustup-init."""
+
+    dispatch = _dispatch_text()
+    assert "--repo-root \"$COVERAGE_SOURCE_WORKDIR\" --base-sha \"$PR_BASE_SHA\")\"" in dispatch
+    assert "          ARG OPENCODE_RUST_TOOLCHAIN=\n" in dispatch
+    assert '            [ -n "$OPENCODE_RUST_TOOLCHAIN" ] || exit 0; \\\n' in dispatch
+    assert "grep -Eqx '1\\.[0-9]{1,3}\\.[0-9]{1,3}'" in dispatch
+    assert (
+        "https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init"
+        in dispatch
+    )
+    assert (
+        "echo 'dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init'"
+        " | sha256sum -c -" in dispatch
+    )
+    assert "--profile minimal --default-toolchain \"$OPENCODE_RUST_TOOLCHAIN\" --component llvm-tools-preview" in dispatch
+    assert not re.search(r"\| *(ba)?sh\b", dispatch.split("ARG OPENCODE_RUST_TOOLCHAIN=", 1)[1].split("COPY", 1)[0])
+    # The sandbox calls the toolchain binaries directly, so no rustup proxy can
+    # try to resolve (and download) a toolchain inside --network=none.
+    assert 'ln -s "$toolchain/bin/cargo" /usr/local/bin/cargo;' in dispatch
+    assert 'ln -s "$toolchain/bin/rustc" /usr/local/bin/rustc;' in dispatch
+
+
+def test_unpinned_repositories_build_the_previous_image() -> None:
+    """No base pin, or a failed pinned layer, rebuilds the Debian-toolchain image."""
+
+    dispatch = _dispatch_text()
+    assert 'if [ -n "$base_rust_toolchain" ] && build_coverage_tool_image "$base_rust_toolchain"; then' in dispatch
+    assert 'if ! build_coverage_tool_image ""; then' in dispatch
+    assert 'elif ! build_coverage_tool_image ""; then' in dispatch
+    assert "rebuilding with the Debian toolchain." in dispatch
 
 
 def test_quality_workflow_watches_the_trusted_dispatch_workflow() -> None:
