@@ -9,6 +9,7 @@
 #   trivy-fs          HARD  repo-wide   — fails on FIXABLE MEDIUM/HIGH/CRITICAL findings
 #   gitleaks          HARD  commit-range — blocks secrets in ContextualWisdomLab/.github PRs
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
+#   tracked-path-case HARD  repo-wide   — fails when tracked paths differ only by letter case
 #
 # This is the sole organization-required owner for OSV and Scorecard PR work.
 # The standalone workflows remain local to this repository because its classic
@@ -629,6 +630,41 @@ jobs:
         if: steps.upload_trivy_sarif.outcome == 'failure'
         run: |
           echo "::warning::Trivy SARIF upload to code scanning failed after the filesystem scan. The Trivy finding log above remains the hard gate, so upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings."
+
+  tracked-path-case:
+    name: tracked-path-case (case-only path collisions)
+    # Git stores paths byte-exactly, so a tree can track both `.jules/x.md` and
+    # `.Jules/x.md`. On case-insensitive filesystems (macOS APFS default,
+    # Windows) both resolve to one file: every fresh clone reports one of them
+    # as modified and the two blobs diverge silently
+    # (ContextualWisdomLab/fast-mlsirm#1860). This job inspects the tracked
+    # paths of the pull request's merge result and fails on any case-only
+    # collision. It deliberately does NOT depend on `changed-scope`: the defect
+    # arrives through doc-only paths, and the check costs seconds.
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pull request merge result
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout the central gate at this workflow's own commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The gate script ships with this workflow; github.workflow_sha is the
+          # documented property for the workflow file's own pinned commit.
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          path: .cwl-tracked-path-case-gate
+          persist-credentials: false
+          sparse-checkout: scripts/ci/tracked_path_case_collision_gate.py
+          sparse-checkout-cone-mode: false
+      - name: Fail on tracked paths that differ only by case
+        run: python3 .cwl-tracked-path-case-gate/scripts/ci/tracked_path_case_collision_gate.py --repo-root .
 
   scorecard:
     needs: changed-scope

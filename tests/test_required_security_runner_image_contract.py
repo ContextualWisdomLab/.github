@@ -17,11 +17,13 @@ class RequiredSecurityRunnerImageContract(unittest.TestCase):
         """Require every Security Scan job to use explicit Ubuntu 24.04.
 
         6, not 5: the document-scope-independent Gitleaks PR gate joined the
-        five existing required security jobs on this image.
+        five existing required security jobs on this image. 7, not 6: the
+        scope-independent `tracked-path-case` gate (case-only tracked path
+        collisions) joined them on the same image.
         """
         workflow = SECURITY_SCAN.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 6)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 7)
 
     def test_sast_semgrep_uses_explicit_supported_image(self) -> None:
         """Require the SAST Semgrep job to use explicit Ubuntu 24.04.
