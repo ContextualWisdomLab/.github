@@ -611,6 +611,20 @@ jobs:
           if ! reclaim; then
             echo "::warning::Could not reclaim stale coverage images; continuing."
           fi
+          # The sandbox writes workspaces as root, so the runner's own temp
+          # cleanup cannot remove them; sweep ones older than two hours that
+          # a cancelled or pre-cleanup run left behind, never this run's.
+          if [ -d "${RUNNER_TEMP:-}" ]; then
+            # Only run-numbered directories; shared ones (artifact, source,
+            # sandbox-result, tool-build) are never swept.
+            if ! find "$RUNNER_TEMP" -mindepth 1 -maxdepth 1 -type d \
+              \( -name 'opencode-coverage-[0-9]*-[0-9]*' -o -name 'opencode-coverage-tool-build-[0-9]*-[0-9]*' \) \
+              -mmin +120 ! -name "opencode-coverage-${GITHUB_RUN_ID}-*" \
+              ! -name "opencode-coverage-tool-build-${GITHUB_RUN_ID}-*" -print0 |
+              xargs -0 -r sudo rm -rf --; then
+              echo "::warning::Could not reclaim stale coverage workspaces; continuing."
+            fi
+          fi
 
       - name: Expose runner Rust toolchain
         # Self-hosted runners keep rustup's cargo in ~/.cargo/bin, which the
