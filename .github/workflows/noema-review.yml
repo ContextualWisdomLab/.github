@@ -1018,6 +1018,7 @@ jobs:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
       EXPECTED_BASE_SHA: ${{ needs.admit-current-head.outputs.base_sha }}
       DELAY_SECONDS: ${{ needs.noema-review.outputs.transport_retry_delay_seconds }}
+      CURRENT_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
       NEXT_ATTEMPT: ${{ needs.noema-review.outputs.transport_retry_next_attempt }}
       PROVIDER_ATTEMPT_COUNT: ${{ needs.noema-review.outputs.provider_attempt_count }}
       TRANSPORT_HTTP_STATUS: ${{ needs.noema-review.outputs.transport_http_status }}
@@ -1035,7 +1036,9 @@ jobs:
             exit 1
           fi
           if ! [[ "$DELAY_SECONDS" =~ ^[1-9][0-9]*$ ]] || [ "$DELAY_SECONDS" -gt 300 ] ||
-            ! [[ "$NEXT_ATTEMPT" =~ ^[12]$ ]]; then
+            ! [[ "$CURRENT_ATTEMPT" =~ ^[01]$ ]] ||
+            ! [[ "$NEXT_ATTEMPT" =~ ^[12]$ ]] ||
+            [ "$NEXT_ATTEMPT" -ne "$((CURRENT_ATTEMPT + 1))" ]; then
             echo "::error::Noema transport re-dispatch refused an unbounded delay or attempt."
             exit 1
           fi
