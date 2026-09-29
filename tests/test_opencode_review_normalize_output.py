@@ -2596,6 +2596,36 @@ def test_escapes_html_comment_breakout(tmp_path):
     )
 
 
+def test_main_preserves_current_run_needs_info_transport(tmp_path):
+    """The exact current-run needs-info marker returns success unrewritten."""
+    needs_info = tmp_path / "needs-info.md"
+    original = (
+        "<!-- opencode-review-gate head_sha=head run_id=run run_attempt=attempt -->\n"
+        "<!-- opencode-review-needs-info head_sha=head run_id=run run_attempt=attempt -->\n"
+    )
+    needs_info.write_text(original, encoding="utf-8")
+
+    assert norm.main(["prog", "head", "run", "attempt", str(needs_info)]) == 0
+    assert needs_info.read_text(encoding="utf-8") == original
+
+
+def test_main_ignores_needs_info_shape_when_header_is_incomplete(tmp_path, capsys):
+    """An empty head_sha/run_id/run_attempt cannot reach the transport-only path.
+
+    It must fall through to the real core normalizer instead of short-circuiting
+    to a false success -- which fail-closed rejects the incomplete identity the
+    same way it would for any other caller, proving the empty-header branch was
+    taken rather than the needs-info shortcut.
+    """
+    original = json.dumps(control(head_sha=""))
+    output = tmp_path / "empty-header.json"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["prog", "", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "NO_CONCLUSION" in capsys.readouterr().err
+
+
 def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
     output = tmp_path / "opencode.txt"
     output.write_text("prefix\n" + json.dumps(control()) + "\nsuffix", encoding="utf-8")
