@@ -63,13 +63,15 @@ jobs:
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
-          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+$ ]] ||
              ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
              ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
             exit 1
           fi
           echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          # The App installation on the target owner is the consent (noema ADR-0019).
+          echo "owner=${TARGET_REPOSITORY%%/*}" >>"$GITHUB_OUTPUT"
           if [ -n "${METADATA_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
           elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
@@ -85,7 +87,7 @@ jobs:
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
+          owner: ${{ steps.noema_metadata_credential.outputs.owner }}
           repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
           permission-contents: read
           permission-metadata: read
@@ -98,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
-          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Noema admission rejected malformed pull request metadata."
@@ -509,13 +511,15 @@ jobs:
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
-          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+$ ]] ||
              ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
              ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
             exit 1
           fi
           echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          # The App installation on the target owner is the consent (noema ADR-0019).
+          echo "owner=${TARGET_REPOSITORY%%/*}" >>"$GITHUB_OUTPUT"
           if [ -n "${METADATA_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
           elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
@@ -531,7 +535,7 @@ jobs:
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
+          owner: ${{ steps.noema_metadata_credential.outputs.owner }}
           repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
           permission-contents: read
           permission-metadata: read
@@ -642,12 +646,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Noema target repository must belong to ContextualWisdomLab; observed ${TARGET_REPOSITORY:-<empty>}."
+          if [[ ! "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Noema target repository must be a valid owner/name; observed ${TARGET_REPOSITORY:-<empty>}."
             exit 1
           fi
           repository_name="${TARGET_REPOSITORY#*/}"
           echo "repository=$repository_name" >>"$GITHUB_OUTPUT"
+          echo "owner=${TARGET_REPOSITORY%%/*}" >>"$GITHUB_OUTPUT"
 
           if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
@@ -677,7 +682,7 @@ jobs:
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
+          owner: ${{ steps.noema_credential.outputs.owner }}
           repositories: ${{ steps.noema_credential.outputs.repository }}
           permission-actions: read
           permission-checks: read
@@ -965,7 +970,7 @@ jobs:
         with:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
+          owner: ${{ steps.noema_credential.outputs.owner }}
           repositories: ${{ steps.noema_credential.outputs.repository }}
           permission-actions: read
           permission-checks: read
@@ -1027,7 +1032,7 @@ jobs:
           set -euo pipefail
           if { [ "$GITHUB_REPOSITORY" != "ContextualWisdomLab/.github" ] &&
                [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ]; } ||
-            ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then

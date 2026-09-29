@@ -45,7 +45,7 @@ def test_publication_step_uses_fresh_app_token_without_authority_fallback() -> N
     refresh = _step_block(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
     publish = _step_block(workflow, "Publish prepared Noema verdict on the exact live head")
 
-    assert "owner: ContextualWisdomLab" in refresh
+    assert "owner: ${{ steps.noema_credential.outputs.owner }}" in refresh
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in refresh
     assert "permission-pull-requests: write" in refresh
     assert "permission-contents: read" in refresh

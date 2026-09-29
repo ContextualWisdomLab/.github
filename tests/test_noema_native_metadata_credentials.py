@@ -78,9 +78,14 @@ def test_native_metadata_selection_precedes_reads_and_preserves_pat_priority(tmp
              "NOEMA_GITHUB_APP_CLIENT_ID": "synthetic-client" if source in {"app", "pat"} else "",
              "NOEMA_GITHUB_APP_PRIVATE_KEY": "synthetic-key" if source in {"app", "pat"} else "",
              "TOKEN_EXCHANGE_URL": "https://fixture.invalid/exchange" if source != "workflow" else ""})
-    if source in {"foreign", "malformed"}:
+    if source == "malformed":
         assert result.returncode != 0
         assert not output.exists()
+    elif source == "foreign":
+        # Another owner is admitted; its App installation is the consent (noema ADR-0019).
+        assert result.returncode == 0, result.stderr
+        assert "owner=OtherOwner" in output.read_text()
+        assert "repository=example" in output.read_text()
     else:
         assert result.returncode == 0, result.stderr
         assert f"source={'github-app' if source == 'app' else 'workflow' if source == 'oidc' else source}" in output.read_text()
