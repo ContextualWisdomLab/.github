@@ -2060,8 +2060,12 @@ PY
 
 	normalize_vulnerability_location() {
 		local raw_location="$1"
+		local head_only_file=0
+		if pull_request_head_blob_required; then
+			head_only_file=1
+		fi
 		raw_location="$({
-			python3 - "$REPO_ROOT" "$REPO_NAME" "$resolved_scan_target" "$narrowed_workspace_prefix" "$raw_location" <<'PY'
+			python3 - "$REPO_ROOT" "$REPO_NAME" "$resolved_scan_target" "$narrowed_workspace_prefix" "$raw_location" "$head_only_file" <<'PY'
 from pathlib import Path
 from urllib.parse import unquote
 import sys
@@ -2071,6 +2075,7 @@ repo_name = sys.argv[2]
 scan_target_root_raw = sys.argv[3].strip()
 scan_target_workspace_prefix = sys.argv[4].strip()
 raw_location = unquote(sys.argv[5].strip())
+head_only_file = sys.argv[6] == '1'
 if not raw_location:
     raise SystemExit(1)
 
@@ -2099,7 +2104,7 @@ def emit_repo_relative(candidate: Path, fallback_relative: Path | None = None) -
         if fallback_relative is None:
             raise SystemExit(1)
         repo_candidate = (repo_root / fallback_relative).resolve(strict=False)
-        if not repo_candidate.exists():
+        if not head_only_file and not repo_candidate.exists():
             raise SystemExit(1)
         try:
             relative = repo_candidate.relative_to(repo_root)
@@ -2142,6 +2147,10 @@ PY
 		fi
 
 		if [ -f "$REPO_ROOT/$raw_location" ] && [ ! -L "$REPO_ROOT/$raw_location" ]; then
+			printf '%s\n' "$raw_location"
+			return 0
+		fi
+		if [ "$head_only_file" -eq 1 ] && pr_head_regular_file_mode "$raw_location" >/dev/null; then
 			printf '%s\n' "$raw_location"
 			return 0
 		fi
