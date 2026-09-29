@@ -21,6 +21,7 @@ on:
       - ".github/workflows/opencode-review-dispatch.yml"
       - "scripts/ci/ensure_rust_llvm19.sh"
       - "tests/test_opencode_rust_coverage_toolchain_contract.py"
+      - "tests/test_rust_coverage_timeout_not_measured.py"
       - "scripts/ci/resolve_base_rust_toolchain.py"
       - "tests/test_resolve_base_rust_toolchain.py"
       - "scripts/ci/place_maturin_extension.py"
@@ -208,6 +209,7 @@ jobs:
               .github/workflows/opencode-review-dispatch.yml|\
               scripts/ci/ensure_rust_llvm19.sh|\
               tests/test_opencode_rust_coverage_toolchain_contract.py|\
+              tests/test_rust_coverage_timeout_not_measured.py|\
               scripts/ci/resolve_base_rust_toolchain.py|\
               tests/test_resolve_base_rust_toolchain.py|\
               scripts/ci/place_maturin_extension.py|\
@@ -387,7 +389,7 @@ jobs:
         if: steps.affected_suites.outputs.opencode == 'true'
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
+          python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_rust_coverage_timeout_not_measured.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
           python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
 
       - name: Verify JavaScript materializer documentation contract
