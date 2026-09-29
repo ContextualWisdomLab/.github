@@ -794,6 +794,33 @@ def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
     assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
 
 
+def test_png_decoded_size_is_not_bounded_by_the_http_response_cap() -> None:
+    """A valid 2238x2052 RGBA screenshot decodes past 16 MiB and is still a PNG.
+
+    Regression for late-life-anxiety-reanalysis#257: five macOS window
+    screenshots under a declared artifact prefix were rejected, then reported
+    as "not valid UTF-8", because the decoded-pixel bound reused the HTTP
+    response cap.
+    """
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    width, height = 2238, 2052
+    decoded = (b"\0" + b"\0" * (width * 4)) * height
+    assert len(decoded) > policy.MAX_RESPONSE_BYTES
+    header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    raw = (
+        policy.PNG_SIGNATURE
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(decoded))
+        + chunk(b"IEND", b"")
+    )
+    assert len(raw) < policy.MAX_FILE_BYTES
+    assert policy._is_complete_png(raw)
+
+
 def test_png_semantic_validation_fails_closed() -> None:
     """CRC-valid chunks still need a valid bounded PNG image stream."""
 
@@ -865,7 +892,7 @@ def test_png_semantic_validation_fails_closed() -> None:
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0") + b"x"), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
-    huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    huge = (policy.MAX_PNG_DECODED_BYTES // 4).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
     assert not policy._is_complete_png(png(huge, image, end))
 
     adam7 = (8).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))

@@ -37,8 +37,10 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(PR_REVIEW_AUTOFIX)
 
     def test_pr_review_fix_scheduler_uses_explicit_supported_image(self) -> None:
-        """Require the reusable fix-scheduler dispatch job to pin Ubuntu 24.04."""
-        self.assert_explicit_supported_image(PR_REVIEW_FIX_SCHEDULER)
+        """Require the fix-scheduler's hosted fallback to pin Ubuntu 24.04."""
+        workflow = PR_REVIEW_FIX_SCHEDULER.read_text(encoding="utf-8")
+        self.assertNotIn("ubuntu-latest", workflow)
+        self.assertIn("fromJSON('[\"ubuntu-24.04\"]')", workflow)
 
     def test_hourly_review_repair_uses_explicit_supported_image(self) -> None:
         """Require hourly control jobs to use the dedicated central group."""

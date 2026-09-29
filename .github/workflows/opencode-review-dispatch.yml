@@ -595,6 +595,51 @@ jobs:
             exit 1
           fi
 
+      - name: Reclaim stale coverage images
+        # One OpenCode job runs per runner at a time, so coverage images older
+        # than two hours belong to finished or abandoned runs. Runs dispatched
+        # before per-run cleanup existed left them behind and filled the
+        # self-hosted guest disk. Failure here never blocks measurement.
+        run: |
+          set -uo pipefail
+          reclaim() {
+            docker image ls --filter reference=opencode-coverage-tools --filter until=2h --format '{{.ID}}' |
+              sort -u | while read -r image; do docker image rm -f "$image" || return 1; done &&
+              docker image prune -f &&
+              docker builder prune -f --filter until=24h
+          }
+          if ! reclaim; then
+            echo "::warning::Could not reclaim stale coverage images; continuing."
+          fi
+          # The sandbox writes workspaces as root, so the runner's own temp
+          # cleanup cannot remove them; sweep ones older than two hours that
+          # a cancelled or pre-cleanup run left behind, never this run's.
+          if [ -d "${RUNNER_TEMP:-}" ]; then
+            # Only run-numbered directories; shared ones (artifact, source,
+            # sandbox-result, tool-build) are never swept.
+            if ! find "$RUNNER_TEMP" -mindepth 1 -maxdepth 1 -type d \
+              \( -name 'opencode-coverage-[0-9]*-[0-9]*' -o -name 'opencode-coverage-tool-build-[0-9]*-[0-9]*' \) \
+              -mmin +120 ! -name "opencode-coverage-${GITHUB_RUN_ID}-*" \
+              ! -name "opencode-coverage-tool-build-${GITHUB_RUN_ID}-*" -print0 |
+              xargs -0 -r sudo rm -rf --; then
+              echo "::warning::Could not reclaim stale coverage workspaces; continuing."
+            fi
+          fi
+
+      - name: Expose runner Rust toolchain
+        # Self-hosted runners keep rustup's cargo in ~/.cargo/bin, which the
+        # runner service does not put on PATH. Hosted images already have it.
+        run: |
+          set -euo pipefail
+          if command -v cargo >/dev/null 2>&1; then
+            exit 0
+          fi
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            exit 0
+          fi
+          echo "::warning::cargo is not installed on this runner; Rust coverage will report a missing toolchain."
+
       - name: Measure test and docstring evidence
         id: measure
         env:
@@ -643,7 +688,7 @@ jobs:
             # PR-head source, credentials, lifecycle execution, or runner
             # command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
+            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
@@ -2389,6 +2434,21 @@ jobs:
             exit 1
           fi
 
+      - name: Clean up coverage runner resources
+        if: always()
+        env:
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_BUILD_DIR: ${{ runner.temp }}/opencode-coverage-tool-build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # The sandbox writes as uid 65532; the runner cannot remove its files.
+          sudo rm -rf -- "$COVERAGE_SOURCE_WORKDIR"
+          sudo rm -rf -- "$COVERAGE_BUILD_DIR"
+          coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker image inspect "$coverage_tool_image" >/dev/null 2>&1; then
+            docker image rm "$coverage_tool_image"
+          fi
+
   opencode-review-target:
     name: opencode-review
     needs: [validate-pr-metadata, coverage-evidence]
@@ -2646,6 +2706,9 @@ jobs:
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
+          # This checkout outlives jobs on self-hosted runners; drop registrations
+          # whose directories runner temp cleanup already removed.
+          git worktree prune
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
