@@ -109,7 +109,9 @@ if [ ! -f "$requirements_lock" ]; then
 fi
 # The pinned lock includes CPython 3.12 wheels; isolate them from consumer runtimes.
 "$sidecar_python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else "sidecar requires Python 3.12 for its pinned wheel hashes")'
-"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"
+# RUNNER_TEMP persists on self-hosted runners; a cancelled job can leave a
+# half-written pip that a plain re-run of venv keeps. Always rebuild.
+"$sidecar_python" -m venv --clear "$ORCHESTRATOR_WORK/.venv"
 sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
