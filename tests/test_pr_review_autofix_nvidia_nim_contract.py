@@ -17,7 +17,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "6f8215c7e7e22ae8389713fdf74dbc4855448807"
+REVIEW_DISPATCH_BLOB_SHA = "1cbb991de09de20186ab0644ee171dba02270180"
 
 
 def _workflow_text(path: Path) -> str:

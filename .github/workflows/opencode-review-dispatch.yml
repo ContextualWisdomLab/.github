@@ -817,11 +817,6 @@ jobs:
               --output-dir "$coverage_build_dir/base-rust-dependencies" \
               "${rust_lock_args[@]}" \
               --vendor-dir-for-config /opt/base-rust-dependencies/vendor
-            # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
-            # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
-            # release installed at build time. Unpinned repositories keep Debian's.
-            base_rust_toolchain="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/resolve_base_rust_toolchain.py" \
-              --repo-root "$COVERAGE_SOURCE_WORKDIR" --base-sha "$PR_BASE_SHA")"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -982,6 +977,11 @@ jobs:
             && rm -f /usr/local/libexec/install-base-python-locks.py
           COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
+            # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
+            # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
+            # release installed at build time. Unpinned repositories keep Debian's.
+            base_rust_toolchain="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/resolve_base_rust_toolchain.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" --base-sha "$PR_BASE_SHA")"
             build_coverage_tool_image() {
               docker build --pull --no-cache --network=default \
                 --build-arg "OPENCODE_RUST_TOOLCHAIN=$1" \
