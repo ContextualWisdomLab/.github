@@ -22,6 +22,7 @@
     "ContextualWisdomLab/codec-carver",
     "ContextualWisdomLab/context-graph-contracts",
     "ContextualWisdomLab/contextual-orchestrator",
+    "ContextualWisdomLab/cwl-telemetry",
     "ContextualWisdomLab/disksage",
     "ContextualWisdomLab/enterprise-architecture-core",
     "ContextualWisdomLab/fast-mlsirm",
