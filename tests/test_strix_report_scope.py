@@ -109,3 +109,29 @@ def test_cli_exits_zero_on_scoped_report_and_one_with_bounded_error(
         runpy.run_path(str(SCRIPT), run_name="__main__")
     assert exit_info.value.code == 1
     assert "ERROR: Strix report scope:" in capsys.readouterr().err
+
+
+def test_validate_accepts_changed_file_named_within_its_reported_directory(tmp_path: Path) -> None:
+    """Reports often name the scanned directory once and each file by name (#2291)."""
+    _scan(
+        tmp_path,
+        COMPLETED,
+        "Scope: `/workspace/strix-pr-scope.v6Wilu/scripts/ci/`.\n"
+        "A security review of `strix_quick_gate.sh` and `strix_model_utils.sh`.\n",
+    )
+    scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Reviewed `strix_quick_gate.sh` without naming its directory.\n",
+        "Scope: scripts/ci/. Reviewed `my_strix_quick_gate.sh`.\n",
+        "Scope: scripts/ci/. Reviewed `strix_quick_gate.sh.bak`.\n",
+        "Scope: other/scripts/ci-tools/. Reviewed strix_quick_gate.sh.\n",
+    ],
+)
+def test_validate_rejects_bare_or_partial_file_names(tmp_path: Path, report: str) -> None:
+    _scan(tmp_path, COMPLETED, report)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
