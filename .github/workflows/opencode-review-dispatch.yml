@@ -2692,6 +2692,9 @@ jobs:
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
+          # This checkout outlives jobs on self-hosted runners; drop registrations
+          # whose directories runner temp cleanup already removed.
+          git worktree prune
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
