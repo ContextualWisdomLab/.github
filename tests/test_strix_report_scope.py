@@ -140,3 +140,29 @@ def test_validate_rejects_bare_or_partial_file_names(tmp_path: Path, report: str
     _scan(tmp_path, COMPLETED, report)
     with pytest.raises(ValueError, match="does not identify a changed source file"):
         scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
+
+
+def test_validate_accepts_file_name_within_a_reported_ancestor_directory(tmp_path: Path) -> None:
+    """fast-mlsirm#2052 named the crate directory and the file, not ``src/``."""
+    _scan(
+        tmp_path,
+        COMPLETED,
+        "**Scope:** `/workspace/strix-pr-scope.4eyzTL` (including\n"
+        "`crates/mlsirm-core` and `python/fast_mlsirm`).\n"
+        "- **Rust Audit:** Review of the `two_tier_recursion.rs` and `lib.rs`.\n",
+    )
+    scope.validate(tmp_path, ["crates/mlsirm-core/src/two_tier_recursion.rs"])
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Scope: crates/ only. Reviewed two_tier_recursion.rs.\n",
+        "Scope: crates/mlsirm-core-extra. Reviewed two_tier_recursion.rs.\n",
+        "Scope: crates/mlsirm-core. Reviewed other_recursion.rs.\n",
+    ],
+)
+def test_validate_rejects_generic_or_mismatched_ancestors(tmp_path: Path, report: str) -> None:
+    _scan(tmp_path, COMPLETED, report)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        scope.validate(tmp_path, ["crates/mlsirm-core/src/two_tier_recursion.rs"])
