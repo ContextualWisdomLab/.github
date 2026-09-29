@@ -264,6 +264,34 @@ def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
         _assert_g17_evidence_is_published(mutated)
 
 
+def test_published_lineage_guard_rejects_resolvable_nonancestor_g17_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolvable G-17 commit outside current ancestry must fail closed."""
+    evidence_sha = "1" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Resolve the object while rejecting only its published ancestry."""
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0 if command[1] == "cat-file" else 1,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(AssertionError, match="current HEAD ancestry"):
+        _assert_g17_evidence_is_published(f"| G-17 | `{evidence_sha}` |")
+
+    assert commands == [
+        ["git", "cat-file", "-e", f"{evidence_sha}^{{commit}}"],
+        ["git", "merge-base", "--is-ancestor", evidence_sha, "HEAD"],
+    ]
+
+
 def test_doctoring_qualifies_foreign_semgrep_revision_owner() -> None:
     """Foreign evidence must identify its repository instead of resembling a local SHA."""
     doctoring = Path(

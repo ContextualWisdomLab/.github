@@ -199,7 +199,8 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[-400:]
+        with exc:
+            body = exc.read().decode("utf-8", errors="replace")[-400:]
         raise ConfigurationIdentityError(
             f"GitHub API GET failed with HTTP {exc.code}: {body}"
         ) from exc
