@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`01bf92a3ec67a0e1f9b68978eb16b60301e985fd` today) into `RUNNER_TEMP`. The
+   (currently selected in the sidecar script) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -315,3 +315,10 @@ all five, and auto-optimize routing by cost.
   vulnerabilities in the same audit. The earlier byte-identical-lock claim
   describes the superseded proposal, not this amended target. No review
   completion or runtime provider success is inferred from the lock audit.
+
+- **2026-09-28 proposed pin: consume merged image and structured 429 recovery.**
+  The sidecar default now selects CO main `8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6`,
+  whose ancestry includes #1223, #1251, and #1253. Its `requirements.lock`
+  is unchanged from the prior pin. This source pin remains subject to this
+  PR's protected checks and review; it does not establish an immutable gateway
+  release, deployed sidecar use, or hosted review success.
