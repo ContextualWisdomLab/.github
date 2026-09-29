@@ -13,6 +13,9 @@ on:
   # Default-branch-only retry entrypoint; no caller-selected workflow ref.
   repository_dispatch:
     types: [noema-review]
+  # Organizations outside ContextualWisdomLab call this from a pull_request_target
+  # workflow; OIDC job_workflow_ref still names this exact file (noema ADR-0019).
+  workflow_call:
 
 concurrency:
   # Workflow-level admission is required: a queued run cannot reach a job-level

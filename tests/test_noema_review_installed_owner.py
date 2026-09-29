@@ -27,3 +27,10 @@ def test_every_app_token_owner_comes_from_the_validated_target() -> None:
         "${{ steps.noema_credential.outputs.owner }}",
     }
     assert workflow.count('echo "owner=${TARGET_REPOSITORY%%/*}" >>"$GITHUB_OUTPUT"') == 3
+
+
+def test_other_organizations_can_call_the_central_review() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    triggers = workflow.split("\nconcurrency:", 1)[0]
+    assert "\n  workflow_call:\n" in triggers
+    assert "\n  pull_request_target:\n" in triggers
