@@ -38,6 +38,11 @@ def main(argv: list[str]) -> int:
 
     prompt_path = Path(argv[0])
     text = prompt_path.read_text(encoding="utf-8")
+    if prompt_path.name.startswith("opencode-review-contract-") and prompt_path.suffix == ".md":
+        marker = "<!-- cwl-review-memory/v1 -->"
+        if marker not in text.splitlines():
+            protocol = Path(__file__).with_name("review_partition_protocol.md").read_text(encoding="utf-8")
+            text = text.rstrip() + "\n\n" + protocol
     prompt_path.write_text(render_prompt(text, os.environ), encoding="utf-8")
     return 0
 
