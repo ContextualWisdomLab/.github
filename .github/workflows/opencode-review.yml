@@ -43,8 +43,6 @@ jobs:
     # queue wait between two single-digit-second jobs. See
     # docs/doctoring/actions-capacity-root-cause-20260917.md for the
     # underlying measurement methodology.
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
-    if: (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read

@@ -47,9 +47,19 @@ def _entry_jobs(doc: dict) -> dict[str, dict]:
     return {k: j for k, j in doc["jobs"].items() if not j.get("needs")}
 
 
+# required-workflow-bootstrap must never carry an `if:` (its branch-protection
+# context is always created; scripts/ci/test_strix_quick_gate.sh enforces it).
+# It decides admission itself, so its dependents still skip draft PRs.
+UNGUARDED_ENTRY_JOBS = {"required-workflow-bootstrap"}
+
+
 def _is_cancellation_job(job_name: str, job: dict) -> bool:
     """Cancellation sweeps stay as they are; they exist for synchronize/draft/close events."""
-    return job_name.startswith("cancel-")
+    return job_name.startswith("cancel-") or job_name in UNGUARDED_ENTRY_JOBS
+
+
+def test_required_workflow_bootstrap_has_no_if() -> None:
+    assert "if" not in _load("opencode-review.yml")["jobs"]["required-workflow-bootstrap"]
 
 
 @pytest.mark.parametrize("name", WORKFLOWS)
