@@ -595,6 +595,37 @@ jobs:
             exit 1
           fi
 
+      - name: Reclaim stale coverage images
+        # One OpenCode job runs per runner at a time, so coverage images older
+        # than two hours belong to finished or abandoned runs. Runs dispatched
+        # before per-run cleanup existed left them behind and filled the
+        # self-hosted guest disk. Failure here never blocks measurement.
+        run: |
+          set -uo pipefail
+          reclaim() {
+            docker image ls --filter reference=opencode-coverage-tools --filter until=2h --format '{{.ID}}' |
+              sort -u | while read -r image; do docker image rm -f "$image" || return 1; done &&
+              docker image prune -f &&
+              docker builder prune -f --filter until=24h
+          }
+          if ! reclaim; then
+            echo "::warning::Could not reclaim stale coverage images; continuing."
+          fi
+
+      - name: Expose runner Rust toolchain
+        # Self-hosted runners keep rustup's cargo in ~/.cargo/bin, which the
+        # runner service does not put on PATH. Hosted images already have it.
+        run: |
+          set -euo pipefail
+          if command -v cargo >/dev/null 2>&1; then
+            exit 0
+          fi
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            exit 0
+          fi
+          echo "::warning::cargo is not installed on this runner; Rust coverage will report a missing toolchain."
+
       - name: Measure test and docstring evidence
         id: measure
         env:
