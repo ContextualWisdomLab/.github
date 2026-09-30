@@ -8,9 +8,14 @@ unrelated to lodash. With no file location the gate failed closed as unmapped.
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+import scripts.ci.strix_unverified_dependency as unverified_dependency
 
 from scripts.ci.strix_unverified_dependency import (
     named_packages,
@@ -99,7 +104,53 @@ def test_cli_exit_status_and_message(tmp_path: Path) -> None:
     (repo / "yarn.lock").write_text('lodash@^4.17.20:\n  version "4.17.20"\n')
     assert subprocess.run([sys.executable, str(HELPER), str(report), str(repo)], check=False).returncode == 1
 
-import scripts.ci.strix_unverified_dependency as m
-def test_dummy():
-    try: m.main([])
-    except Exception: pass
+def test_manifest_scan_ignores_nonfiles_links_vendor_and_oversized_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only bounded regular dependency manifests influence the verdict."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements-extra.in").write_text("present-package==1\n")
+    (repo / "notes.txt").write_text("ignored-package==1\n")
+    (repo / "requirements-big.txt").write_text("oversized-package==1\n")
+    (repo / "linked.txt").symlink_to(repo / "requirements-extra.in")
+    vendor = repo / "vendor"
+    vendor.mkdir()
+    (vendor / "package.json").write_text('{"dependencies":{"vendored-package":"1"}}')
+    monkeypatch.setattr(unverified_dependency, "MAX_MANIFEST_BYTES", 20)
+
+    manifest_text = unverified_dependency._manifest_text(repo)
+
+    assert "present-package" in manifest_text
+    assert "ignored-package" not in manifest_text
+    assert "oversized-package" not in manifest_text
+    assert "vendored-package" not in manifest_text
+
+
+def test_main_contract_covers_usage_unverified_and_present_dependency(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The direct CLI contract returns 2/0/1 for usage/unverified/present."""
+    assert unverified_dependency.main(["helper"]) == 2
+    assert "Usage:" in capsys.readouterr().err
+
+    repo = _rust_python_repo(tmp_path / "repo")
+    report = tmp_path / "report.md"
+    report.write_text(LODASH_REPORT)
+    assert unverified_dependency.main(["helper", str(report), str(repo)]) == 0
+    assert "express, lodash" in capsys.readouterr().err
+
+    (repo / "package.json").write_text('{"dependencies":{"lodash":"4.17.20"}}')
+    assert unverified_dependency.main(["helper", str(report), str(repo)]) == 1
+
+
+def test_script_entrypoint_propagates_the_classification_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executing the helper as a script publishes its classification as exit status."""
+    repo = _rust_python_repo(tmp_path / "repo")
+    report = tmp_path / "report.md"
+    report.write_text(LODASH_REPORT)
+    monkeypatch.setattr(sys, "argv", [str(HELPER), str(report), str(repo)])
+    with pytest.raises(SystemExit, match="0"):
+        runpy.run_path(str(HELPER), run_name="__main__")
