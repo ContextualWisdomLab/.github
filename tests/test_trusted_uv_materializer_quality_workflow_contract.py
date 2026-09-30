@@ -4,12 +4,21 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(".github/workflows/trusted-uv-materializer-quality-ci.yml")
+OPENCODE_REQUIREMENTS_PATH = Path("requirements-opencode-review-ci.txt")
 
 
 def _workflow_text() -> str:
     """Return the trusted uv materializer quality workflow as UTF-8 text."""
 
     return WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def test_full_quality_gate_installs_yaml_parser_used_by_repository_tests() -> None:
+    """The complete suite installs the parser imported during collection."""
+
+    requirements = OPENCODE_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+
+    assert "pyyaml==6.0.3" in requirements.lower()
 
 
 def test_quality_workflow_runs_for_every_materializer_surface_and_main_push() -> None:
