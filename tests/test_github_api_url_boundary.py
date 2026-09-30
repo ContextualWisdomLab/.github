@@ -44,6 +44,7 @@ class _SyntheticRedirectTransport:
         """Store the redirect target and initialize the observed request ledger."""
         self.target = target
         self.calls: list[tuple[str, str | None]] = []
+        self.responses: list[Any] = []
 
     def https_open(self, request: Request) -> Any:
         """Return a synthetic redirect response without contacting a network target."""
@@ -52,6 +53,7 @@ class _SyntheticRedirectTransport:
         headers["Location"] = self.target
         response = addinfourl(BytesIO(b""), headers, request.full_url, code=302)
         response.msg = "Found"
+        self.responses.append(response)
         return response
 
 
@@ -165,6 +167,8 @@ def test_production_openers_reject_redirect_without_forwarding_bearer(
     assert transport.calls == [
         (CANONICAL_GITHUB_API_URL, "Bearer test-token"),
     ]
+    assert len(transport.responses) == 1
+    assert transport.responses[0].closed
 
 
 @pytest.mark.parametrize("target", REDIRECT_TARGETS)
