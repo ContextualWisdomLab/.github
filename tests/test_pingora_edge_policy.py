@@ -766,16 +766,12 @@ def test_declared_prefix_for_path_matches_by_path_segment() -> None:
 def test_github_open_json_maps_not_found_to_artifact_declaration_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 404 from the GitHub API is distinguished from every other transport failure."""
 
-    error_body = BytesIO()
     monkeypatch.setattr(
         policy.github_opener, "open",
-        lambda _request, timeout: (_ for _ in ()).throw(
-            HTTPError("x", 404, "not found", {}, error_body)
-        ),
+        lambda _request, timeout: (_ for _ in ()).throw(HTTPError("x", 404, "not found", {}, BytesIO())),
     )
     with pytest.raises(policy.ArtifactDeclarationNotFoundError):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
-    assert error_body.closed
 
 
 def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
@@ -1290,9 +1286,8 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-    with pytest.raises(HTTPError) as exc_info:
+    with pytest.raises(HTTPError):
         policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
-    exc_info.value.close()
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

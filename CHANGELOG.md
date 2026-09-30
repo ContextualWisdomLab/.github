@@ -1,18 +1,3 @@
-### Central coverage owner preserves concurrent repairs and restores the 100% gate
-
-- The `.github#2521` coverage owner now carries the complete valid deltas from
-  `.github#2530` (hash-pinned full-suite parser dependencies) and `.github#2532`
-  (explicit GitHub `HTTPError` response closure) through ordinary two-parent
-  merges. Behavior-level contracts replace dummy/live-CLI coverage for the
-  OpenCode queue and Strix manifest scanners, close release dependency trust
-  boundaries, and prove the runtime-archive prescreener's reachable state space;
-  one redundant unreachable postcondition was removed without weakening any
-  earlier fail-closed validation. Python 3.10 TOML fallback selection is now a
-  directly testable compatibility boundary. On the integrated tree,
-  warnings-as-errors produced 5,228 passed, 5 skipped, and 40 subtests passed;
-  all 18,232 owned production statements and 7,488 branches are covered.
-  Hosted exact-head Checks and qualifying independent review remain required.
-
 ### Full-suite quality environments install their collection parsers
 
 - The common OpenCode quality input now owns the existing hash-pinned
@@ -23,17 +8,6 @@
   together, imported both parsers, and passed 73 focused contracts with two
   optional skips. Hosted exact-head Checks and qualifying independent review
   remain required before protected merge.
-
-### Shared security fixtures use patched PyJWT and PyO3 releases
-
-- The Strix hash lock now takes PyJWT `2.14.0` as an explicit source input,
-  closing CVE-2026-102274 without hiding the dependency in the cryptography-only
-  override file. The offline Rust coverage fixture advances from PyO3 `0.22.6`
-  to `0.29.2`, beyond the `0.29.0` fixes for GHSA-36hh-v3qg-5jq4 and
-  GHSA-chgr-c6px-7xpp. Source/lock parity tests prevent either generated lock
-  from silently returning to the vulnerable versions. Protected integration,
-  immutable consumer-pin advancement, and fresh exact-head hosted security
-  Checks remain required before release admission.
 
 ### Intel macOS native archives are bound to x86_64 bytes
 

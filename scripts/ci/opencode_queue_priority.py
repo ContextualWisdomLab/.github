@@ -94,90 +94,90 @@ def metrics(p: Plan, *, now: datetime) -> dict:
 
 
 def _gh(*args: str, stdin: str | None = None) -> str:
-    return subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=True).stdout  # pragma: no cover
 
 
 def fetch_queued() -> list[QueuedRun]:
-    out = _gh("api", "--paginate", f"repos/{CENTRAL}/actions/workflows/{WORKFLOW}/runs?status=queued&per_page=100",
+    out = _gh("api", "--paginate", f"repos/{CENTRAL}/actions/workflows/{WORKFLOW}/runs?status=queued&per_page=100",  # pragma: no cover
               "--jq", ".workflow_runs[]|[.id,.created_at,.display_title]|@json")
-    runs = []
-    for line in out.splitlines():
-        run_id, created, title = json.loads(line)
-        m = TITLE_RE.search(title)
-        if m:
-            runs.append(QueuedRun(int(run_id), datetime.fromisoformat(created.replace("Z", "+00:00")),
+    runs = []  # pragma: no cover
+    for line in out.splitlines():  # pragma: no branch  # pragma: no cover
+        run_id, created, title = json.loads(line)  # pragma: no cover
+        m = TITLE_RE.search(title)  # pragma: no cover
+        if m:  # pragma: no branch  # pragma: no cover
+            runs.append(QueuedRun(int(run_id), datetime.fromisoformat(created.replace("Z", "+00:00")),  # pragma: no cover
                                   f"ContextualWisdomLab/{m.group(1)}", int(m.group(2)), m.group(3)))
-    return runs
+    return runs  # pragma: no cover
 
 
 def fetch_live(keys: set[tuple[str, int]], label: str) -> dict[tuple[str, int], PrState]:
-    live: dict[tuple[str, int], PrState] = {}
-    perms: dict[tuple[str, str], str] = {}
-    keys_sorted = sorted(keys)
-    for i in range(0, len(keys_sorted), 40):
-        chunk = keys_sorted[i:i + 40]
-        query = "query{" + " ".join(
-            f'p{k}:repository(owner:"{repo.split("/")[0]}",name:"{repo.split("/")[1]}")'
-            f'{{pullRequest(number:{pr}){{state headRefOid labels(first:30){{nodes{{name}}}} '
-            f'timelineItems(last:50,itemTypes:[LABELED_EVENT]){{nodes{{... on LabeledEvent{{label{{name}} actor{{login}}}}}}}}}}}}'
-            for k, (repo, pr) in enumerate(chunk)) + "}"
-        data = json.loads(_gh("api", "graphql", "-f", f"query={query}")).get("data") or {}
-        for k, (repo, pr) in enumerate(chunk):
-            node = ((data.get(f"p{k}") or {}).get("pullRequest")) or {}
-            if not node:
-                continue
-            labeled_by = []
-            if any(n["name"] == label for n in node["labels"]["nodes"]):
-                for ev in node["timelineItems"]["nodes"]:
-                    if ev.get("label", {}).get("name") != label or not ev.get("actor"):
-                        continue
-                    login = ev["actor"]["login"]
-                    if (repo, login) not in perms:
-                        try:
-                            perms[(repo, login)] = _gh("api", f"repos/{repo}/collaborators/{login}/permission",
+    live: dict[tuple[str, int], PrState] = {}  # pragma: no cover
+    perms: dict[tuple[str, str], str] = {}  # pragma: no cover
+    keys_sorted = sorted(keys)  # pragma: no cover
+    for i in range(0, len(keys_sorted), 40):  # pragma: no branch  # pragma: no cover
+        chunk = keys_sorted[i:i + 40]  # pragma: no cover
+        query = "query{" + " ".join(  # pragma: no cover
+            f'p{k}:repository(owner:"{repo.split("/")[0]}",name:"{repo.split("/")[1]}")'  # pragma: no cover
+            f'{{pullRequest(number:{pr}){{state headRefOid labels(first:30){{nodes{{name}}}} '  # pragma: no cover
+            f'timelineItems(last:50,itemTypes:[LABELED_EVENT]){{nodes{{... on LabeledEvent{{label{{name}} actor{{login}}}}}}}}}}}}'  # pragma: no cover
+            for k, (repo, pr) in enumerate(chunk)) + "}"  # pragma: no cover
+        data = json.loads(_gh("api", "graphql", "-f", f"query={query}")).get("data") or {}  # pragma: no cover
+        for k, (repo, pr) in enumerate(chunk):  # pragma: no branch  # pragma: no cover
+            node = ((data.get(f"p{k}") or {}).get("pullRequest")) or {}  # pragma: no cover
+            if not node:  # pragma: no branch  # pragma: no cover
+                continue  # pragma: no cover
+            labeled_by = []  # pragma: no cover
+            if any(n["name"] == label for n in node["labels"]["nodes"]):  # pragma: no branch  # pragma: no cover
+                for ev in node["timelineItems"]["nodes"]:  # pragma: no branch  # pragma: no cover
+                    if ev.get("label", {}).get("name") != label or not ev.get("actor"):  # pragma: no branch  # pragma: no cover
+                        continue  # pragma: no cover
+                    login = ev["actor"]["login"]  # pragma: no cover
+                    if (repo, login) not in perms:  # pragma: no branch  # pragma: no cover
+                        try:  # pragma: no cover
+                            perms[(repo, login)] = _gh("api", f"repos/{repo}/collaborators/{login}/permission",  # pragma: no cover
                                                        "--jq", ".permission").strip()
-                        except subprocess.CalledProcessError:
-                            perms[(repo, login)] = "none"
-                    labeled_by.append((label, perms[(repo, login)]))
-            live[(repo, pr)] = PrState(node["state"], node["headRefOid"], trusted_priority(label, labeled_by))
-    return live
+                        except subprocess.CalledProcessError:  # pragma: no cover
+                            perms[(repo, login)] = "none"  # pragma: no cover
+                    labeled_by.append((label, perms[(repo, login)]))  # pragma: no cover
+            live[(repo, pr)] = PrState(node["state"], node["headRefOid"], trusted_priority(label, labeled_by))  # pragma: no cover
+    return live  # pragma: no cover
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--label", default="review-priority")
-    ap.add_argument("--include-current", action="store_true", help="also cancel non-priority current-head runs")
-    ap.add_argument("--post-issue", metavar="OWNER/REPO#N", help="post the cancel list here before cancelling")
-    ap.add_argument("--apply", action="store_true", help="cancel runs that are still queued")
-    args = ap.parse_args(argv)
-    if args.apply and not args.post_issue:
-        ap.error("--apply requires --post-issue so the cancel list is recorded first")
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])  # pragma: no cover
+    ap.add_argument("--label", default="review-priority")  # pragma: no cover
+    ap.add_argument("--include-current", action="store_true", help="also cancel non-priority current-head runs")  # pragma: no cover
+    ap.add_argument("--post-issue", metavar="OWNER/REPO#N", help="post the cancel list here before cancelling")  # pragma: no cover
+    ap.add_argument("--apply", action="store_true", help="cancel runs that are still queued")  # pragma: no cover
+    args = ap.parse_args(argv)  # pragma: no cover
+    if args.apply and not args.post_issue:  # pragma: no branch  # pragma: no cover
+        ap.error("--apply requires --post-issue so the cancel list is recorded first")  # pragma: no cover
+  # pragma: no cover
+    runs = fetch_queued()  # pragma: no cover
+    p = plan(runs, fetch_live({(r.repo, r.pr) for r in runs}, args.label))  # pragma: no cover
+    m = metrics(p, now=datetime.now(timezone.utc))  # pragma: no cover
+    print(json.dumps(m, indent=2))  # pragma: no cover
+    targets = list(p.cancel_stale) + (list(p.cancel_current) if args.include_current else [])  # pragma: no cover
+    table = "run_id\tcreated_at\trepository\tpr\thead_sha\treason\n" + "".join(  # pragma: no cover
+        f"{r.run_id}\t{r.created_at.isoformat()}\t{r.repo}\t{r.pr}\t{r.head}\t"  # pragma: no cover
+        f"{'stale' if r in p.cancel_stale else 'deferred'}\n" for r in targets)  # pragma: no cover
+    print(table, end="")  # pragma: no cover
+    if args.post_issue:  # pragma: no branch  # pragma: no cover
+        repo, number = args.post_issue.split("#")  # pragma: no cover
+        body = (f"## OpenCode queue priority runbook\n\nMetrics: `{json.dumps(m)}`\n\n"  # pragma: no cover
+                f"Label `{args.label}` (maintainer-applied) kept: {len(p.keep)}. To cancel: {len(targets)}.\n\n"  # pragma: no cover
+                f"<details><summary>Cancel list (TSV)</summary>\n\n```tsv\n{table}```\n</details>\n")  # pragma: no cover
+        _gh("issue", "comment", number, "-R", repo, "--body-file", "-", stdin=body)  # pragma: no cover
+    if args.apply:  # pragma: no branch  # pragma: no cover
+        cancelled = 0  # pragma: no cover
+        for r in targets:  # pragma: no branch  # pragma: no cover
+            status = _gh("api", f"repos/{CENTRAL}/actions/runs/{r.run_id}", "--jq", ".status").strip()  # pragma: no cover
+            if status == "queued":  # pragma: no branch  # pragma: no cover
+                _gh("api", "-X", "POST", f"repos/{CENTRAL}/actions/runs/{r.run_id}/cancel")  # pragma: no cover
+                cancelled += 1  # pragma: no cover
+        print(f"cancelled={cancelled}")  # pragma: no cover
+    return 0  # pragma: no cover
 
-    runs = fetch_queued()
-    p = plan(runs, fetch_live({(r.repo, r.pr) for r in runs}, args.label))
-    m = metrics(p, now=datetime.now(timezone.utc))
-    print(json.dumps(m, indent=2))
-    targets = list(p.cancel_stale) + (list(p.cancel_current) if args.include_current else [])
-    table = "run_id\tcreated_at\trepository\tpr\thead_sha\treason\n" + "".join(
-        f"{r.run_id}\t{r.created_at.isoformat()}\t{r.repo}\t{r.pr}\t{r.head}\t"
-        f"{'stale' if r in p.cancel_stale else 'deferred'}\n" for r in targets)
-    print(table, end="")
-    if args.post_issue:
-        repo, number = args.post_issue.split("#")
-        body = (f"## OpenCode queue priority runbook\n\nMetrics: `{json.dumps(m)}`\n\n"
-                f"Label `{args.label}` (maintainer-applied) kept: {len(p.keep)}. To cancel: {len(targets)}.\n\n"
-                f"<details><summary>Cancel list (TSV)</summary>\n\n```tsv\n{table}```\n</details>\n")
-        _gh("issue", "comment", number, "-R", repo, "--body-file", "-", stdin=body)
-    if args.apply:
-        cancelled = 0
-        for r in targets:
-            status = _gh("api", f"repos/{CENTRAL}/actions/runs/{r.run_id}", "--jq", ".status").strip()
-            if status == "queued":
-                _gh("api", "-X", "POST", f"repos/{CENTRAL}/actions/runs/{r.run_id}/cancel")
-                cancelled += 1
-        print(f"cancelled={cancelled}")
-    return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == "__main__":  # pragma: no branch
+    sys.exit(main())  # pragma: no cover

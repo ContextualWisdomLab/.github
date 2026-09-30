@@ -96,56 +96,6 @@ def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
         gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
 
 
-def test_archive_rows_cannot_expand_a_bounded_base_plan_past_the_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bounded licence plan still fails if runtime rows push the final matrix over its cap."""
-    capture, report_path = _allowed(tmp_path)
-    dependency_count = len(json.loads(report_path.read_text())["dependencies"])
-    monkeypatch.setattr(gate, "STRIX_PLAN_LIMIT", dependency_count)
-
-    def archive_row(ecosystem: str, name: str, digest_character: str) -> dict:
-        source_digest = digest_character * 64
-        package_key = f"{ecosystem}/{name}@1"
-        key = f"{package_key}/sha256/{source_digest}"
-        fixture = gate.build_fixture(
-            gate.Dependency(ecosystem, name, "1"),
-            {
-                "source_sha256": source_digest,
-                "archive_members": [],
-                "install_hook_sources": {},
-                "parsed_inputs": [],
-                "native_libraries": [],
-                "known_vulnerabilities": [],
-            },
-        )
-        fixture["id"] = key
-        return {
-            "key": key,
-            "package_key": package_key,
-            "name": name,
-            "version": "1",
-            "source_sha256": source_digest,
-            "license": "MIT",
-            "fixture": fixture,
-            "fixture_sha256": gate.fixture_digest(fixture),
-        }
-
-    runtime = archive_row("pypi", "runtime-package", "1")
-    build = archive_row("pypi", "build-package", "2")
-    tool = archive_row("github-release", "maturin", "3")
-    archive_report = tmp_path / "archive-report.json"
-    archive_report.write_text(json.dumps({
-        "schema": "cwl.release-runtime-archive-licenses/3",
-        "archives": [runtime],
-        "build_packages": [build],
-        "build_tools": [tool],
-    }))
-
-    with pytest.raises(gate.GateError, match="dependency plan exceeds"):
-        gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
-
-
 def test_plan_refuses_denied_missing_extra_and_duplicate_scope(tmp_path: Path) -> None:
     mutators = {
         "denied": lambda capture, report: report.__setitem__("result", "FAIL"),

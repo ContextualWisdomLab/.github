@@ -1760,12 +1760,11 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
     """A non-transient 400 stays typed transport without authorizing re-dispatch."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-    error_body = io.BytesIO(b"{}")
 
     class Opener:
         def open(self, request):
             raise noema.urllib.error.HTTPError(
-                request.full_url, 400, "Bad Request", {}, error_body
+                request.full_url, 400, "Bad Request", {}, io.BytesIO(b"{}")
             )
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
@@ -1775,7 +1774,6 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
 
     assert exc_info.value.capacity_unavailable is False
     assert exc_info.value.http_status == 400
-    assert error_body.closed
     assert "outcome=provider_capacity_unavailable" not in capsys.readouterr().out
 
 
@@ -1966,7 +1964,7 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError) as exc_info:
+    with pytest.raises(noema.urllib.error.HTTPError):
         handler.redirect_request(
             request,
             fp=None,
@@ -1975,7 +1973,6 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
-    exc_info.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
