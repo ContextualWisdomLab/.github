@@ -2260,6 +2260,23 @@ vulnerability_file_is_below_threshold() {
 	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
 }
 
+# A model can name a CVE in a package the repository never depends on
+# (fast-mlsirm#2246: "CVE-2024-1234 in lodash 4.17.20" on a Rust/Python tree).
+# Such a finding has no file location; record it as unverified instead of
+# failing closed, but only when every package it names is absent from every
+# dependency manifest and lockfile, and only when the pull request changes no
+# dependency manifest (REPO_ROOT is the base checkout, so a dependency the PR
+# adds would otherwise look absent).
+vulnerability_file_is_unverified_dependency() {
+	local changed_file
+	for changed_file in "${CHANGED_FILES[@]}"; do
+		if is_dependency_manifest_path "$changed_file"; then
+			return 1
+		fi
+	done
+	python3 -I "$SCRIPT_DIR/strix_unverified_dependency.py" "$1" "$REPO_ROOT"
+}
+
 evaluate_pull_request_findings() {
 	PR_FINDINGS_DECISION="not_applicable"
 	if ! is_pull_request_event; then
@@ -2276,6 +2293,7 @@ evaluate_pull_request_findings() {
 	local found_baseline_threshold_finding=0
 	local found_changed_manifest_only_threshold_finding=0
 	local found_retryable_model_inconsistency=0
+	local found_unverified_dependency=0
 	local found_any_vuln_file=0
 	local run_dir vulnerabilities_dir vuln_file line severity rank
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
@@ -2310,6 +2328,10 @@ evaluate_pull_request_findings() {
 			mapfile -t vulnerability_location_records < <(extract_vulnerability_location_records "$vuln_file")
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
+				if vulnerability_file_is_unverified_dependency "$vuln_file"; then
+					found_unverified_dependency=1
+					continue
+				fi
 				PR_FINDINGS_DECISION="block_unmapped"
 				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
 				return 1
@@ -2348,6 +2370,12 @@ evaluate_pull_request_findings() {
 			done
 		done
 	done
+
+	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ] &&
+		[ "$found_unverified_dependency" -eq 1 ] && vulnerability_file_is_unverified_dependency "$STRIX_LOG"; then
+		PR_FINDINGS_DECISION="allow_unverified_dependency"
+		return 0
+	fi
 
 	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ]; then
 		rank="$(extract_max_severity_rank "$STRIX_LOG")"
@@ -2443,6 +2471,9 @@ has_unmapped_threshold_report() {
 			local vulnerability_locations=()
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
+				if vulnerability_file_is_unverified_dependency "$vuln_file"; then
+					continue
+				fi
 				return 0
 			fi
 		done
@@ -3003,7 +3034,8 @@ PY
 			return 1
 		fi
 		if has_blocking_vulnerability_reports; then
-			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
+			if ! evaluate_pull_request_findings ||
+				{ [ "$PR_FINDINGS_DECISION" != "allow_baseline" ] && [ "$PR_FINDINGS_DECISION" != "allow_unverified_dependency" ]; }; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
 				return 1
 			fi
@@ -3660,7 +3692,7 @@ has_blocking_vulnerability_reports() {
 
 fail_reported_vulnerabilities_before_fallback_success() {
 	case "$PR_FINDINGS_DECISION" in
-	allow_baseline)
+	allow_baseline | allow_unverified_dependency)
 		return 1
 		;;
 	esac
@@ -4593,7 +4625,7 @@ run_current_target_scan() {
 	fi
 
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
-		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
+		{ [ "$PR_FINDINGS_DECISION" = "allow_baseline" ] || [ "$PR_FINDINGS_DECISION" = "allow_unverified_dependency" ]; }; then
 		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
 		return 1
 	fi
