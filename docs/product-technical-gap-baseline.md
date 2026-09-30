@@ -3648,3 +3648,37 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-09-30 consumer review-continuation dispatch authority
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2510`; issue #2509 is the
+canonical owner record. Fresh exact-head hosted Checks, a real consumer
+continuation receipt, and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns Noema and Strix transport continuation dispatch. Product repositories
+consume the protected required-workflow contract and provide only their own
+repository-scoped `github.token`; they do not copy the workflow or receive a
+central repository secret.
+
+**Gap / RCA.** On `ContextualWisdomLab/contextual-orchestrator#1349` exact head
+`832291c11da301e919d9dc20fda99f0847142dd8`, Noema job `109737701886`
+correctly classified an `orchestrator/free` HTTP 429 provider-capacity outcome
+and requested a bounded continuation. Job `109778469161` then waited the
+gateway-provided 93 seconds but posted to the central repository with the
+consumer `github.token`, which GitHub rejected with HTTP 403
+`Resource not accessible by integration`. The external capacity outcome is not
+treated as a source defect; loss of the authorized same-head continuation is a
+central control-plane defect.
+
+**Action / executable provenance.** Both continuation lanes exchange the job's
+GitHub OIDC token for the existing organization App installation token and use
+it only for the central `repository_dispatch` POST. Missing OIDC or an empty
+exchange response fails closed before any POST. The real workflow-step shells
+are executed in consumer context with fake network boundaries: both Noema and
+Strix prove the exchanged token is used, and both prove an empty exchange
+cannot dispatch. After a non-force merge of current `main`, 22 focused tests
+pass both normally and with `GITHUB_ACTIONS=true`; the adjacent literal-contract
+suite is 215 passed with warnings fatal. Local evidence is not hosted delivery
+evidence: completion remains HOLD until protected-main integration and a real
+consumer run accept the same live PR/head/base identity.

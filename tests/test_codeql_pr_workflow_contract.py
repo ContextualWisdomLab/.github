@@ -60,6 +60,49 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
+def test_empty_language_inventory_is_not_scanned_as_actions(tmp_path: Path) -> None:
+    """No supported source must not be dispatched as GitHub Actions.
+
+    A markdown and JSON tree used to take the empty-matrix fallback, CodeQL
+    finalize exited 32, and the required check stayed red. The placeholder
+    shard remains so the check name still expands; scannable=false forces
+    code=false before any dispatch.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    classify = _extract_run_block(workflow, "Classify changed paths")
+    assert 'if [ "${SCANNABLE}" != "true" ]; then\n  code=false\nfi\n' in classify
+    assert "SCANNABLE: ${{ steps.detect.outputs.scannable }}" in workflow
+
+    script = _extract_run_block(workflow, "Build language matrix")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "README.md").write_text("# hi\n", encoding="utf-8")
+    (tree / "ledger.json").write_text("{}\n", encoding="utf-8")
+    (tree / ".gitignore").write_text("*.log\n", encoding="utf-8")
+
+    def run_detect(target: Path) -> str:
+        output = target / "github-output.txt"
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=target,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "GITHUB_OUTPUT": str(output)},
+        )
+        assert result.returncode == 0, result.stderr
+        return output.read_text(encoding="utf-8")
+
+    empty = run_detect(tree)
+    assert "scannable=false" in empty
+    assert '"language":"actions"' in empty
+
+    (tree / "code.py").write_text("print(1)\n", encoding="utf-8")
+    python_tree = run_detect(tree)
+    assert "scannable=true" in python_tree
+    assert '"language":"python"' in python_tree
+
+
 def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_once() -> None:
     """Shards consume verdicts; one coordinator POSTs the remaining language matrix.
 
