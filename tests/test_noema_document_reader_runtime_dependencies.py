@@ -19,7 +19,7 @@ LOCK_PATH = (
 
 @pytest.mark.parametrize(
     ("package_name", "safe_version"),
-    (("fast-uri", "3.1.8"), ("ip-address", "10.7.2")),
+    (("fast-uri", "3.1.8"), ("ip-address", "10.7.1")),
 )
 def test_noema_document_reader_uses_exclusive_safe_runtime_dependency(
     package_name: str, safe_version: str

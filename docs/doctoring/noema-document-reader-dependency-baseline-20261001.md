@@ -13,8 +13,8 @@ generated Noema document-reader lock at exact PR head
 - `ip-address` 10.7.0: CVE-2026-101912 / GHSA-j6r3-76f7-8jcv.
 
 The upstream fast-uri advisory fixes the 3.x line in 3.1.8. The ip-address
-advisories fix both findings in 10.7.1; this lock selects the current 10.7.2
-patch within the existing `^10.2.0` transitive range.
+advisories fix both findings in 10.7.1; this lock selects the first patched 10.7.1
+release within the existing `^10.2.0` transitive range.
 
 ## Ownership and decision
 
