@@ -13,6 +13,7 @@ LOCK_FILE = (
     / "noema-document-reader"
     / "package-lock.json"
 )
+PACKAGE_FILE = LOCK_FILE.with_name("package.json")
 
 
 def _version_tuple(package_name: str) -> tuple[int, ...]:
@@ -26,3 +27,13 @@ def test_document_reader_transitives_include_security_fixes() -> None:
     """Reject releases affected by the September 2026 URI and IP advisories."""
     assert _version_tuple("fast-uri") >= (3, 1, 8)
     assert _version_tuple("ip-address") >= (10, 7, 2)
+
+
+def test_document_reader_source_owns_transitive_security_fixes() -> None:
+    """Require source overrides so lock regeneration preserves the repair."""
+    package_data = json.loads(PACKAGE_FILE.read_text(encoding="utf-8"))
+
+    assert package_data["overrides"] == {
+        "fast-uri": "3.1.8",
+        "ip-address": "10.7.2",
+    }
