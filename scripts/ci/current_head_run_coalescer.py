@@ -458,7 +458,7 @@ def _refresh_siblings(
     workflow_id = _positive_int(candidate_snapshot.get("workflow_id"))
     if workflow_id is None:
         return []
-    sibling_ids = sorted(
+    sibling_ids = sorted([
         sibling_run_id
         for run_data in runs
         if _positive_int(run_data.get("workflow_id")) == workflow_id
@@ -467,7 +467,7 @@ def _refresh_siblings(
         )
         and (sibling_run_id := _positive_int(run_data.get("id"))) is not None
         and sibling_run_id != candidate_run_id
-    )
+    ])
     if len(sibling_ids) <= 1:
         return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
 
