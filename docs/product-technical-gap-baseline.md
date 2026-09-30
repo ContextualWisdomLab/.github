@@ -3692,10 +3692,12 @@ verdict-shape acceptance, and qualifying independent approval.
 
 ## 2026-10-01 Noema document-reader npm security refresh
 
-**Status:** Proposed on `ContextualWisdomLab/.github#2543`; the published head
-`f79a617aef6eca2e83f822a0014130372ffa54ef` remains failed and is not merge
-authority. A repaired successor head, fresh hosted Checks, and qualifying
-independent approval are required.
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`. Failed predecessor
+`f79a617aef6eca2e83f822a0014130372ffa54ef` is not merge authority. Repair
+parent `acd0fbbc54c37dc8558eaea026f38eabf7d1243d` carries the reviewed lock
+updates; its Security Scan and SAST checks passed, while its CodeQL review
+remained fail-closed pending. The live exact head still requires fresh hosted
+Checks and qualifying independent approval.
 
 **Context Map / owner.** The central `.github` Noema review bounded context owns
 the reviewed HWP reader runtime and its generated npm lock. `hwp-mcp` and

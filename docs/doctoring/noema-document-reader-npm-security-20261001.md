@@ -40,9 +40,11 @@ Local evidence on the repaired tree:
   vulnerabilities.
 
 The repair does not suppress a finding, lower severity, bypass scripts, relax
-a gate, or claim that local audit output authorizes merge. The PR must publish
-a new exact head, complete fresh protected Checks, and receive an independent
-approval before ordinary integration.
+a gate, or claim that local audit output authorizes merge. Repair parent
+`acd0fbbc54c37dc8558eaea026f38eabf7d1243d` published the reviewed lock
+updates: Security Scan and SAST passed, while CodeQL remained fail-closed
+pending. The live exact head must complete fresh protected Checks and receive
+an independent approval before ordinary integration.
 
 ## References
 
