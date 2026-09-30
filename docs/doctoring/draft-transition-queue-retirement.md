@@ -41,7 +41,11 @@ converted to success.
 `test_converted_to_draft_retires_queued_run_without_runner` first failed for
 all four workflows because the event was absent. After the repair, the focused
 test reports four passes and the complete draft-control contract reports
-14 passes. Hosted exact-head checks remain required before protected merge.
+14 passes. An affected-workflow audit also found and corrected one stale SAST
+test oracle that still required the old closed-only job guard. The resulting
+workflow-consumer suite reports 672 passes, and the warnings-fatal repository
+suite reports 5,259 passes, five optional-platform skips, and 40 subtests.
+Hosted exact-head checks remain required before protected merge.
 
 ## Follow-up
 
