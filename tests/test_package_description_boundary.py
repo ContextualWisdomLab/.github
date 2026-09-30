@@ -213,12 +213,31 @@ def test_allow_downgrades_a_rule_without_hiding_it(tmp_path: Path) -> None:
 def test_json_report_records_every_finding(tmp_path: Path) -> None:
     """CI needs the machine-readable form, not only the printed lines."""
     module = _module()
-    dist = _sdist(tmp_path, "[a](docs/a.md) and `src/pkg/x.py`\n")
+    dist = _sdist(
+        tmp_path,
+        "[a](docs/a.md)\n`src/pkg/x.py`\nA commercial readiness tool.\n",
+    )
     out = tmp_path / "report.json"
     module.main(["--dist", str(dist), "--json", str(out)])
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["status"] == "failed"
-    assert {f["rule"] for f in report["findings"]} == {"relative-link", "source-path"}
+    assert report["findings"] == [
+        {
+            "rule": "relative-link",
+            "detail": "docs/a.md does not resolve on a registry page; use an absolute URL",
+            "blocking": True,
+        },
+        {
+            "rule": "source-path",
+            "detail": "`src/pkg/x.py`",
+            "blocking": True,
+        },
+        {
+            "rule": "go-to-market-vocabulary",
+            "detail": "A commercial readiness tool.",
+            "blocking": False,
+        },
+    ]
 
 
 def test_missing_metadata_is_an_error_not_a_pass(tmp_path: Path) -> None:
