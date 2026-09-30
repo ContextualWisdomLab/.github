@@ -1,5 +1,23 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 gap baseline source integrity
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| A connector display truncation was committed as the baseline source, removing 3,270 lines of PRD/TRD/UML, Gap-register, APA 7th, and live-inventory evidence | Repository Metadata Reconcile run `36777030872`; job `110097412873`; exact broken head `.github#2530@61a3f2ebbf6adf9c237a647552ccffeb52b00f47`; RED `c8d41f52962814d080a1c4947acbff2f3f9bb81e` | Restore the last complete 3,703-line source blob, reapply only the intended first-patched dependency-floor row, and reject future connector truncation banners in the repository quality gate | **Proposed / local RED→GREEN complete; exact-head hosted Metadata and independent approval required** |
+
+## 2026-10-01 Noema document-reader transitive security baseline
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The generated Noema document-reader lock selected `fast-uri` 3.1.7 and `ip-address` 10.7.0 after CVE-2026-86472, CVE-2026-101911, and CVE-2026-101912 were published | Security Scan run `36773087489`; Trivy job `110084194330`; exact predecessor `.github#2530@a99784219305d1b6e14cf76f0acea30c5ee45e21` | At the central `.github` owner, regenerate only the two transitive entries to `fast-uri` 3.1.8 and the first patched `ip-address` 10.7.1 release, scan every hoisted or nested lock entry in a regression contract, reproduce with `npm ci`, and require a zero-vulnerability npm audit | **Proposed / local RED→GREEN and audit complete; exact-head hosted security and independent approval required** |
+
+## 2026-10-01 trusted review archive transient transport
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| Required Noema resolved the correct immutable trusted source but a single GitHub archive API HTTP 502 exhausted materialization before model setup | `.github` run `36760921156`, job `110043067331`; protected source `37b10243cec3d160ecc9c1be75c71428b160a703`; combined successor predecessor `.github#2530@5b3a76ea71d7ae2fa9b1719f4f82df8d52e98082` | At the central `.github` owner, add bounded native transport retries to Noema, OpenCode, and merge-scheduler trusted archive downloads; prove the actual commands against a deterministic 502→200 server without changing exact-SHA, credential, extraction, or fail-closed contracts | **Proposed / local RED→GREEN complete; exact-head hosted Checks and independent approval required** |
+
 ## 2026-10-01 PyJWT recursion denial-of-service closure
 
 | Gap | Exact evidence | Action | Status |
