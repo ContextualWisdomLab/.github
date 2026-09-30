@@ -174,13 +174,12 @@ def has_reusable_real_model_approval(
     log: TextIO,
     approval_authors: frozenset[str] = APPROVAL_AUTHORS,
 ) -> bool:
-    """Return whether reviews contain a real-model approval for the exact head."""
+    """Return whether the latest exact-head OpenCode decision is reusable."""
     candidate_count = 0
     for review in reversed(reviews):
-        state = str(review.get("state") or "").upper()
         commit_id = str(review.get("commit_id") or "")
         login = str((review.get("user") or {}).get("login") or "")
-        if state != "APPROVED" or commit_id.lower() != head_sha.lower():
+        if commit_id.lower() != head_sha.lower():
             continue
         if login not in KNOWN_PUBLICATION_ACTORS:
             continue
@@ -200,9 +199,11 @@ def has_reusable_real_model_approval(
             return True
         print(
             "existing-approval gate rejected same-head review "
-            f"id={review_id} author={login}: {reason}",
+            f"id={review_id} author={login}; latest same-head review is authoritative: "
+            f"{reason}",
             file=log,
         )
+        break
 
     print(
         "existing-approval gate found no reusable real-model approval "
