@@ -2820,6 +2820,11 @@ child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"
 child_env["pnpm_config_ignore_scripts"] = "true"
 child_env["YARN_ENABLE_SCRIPTS"] = "false"
 child_env["BUN_CONFIG_IGNORE_SCRIPTS"] = "true"
+# Strix posts PostHog telemetry by default. Runner egress blocks it, and the
+# swallowed traceback (``requests.post(..., timeout=SEND_TIMEOUT)``) lands in
+# strix.log, where the report failure-signal scan reads "timeout" and fails a
+# clean scan closed. Scan metadata also has no business leaving the runner.
+child_env["STRIX_TELEMETRY"] = "0"
 child_env["STRIX_LLM"] = os.environ["STRIX_CHILD_MODEL"]
 child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
@@ -2944,7 +2949,14 @@ scan_output_dir.mkdir()
 # Keep scanner-created state and relative report files outside the untrusted
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
-command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
+# strix_report_scope.py only accepts a completed PR scan whose report names a
+# changed file. A clean scan's report otherwise mentions paths at the model's
+# discretion, so ask for them explicitly; the attestation check is unchanged.
+REPORT_SCOPE_INSTRUCTION = (
+    "In the final penetration test report, list every source file you reviewed "
+    "by its path relative to the scan target, including files with no findings."
+)
+command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]
 
 try:
     process = subprocess.Popen(
