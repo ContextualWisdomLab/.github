@@ -154,6 +154,49 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
     assert workflow.count("runs-on:") == 1
 
 
+def test_review_launcher_runtime_is_owned_by_the_review_repair_suite() -> None:
+    """Trigger, execute, compile, and measure the launcher's runtime contracts."""
+
+    workflow = _workflow_text()
+
+    assert workflow.count("tests/test_contextual_orchestrator_review_launcher.py") == 4
+    assert workflow.count("tests/test_review_preflight_concurrency.py") == 4
+    assert "--cov=scripts.ci.contextual_orchestrator_review_launcher" in workflow
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    (
+        "requirements-opencode-review-ci.txt",
+        "requirements-noema-document-ci.txt",
+        "scripts/ci/compile_opencode_review_lock.sh",
+    ),
+)
+def test_common_lock_sources_select_every_python_consumer_suite(
+    changed_path: str,
+) -> None:
+    """A common-lock source change must execute both Python consumer suites."""
+
+    workflow = _workflow_text()
+    selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
+        "            esac", 1
+    )[0]
+    result = subprocess.run(
+        [
+            "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+            'IFS= read -r changed_path\nnoema_suite=false\nopencode_suite=false\n'
+            'case "$changed_path" in\n' + selector
+            + 'esac\nprintf "%s,%s" "$noema_suite" "$opencode_suite"\n',
+        ],
+        input=changed_path + "\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "true,true"
+    assert result.stderr == ""
+
+
 @pytest.mark.parametrize(
     ("changed_path", "starts_runner", "review_repair", "queue"),
     (
