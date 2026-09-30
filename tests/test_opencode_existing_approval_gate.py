@@ -68,6 +68,7 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     changed_files.chmod(0o600)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    monkeypatch.setenv("COVERAGE_EVIDENCE_SUMMARY", "- Result: PASS")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     monkeypatch.setenv(
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
@@ -440,3 +441,24 @@ def test_parse_args_and_main(monkeypatch, capsys):
         io.StringIO(json.dumps([[review(user={"login": "github-actions[bot]"})]])),
     )
     assert gate.main(["--head", HEAD, "--require-opencode-app"]) == 1
+
+
+@pytest.mark.parametrize(
+    "summary",
+    (
+        "",
+        "- Result: NOT MEASURED",
+        "prefix - Result: PASS",
+        "- Result: PASS (assumed)",
+        "- Result: PASS\n- Result: PASS",
+        "- Result: PASS\n- Result: NOT MEASURED",
+    ),
+)
+def test_coverage_decision_rejects_missing_ambiguous_or_incomplete_summary(summary):
+    """Existing approval reuse requires one exact PASS decision."""
+    assert gate.coverage_decision_is_pass(summary) is False
+
+
+def test_coverage_decision_accepts_one_exact_pass_line():
+    """One exact PASS line is reusable coverage evidence."""
+    assert gate.coverage_decision_is_pass("detail\n- Result: PASS\n") is True
