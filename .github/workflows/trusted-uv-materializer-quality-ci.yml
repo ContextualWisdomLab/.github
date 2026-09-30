@@ -11,7 +11,10 @@ on:
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
       - "pyproject.toml"
   push:
     branches: [main]
@@ -23,7 +26,10 @@ on:
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
       - "pyproject.toml"
 
 concurrency:
