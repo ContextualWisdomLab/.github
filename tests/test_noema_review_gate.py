@@ -2882,6 +2882,14 @@ def test_fetch_file_content_at_ref_refuses_malformed_base64(monkeypatch):
         noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
 
 
+def test_fetch_file_content_at_ref_refuses_malformed_json(monkeypatch):
+    """A malformed GitHub API envelope fails closed before metadata inspection."""
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "{not-json")
+
+    with pytest.raises(RuntimeError, match="GitHub content response was malformed"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+
+
 @pytest.mark.parametrize("payload,reason", [
     ({"content": "", "encoding": "none", "size": 1048577}, "API omitted"),
     ({"content": "", "encoding": "base64", "size": 1}, "nonempty file"),

@@ -1265,7 +1265,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         discovered, discovery_errors = discover_all_models()
-    except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
+    except Exception as exc:
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
     _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
@@ -1408,5 +1408,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

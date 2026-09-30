@@ -1,3 +1,26 @@
+### Full-suite parser locks and honest branch coverage converge
+
+- Consolidated the complete valid ancestry of `.github#2521` into `.github#2530`
+  with ordinary two-parent merges so the parser-lock and repository-coverage
+  gates no longer wait on one another. Behavior-level tests exercise the final
+  branches in the OpenCode queue, Strix dependency classifier, release runtime
+  prescreener, and release dependency gate without exclusions, pragmas,
+  threshold reductions, or sample shrinking. Direct consumers of the common
+  generated lock now also track both source requirements and the canonical
+  compiler. `.github#2532`'s warning-fatal HTTP response-lifecycle repair is
+  carried in the same successor so the complete suite can regenerate one
+  exact-head receipt. Protected hosted Checks and qualifying independent review
+  remain mandatory before ordinary merge; predecessors remain open until
+  merged-tree equivalence is proven. The combined Python 3.14 warnings-fatal
+  suite passes 5,291 tests with 5 optional skips and 40 subtests; all 18,729
+  production statements and 7,642 branches are covered, and production
+  Docstring coverage is 100%. The durable review-repair owner also triggers,
+  executes, compiles, and measures both launcher runtime suites at 100%.
+  Exact Git blobs, Cargo development locks, runtime receipts, final fanout caps,
+  and the Python 3.10 TOML fallback are covered as explicit trust boundaries;
+  one unreachable postcondition was removed only after prior fail-closed
+  validation made that state mechanically impossible.
+
 ### Full-suite quality environments install their collection parsers
 
 - The common OpenCode quality input now owns the existing hash-pinned

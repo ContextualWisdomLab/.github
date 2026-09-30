@@ -4,6 +4,15 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(".github/workflows/trusted-uv-materializer-quality-ci.yml")
+AGENT_MENTION_WORKFLOW_PATH = Path(
+    ".github/workflows/agent-mention-router-quality-ci.yml"
+)
+AGENT_RUNTIME_WORKFLOW_PATH = Path(
+    ".github/workflows/agent-review-runtime-quality-ci.yml"
+)
+REPOSITORY_METADATA_WORKFLOW_PATH = Path(
+    ".github/workflows/repository-metadata-reconcile.yml"
+)
 
 
 def _workflow_text() -> str:
@@ -26,6 +35,9 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
+        '"requirements-opencode-review-ci.txt"',
+        '"requirements-noema-document-ci.txt"',
+        '"scripts/ci/compile_opencode_review_lock.sh"',
         '"pyproject.toml"',
     )
     for required_path in required_paths:
@@ -49,7 +61,50 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
     ) == 2
     assert workflow.count("persist-credentials: false") == 2
     assert workflow.count("ref: ${{ github.event.pull_request.head.sha }}") == 2
-    assert workflow.count("fetch-depth: 0") == 1
+    minimum_job, full_job = workflow.split("  full-quality-gate:\n", 1)
+    assert "fetch-depth: 0" not in minimum_job
+    assert full_job.count("fetch-depth: 0") == 1
+
+
+def test_common_lock_source_changes_trigger_every_direct_consumer() -> None:
+    """Every workflow installing the generated common lock tracks its sources."""
+
+    tracked_inputs = (
+        '"requirements-opencode-review-ci.txt"',
+        '"requirements-noema-document-ci.txt"',
+        '"scripts/ci/compile_opencode_review_lock.sh"',
+    )
+    consumer_paths = (
+        (AGENT_MENTION_WORKFLOW_PATH, 2),
+        (AGENT_RUNTIME_WORKFLOW_PATH, 1),
+        (REPOSITORY_METADATA_WORKFLOW_PATH, 1),
+    )
+    for workflow_path, expected_count in consumer_paths:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for tracked_input in tracked_inputs:
+            assert workflow.count(tracked_input) == expected_count
+
+
+def test_metadata_consumer_tracks_the_generated_common_lock() -> None:
+    """The metadata workflow must run when its installed lock changes."""
+
+    workflow = REPOSITORY_METADATA_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert workflow.count('"requirements-opencode-review-ci-hashes.txt"') == 1
+
+
+def test_common_lock_source_declares_the_transitive_parser_inputs() -> None:
+    """The reviewed source binds both parser requirements regenerated in the lock."""
+
+    source = Path("requirements-opencode-review-ci.txt").read_text(encoding="utf-8")
+    lock = Path("requirements-opencode-review-ci-hashes.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "-r requirements-noema-document-ci.txt" in source
+    assert "PyYAML==6.0.3" in source
+    assert "defusedxml==0.7.1" in lock
+    assert "pyyaml==6.0.3" in lock
 
 
 def test_minimum_python_contract_exercises_the_tomli_fallback() -> None:
