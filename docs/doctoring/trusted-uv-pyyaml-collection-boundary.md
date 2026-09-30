@@ -38,3 +38,11 @@ five known vulnerabilities in checked-in runtime/fixture locks; `fast-uri`,
 evidence is a clean production `npm audit`, a passing locked Cargo fixture, and
 seven passing Agent Mention workflow contracts. Coverage and hosted admission
 remain fail-closed.
+
+The next Python Security run found newly published urllib3 and PyJWT advisories
+in the generated pip-audit and Strix locks. The source inputs now explicitly
+pin urllib3 2.8.0 and PyJWT 2.15.0 so regeneration cannot silently return to
+the vulnerable transitive versions. Both regenerated full locks pass
+`pip-audit` with no known vulnerabilities, and four source-to-lock contracts
+pass. This is dependency repair only; it does not convert the Draft PR or the
+separate coverage failure into accepted evidence.

@@ -1892,6 +1892,13 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
   its unit and doc tests. These repairs do not waive the separate 100% coverage
   deficit, fresh hosted exact-head Checks, or independent approval.
 
+- **2026-10-01 Python audit follow-up:** Exact-head Python Security run
+  `36774482440` then found three urllib3 2.7.0 advisories and twelve PyJWT
+  2.13.0 advisories across the pip-audit and Strix locks. RED source-to-lock
+  contracts require explicit repaired inputs. The canonical inputs and generated
+  locks now pin urllib3 2.8.0 and PyJWT 2.15.0. Both complete lock audits report
+  no known vulnerabilities; the source-to-lock suite passes four tests.
+
 ## 2026-09-19 GitHub API production-opener redirect proof
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.

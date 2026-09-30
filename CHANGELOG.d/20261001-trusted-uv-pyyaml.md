@@ -6,3 +6,5 @@
   Router quality gate, including its `defusedxml` collection dependency.
 - Refresh vulnerable Noema reader and Cargo coverage-fixture locks to
   `fast-uri` 3.1.8, `ip-address` 10.7.2, and PyO3 0.29.3.
+- Pin and regenerate the pip-audit and Strix locks with urllib3 2.8.0 and
+  PyJWT 2.15.0 after exact-head Python Security findings.
