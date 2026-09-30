@@ -33,6 +33,7 @@ import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
@@ -402,6 +403,8 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row["retry_after_s"] = retry_after
     row.pop("finish_reason", None)
     row.pop("reasoning_without_content", None)
+    if isinstance(exc, HTTPError):
+        exc.close()
 
 
 def _demote_agent(agent: object, penalty: int) -> object:

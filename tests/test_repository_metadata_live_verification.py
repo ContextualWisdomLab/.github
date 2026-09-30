@@ -145,10 +145,11 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
     assert len(handlers) == 1
     assert isinstance(handlers[0], RECONCILER._NoPagesRedirects)
     from urllib.error import HTTPError
-    with pytest.raises(HTTPError):
+    with pytest.raises(HTTPError) as exc_info:
         handlers[0].redirect_request(
             RECONCILER.Request("https://example.com"), None, 302, "redirect", {}, "http://127.0.0.1/"
         )
+    exc_info.value.close()
 
     with pytest.raises(RuntimeError, match="not built"):
         RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
