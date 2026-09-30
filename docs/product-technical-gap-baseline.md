@@ -2321,3 +2321,31 @@ Repository Metadata Reconcile now installs both hash locks and observes both
 Noema dependency surfaces. The focused contract passes without weakening the
 100% coverage, exact-revision, or fail-closed gates. Fresh successor-head
 hosted evidence is mandatory; the failed run is retained as causal evidence.
+
+## 2026-10-01 Strix LiteLLM credential-boundary security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2040`; release and merge
+remain HOLD pending fresh exact-head hosted Checks, non-skipped CodeQL evidence
+where required, and qualifying independent approval.
+
+**Context Map / owner.** Central `.github` owns the hash-locked Strix CI
+runtime. LiteLLM and its signed package artifacts are upstream evidence; Strix
+consumes the immutable dependency through the central lock without moving
+provider-routing domain truth out of contextual-orchestrator.
+
+**Gap / RCA.** Exact-head Python Security run
+[`36779036029`](https://github.com/ContextualWisdomLab/.github/actions/runs/36779036029),
+job `110104335583`, found `litellm==1.94.1` affected by CVE-2026-84377. The
+advisory describes authenticated credential exfiltration and SSRF through
+nested routing or provider-credential overrides and lists 1.94.3 as a patched
+release in the selected minor line.
+
+**RED → repair.** A new source/lock parity regression first failed because the
+source had no explicit LiteLLM pin and the compiled lock selected 1.94.1. The
+source now pins 1.94.3 and the hash lock is regenerated with the documented
+cross-platform command. Six focused dependency contracts pass, and
+`pip-audit==2.10.1` reports no known vulnerabilities in the regenerated exact
+lock. No scanner suppression, threshold change, provider route, model, or paid
+fallback was added. Detailed constraints, failure scene, and APA 7th references
+are in
+[`docs/doctoring/shared-security-baseline-litellm-20261001.md`](doctoring/shared-security-baseline-litellm-20261001.md).

@@ -67,6 +67,19 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
     assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.15.1"]
 
 
+def test_strix_litellm_ssrf_security_pin_is_an_explicit_lock_input() -> None:
+    """Keep the LiteLLM credential-exfiltration fix in source and hash lock."""
+    requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
+        encoding="utf-8"
+    )
+    requirements_lock = (
+        REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
+    ).read_text(encoding="utf-8")
+
+    assert _locked_requirement_versions(requirements, "litellm") == ["1.94.3"]
+    assert _locked_requirement_versions(requirements_lock, "litellm") == ["1.94.3"]
+
+
 def test_python_security_inputs_pin_patched_urllib3() -> None:
     """Keep both audited runtimes on the urllib3 security release."""
     requirement_pairs = (

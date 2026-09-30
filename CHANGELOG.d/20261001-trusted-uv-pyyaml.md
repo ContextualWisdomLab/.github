@@ -15,3 +15,6 @@
 - Install the hash-pinned Noema document toolchain in Repository Metadata
   Reconcile before its repository-wide pytest step, preventing `defusedxml`
   collection failures after the coverage prerequisite merge.
+- Pin LiteLLM 1.94.3 in the Strix source and regenerated hash lock after
+  Python Security found CVE-2026-84377 credential exfiltration and SSRF in
+  1.94.1.
