@@ -6,11 +6,11 @@
 |---|---|---|---|
 | The proposed Strix/Noema exchange accepted NUL and other C0 controls; Bash then removed NUL and used a mutated credential | #2540 review on predecessor `612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; direct reproduction accepted `abc\\u0000def` as `abcdef` with status 0 | Enforce the exact ASCII token alphabet inside jq and execute NUL/BEL actual-shell cases for both OIDC and App-token fields before any Authorization, mask, or output use | **Proposed / Draft; Noema #735/#736 release, exact-head Checks, and independent approval required** |
 
-## 2026-10-01 shared PyJWT parser DoS closure
+## 2026-10-01 PyJWT recursion denial-of-service closure
 
 | Gap | Exact evidence | Action | Status |
 |---|---|---|---|
-| The central Strix source and hash lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v disclosed an unauthenticated recursion DoS | Security Scan run `36741151937`; dependency-review job `109975641239`; OSV job `109975641271`; dependent `.github#2540@612d8e77cf13eba84782a22587a72d3ffb4b6c6e` | In canonical owner PR #2531, advance source and lock to 2.15.0, bind exact source/lock parity, and merge-forward dependent branches only after owner acceptance | **Proposed / exact-head Checks and independent approval required** |
+| The shared Strix source and hash lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v / CVE-2026-101918 disclosed an unauthenticated recursion DoS | Security Scan run `36741151937`; dependency-review job `109975641239`; OSV job `109975641271`; dependent `.github#2540@612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; canonical owner PR #2531 predecessor `dde3ea7876ceb1569db717975cc74f44cc8d18f9` | In canonical owner PR #2531, advance source and lock to 2.15.0 without unrelated package movement, preserve exact source/lock parity, and merge-forward dependent branches only after owner acceptance | **Proposed / exact-head Checks and independent approval required** |
 
 ## 2026-10-01 shared urllib3 security closure
 
