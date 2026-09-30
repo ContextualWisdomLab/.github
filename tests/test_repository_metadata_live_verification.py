@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -145,10 +146,11 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
     assert len(handlers) == 1
     assert isinstance(handlers[0], RECONCILER._NoPagesRedirects)
     from urllib.error import HTTPError
-    with pytest.raises(HTTPError):
+    with pytest.raises(HTTPError) as exc_info:
         handlers[0].redirect_request(
             RECONCILER.Request("https://example.com"), None, 302, "redirect", {}, "http://127.0.0.1/"
         )
+    exc_info.value.close()
 
     with pytest.raises(RuntimeError, match="not built"):
         RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
@@ -177,6 +179,28 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
     )
     with pytest.raises(RuntimeError, match="not reachable"):
         RECONCILER._pages_publication_ready("Repo", ready)
+
+
+def test_pages_publication_ready_closes_mapped_http_error(monkeypatch) -> None:
+    """Pages verification closes the response when it maps an HTTP failure."""
+    ready = {
+        "status": "built",
+        "html_url": "https://contextualwisdomlab.github.io/Repo/",
+    }
+    error_body = io.BytesIO(b"private body")
+    provider_error = RECONCILER.HTTPError(
+        ready["html_url"], 503, "private body", {}, error_body
+    )
+    monkeypatch.setattr(
+        RECONCILER,
+        "build_opener",
+        lambda *args: FakeOpener(error=provider_error),
+    )
+
+    with pytest.raises(RuntimeError, match="not reachable"):
+        RECONCILER._pages_publication_ready("Repo", ready)
+
+    assert error_body.closed
 
 
 def test_verify_repository_accepts_converged_disabled_and_enabled_pages(

@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -37,8 +37,6 @@ class _NoPagesRedirects(HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         """Raise an HTTPError instead of following the redirect."""
-
-        from urllib.error import HTTPError
 
         raise HTTPError(req.full_url, code, msg, headers, fp)
 
@@ -247,7 +245,13 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
             if not response.read(1):
                 raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
+        try:
+            raise RuntimeError(
+                f"GitHub Pages is not reachable for {repository}"
+            ) from exc
+        finally:
+            if isinstance(exc, HTTPError):
+                exc.close()
 
 
 def _repository_file_exists(repository: str, default_branch: str, path: str) -> bool:
