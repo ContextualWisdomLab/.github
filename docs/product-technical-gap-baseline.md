@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 shared urllib3 security closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| pip-audit and Strix locks retained urllib3 2.7.0 after CVE-2026-97687 and CVE-2026-97689 were published | Python Security run `36733279716`, job `109949358063`; exact predecessor `d1aa3659fca527a6c7330151f3ab4df3d7578391` | In canonical owner PR #2531, pin urllib3 2.8.0 in both source inputs, regenerate both hash locks without unrelated version movement, and bind all four files with one contract | **Proposed / exact-head Checks and independent approval required** |
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
@@ -12,6 +18,29 @@
 | Gap ID | Status | Exact-head evidence | Causal owner / next gate |
 |---|---|---|---|
 | CONTROL-REVIEW-TRANSPORT-DISPATCH-01 | **Proposed / blocked — known 403 remains; owner release required** | `wardnet#134@b1758bb838c7b315cdf4e55064985c3626f52e5e` Strix run `36387392997`, continuation job `109439414934` completed its bounded wait and then failed `POST repos/ContextualWisdomLab/.github/dispatches` with `Resource not accessible by integration (HTTP 403)`. The current recurrence is `contextual-orchestrator#1349@832291c11da301e919d9dc20fda99f0847142dd8`: Noema job `109737701886` emitted typed `provider_capacity_unavailable` after gateway HTTP 429, then continuation job `109778469161` waited 93 seconds and failed the central dispatch with HTTP 403. Retained `late-life-anxiety-reanalysis@34032cff52e8522db6ea0aad9f68ae0217e86ee3` evidence (`local/supervisor-audit-20260912/current-ci/103571810868.log`, blob `cb91b0c0bfe1ff9001cab9e1675d97b00cfcef32`, lines 141/158/173) proves the existing consumer OIDC exchange followed by central dispatch also fails HTTP 403. | Canonical capability owner is Noema issue `ContextualWisdomLab/noema#735`; `.github` owns only the Strix/Noema consumer adapter. The Draft adapter removes the consumer-token fallback, keeps consumer permissions read-only plus `id-token: write`, and now rejects typed, multi-object, whitespace-bearing, or multiline credential responses in executable RED/GREEN tests. Four affected contract files are `120 passed`; the combined warning-fatal suite is `5172 passed, 6 skipped, 40 subtests passed`. It must not claim transport repair or merge until Noema publishes an immutable versioned least-privilege target/action-bound capability, `.github` pins it, and a consumer exact-head run proves central dispatch plus a fresh model verdict. |
+
+### 2026-09-30 central coverage owner stack delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-CENTRAL-COVERAGE-OWNER-01 | **Proposed — complete local integration GREEN; hosted exact-head acceptance pending** | Current coverage owner `.github#2521@61fb469a…`, parser/security/response integration successor `.github#2530@2510618f…`, GitHub API response-lifecycle owner `.github#2532@9d3ec75d…`를 ordinary two-parent merge로 보존했다. 첫 integrated warning-fatal run은 `5196 passed, 6 skipped` 뒤 queue/Strix/release prescreen/release dependency의 실제 미실행 분기 90개와 partial branch 29개를 드러냈다. Dummy/live-CLI tests를 bounded behavior contracts로 교체하고, exact Git blob·Cargo development lock·runtime receipt·final fanout cap·Python 3.10 TOML fallback을 검증했으며, 앞선 필수조건 때문에 도달 불가능했던 prescreener postcondition만 제거했다. 두 live head를 재수집·일반 병합한 combined successor는 `5291 passed, 5 skipped, 40 subtests passed`, owned production `18729/18729` statements 및 `7642/7642` branches, Docstring 100%, warning 0이다. | Canonical owner는 중앙 `ContextualWisdomLab/.github`이며 source delta는 ordinary merge ancestry로만 통합한다. #2530과 #2521의 live head 이동을 재수집해 force 없이 merge했고 새 integrated tree 전체를 재검증했다. 게시된 #2530 exact head의 hosted security/quality Checks 및 qualifying independent approval을 새로 확인한다. queued/skipped/pending을 성공으로 간주하지 않고 #2521/#2530/#2532를 단순 Close하지 않는다. [RCA와 검증 근거](doctoring/central-coverage-owner-stack-2521.md). |
+
+### 2026-09-30 full-suite parser-lock incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530` combined successor preserves live parser, security, response-lifecycle, and coverage heads; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. Concurrent-head 재검증 뒤 live #2530 `2510618f…`와 live #2521 `61fb469a…`를 Force Push·rebase 없이 ordinary merge했다. 이 ancestry는 security prerequisite #2531 `d1aa3659…`, response-lifecycle prerequisite #2532 `9d3ec75d…`, parser lock, coverage 수리를 함께 보존한다. 잠금을 직접 설치하는 모든 workflow는 생성 lock, 두 source input, compiler 변경을 추적하며 선택형 runtime quality도 실제 consumer suite를 실행한다. Review-repair owner는 launcher runtime 두 suite를 직접 실행·계측한다. Combined local evidence는 Python 3.14 warnings-fatal 5,291 passed, 5 skipped, 40 subtests, production 18,729/18,729 statements·7,642/7,642 branches, Docstring 100%다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 source requirement, 생성 hash lock, compiler, 직접 소비 quality workflows다. 새 combined exact head의 hosted Checks, 미해결 thread 0, qualifying independent approval을 다시 수집해야 ordinary protected merge할 수 있다. #2531/#2532/#2521은 protected successor merge와 complete carryover를 확인하기 전 닫지 않는다. |
+| CONTROL-REPOSITORY-BRANCH-COVERAGE-01 | **Proposed — `.github#2521`의 전체 유효 delta를 `.github#2530` combined successor가 ordinary merge로 승계; exact-head hosted acceptance pending** | `.github#2521`는 production exclusion을 제거해 전역 100% 주장을 정직하게 RED로 되돌렸다. 네 잔여 소유자인 `opencode_queue_priority`, `strix_unverified_dependency`, `prescreen_release_runtime_archives`, `release_dependency_gate`의 실제 분기를 test-first로 모두 실행했고, launcher production omission도 제거했다. `.github#2530`의 parser lock 없이는 전체 suite collection이 실패하고, parser-lock PR은 이 coverage gap 때문에 전역 gate가 실패하는 순환 선행조건이었다. predecessor의 current head `61fb469a…`까지 successor ancestry에 보존하며 predecessor는 successor의 보호 병합과 tree 동등성을 확인하기 전 닫지 않는다. | Canonical owner는 중앙 `.github`의 production CI modules와 complete repository gate다. coverage 제외·pragma·threshold 하향·샘플 축소는 허용하지 않는다. refreshed combined successor의 complete warnings-fatal suite, 100% statement/branch report, hosted Checks, independent approval, ordinary protected merge를 새 exact head에서 완료해야 한다. |
+
+### 2026-09-30 공유 보안 기준 exact-head delta
+
+이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
+보호 `main`은 `37b10243cec3d160ecc9c1be75c71428b160a703`이고, live API의 첫
+페이지에는 열린 PR 50개가 있었다. 페이지 전체를 조직의 총 PR 수로 추론하지 않는다.
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
 
 ### 2026-09-30 GitHub API response lifecycle incident delta
 
