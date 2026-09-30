@@ -3,6 +3,18 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _locked_requirement_versions(requirements_text: str, package_name: str) -> list[str]:
+    """Return every exact version row for one normalized package name."""
+    package_versions = []
+    for requirement_line in requirements_text.splitlines():
+        requirement_name, separator, version_and_hash_marker = (
+            requirement_line.strip().partition("==")
+        )
+        if separator and requirement_name.casefold() == package_name.casefold():
+            package_versions.append(version_and_hash_marker.split()[0])
+    return package_versions
+
+
 def test_strix_installs_openai_httpx2_runtime() -> None:
     requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
         encoding="utf-8"
@@ -38,5 +50,5 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
         REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
     ).read_text(encoding="utf-8")
 
-    assert "pyjwt==2.14.0" in requirements.splitlines()
-    assert "pyjwt==2.14.0 \\" in requirements_lock.splitlines()
+    assert _locked_requirement_versions(requirements, "pyjwt") == ["2.14.0"]
+    assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.14.0"]

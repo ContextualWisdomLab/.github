@@ -18,7 +18,7 @@ at exact head `6f645a73502e159d5a229805afa34868ad9bb851` against protected
   job `109380628690`, reported PyO3 `0.22.6` in
   `tests/fixtures/coverage-cargo/Cargo.lock`: GHSA-36hh-v3qg-5jq4 (High, 8.0)
   and GHSA-chgr-c6px-7xpp (Medium, 5.5). Both advisories fix the defect in
-  PyO3 `0.29.0`; this repair selects the already reviewed `0.29.2` release.
+  PyO3 `0.29.0`; this repair selects and locally verifies `0.29.2`.
 - [Python Security run 36495499871](https://github.com/ContextualWisdomLab/.github/actions/runs/36495499871),
   job `109380725819`, reported PyJWT `2.13.0` in
   `requirements-strix-ci-hashes.txt` as affected by CVE-2026-102274. PyJWT
@@ -72,8 +72,12 @@ cause is repaired here; no bypass or mutable source reference is permitted.
   48 passed, 1 skipped.
 - Repository regression suite: 5,160 passed, 11 skipped, 40 subtests passed.
 - Rust `1.97.1` `cargo check --locked`: passed for the coverage fixture.
-- Python lock regeneration from the existing reviewed lock: byte-identical;
-  hash-enforced installation loaded PyJWT `2.14.0`.
+- Python lock regeneration with `uv 0.12.18`, seeded with the existing reviewed
+  output, was byte-identical. Input SHA-256 values were `c3812261…` for
+  `requirements-strix-ci.txt` and `3b745514…` for the override; the output was
+  `8f8318d4…`. A hash-enforced installation loaded PyJWT `2.14.0`. A fresh
+  unseeded solve is intentionally not claimed to be byte-identical because it
+  may select newer allowed transitive releases.
 - `pip-audit`: no known vulnerabilities in the Strix lock. OSV's direct
   `pyo3@0.29.2` query returned no vulnerability records.
 
