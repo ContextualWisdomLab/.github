@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,25 @@ def test_sanitizer_without_trailing_newline_stays_without_one() -> None:
     """Sanitization preserves the absence of a final newline."""
 
     assert sanitizer.sanitize_text("plain") == "plain"
+
+
+def test_sanitizer_cli_writes_utf8_redacted_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The command-line boundary preserves UTF-8 evidence while redacting secrets."""
+
+    source = tmp_path / "coverage.md"
+    destination = tmp_path / "coverage-output.md"
+    source.write_text("결과: 통과\nAPI_KEY=비밀\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["sanitize", str(source), str(destination)])
+
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_path(
+            "scripts/ci/sanitize_github_output_summary.py", run_name="__main__"
+        )
+
+    assert exc_info.value.code == 0
+    assert destination.read_text(encoding="utf-8") == "결과: 통과\nAPI_KEY=<redacted>\n"
 
 
 def test_sbom_defensive_relationship_and_license_shapes() -> None:
