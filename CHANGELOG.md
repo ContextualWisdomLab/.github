@@ -1,3 +1,18 @@
+### Review transport continuation dispatch uses a central repository token
+
+- Strix and Noema capacity continuations now exchange their GitHub OIDC
+  identity for the existing repository-scoped OpenCode GitHub App token before
+  posting `repository_dispatch` to `ContextualWisdomLab/.github`. Consumer
+  required workflows no longer fall back to the consumer-scoped
+  `github.token`, which produced HTTP 403 after an otherwise valid bounded
+  backoff. The continuation jobs retain only read access to consumer contents
+  and pull requests; the App token is scoped by the exchange service. The
+  stacked validation also found and repaired Noema's unclosed file-like
+  `HTTPError` response after bounded telemetry extraction. Focused workflow
+  contracts are 24 passed; the warning-fatal Strix/Noema suite is 586 passed,
+  2 skipped, and 21 subtests passed. Hosted exact-head dispatch and resulting
+  fresh model verdict remain required before admission.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

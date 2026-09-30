@@ -7,6 +7,18 @@ from pathlib import Path
 from scripts.ci import strix_runtime_capacity
 
 
+def test_transport_continuation_uses_oidc_app_token_for_central_dispatch():
+    """Consumer-scoped ``github.token`` must never dispatch to central ``.github``."""
+    source = Path('.github/workflows/strix.yml').read_text()
+    continuation = source.split('\n  continue-strix-transport:\n', 1)[1]
+
+    assert '      id-token: write' in continuation
+    assert '      - name: Exchange OpenCode app token for central Strix continuation' in continuation
+    assert '/exchange_github_app_token' in continuation
+    assert 'GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}' in continuation
+    assert 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}' not in continuation
+
+
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):
     source = Path('.github/workflows/strix.yml').read_text()
     block = source.split('      - name: Schedule bounded Strix transport re-dispatch\n', 1)[1]

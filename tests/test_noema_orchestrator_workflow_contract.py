@@ -212,9 +212,20 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "      - name: Schedule bounded Noema transport re-dispatch" not in review_job
     assert "    needs: [admit-current-head, noema-review]" in continuation_job
     assert "needs.noema-review.result == 'failure'" in continuation_job
-    assert "      contents: write" in continuation_job
+    assert "      contents: read" in continuation_job
+    assert "      contents: write" not in continuation_job
     assert "      pull-requests: read" in continuation_job
-    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}" in continuation_job
+    assert "      id-token: write" in continuation_job
+    assert (
+        "      - name: Exchange OpenCode app token for central Noema continuation"
+        in continuation_job
+    )
+    assert "/exchange_github_app_token" in continuation_job
+    assert (
+        "GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}"
+        in continuation_job
+    )
+    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}" not in continuation_job
     assert "${TARGET_REPOSITORY}" in continuation_job
     assert '"$GITHUB_REPOSITORY"' in continuation_job
     assert "uses: actions/checkout" not in continuation_job

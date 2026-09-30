@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-30 review-transport continuation incident delta
+
+| Gap ID | Status | Exact-head evidence | Causal owner / next gate |
+|---|---|---|---|
+| CONTROL-REVIEW-TRANSPORT-DISPATCH-01 | **Proposed — central owner source repaired; hosted acceptance pending** | `wardnet#134@b1758bb838c7b315cdf4e55064985c3626f52e5e` Strix run `36387392997`, continuation job `109439414934` completed its bounded wait and then failed `POST repos/ContextualWisdomLab/.github/dispatches` with `Resource not accessible by integration (HTTP 403)`. The required consumer workflow received neither the central secret nor a central-scoped token; its fallback `github.token` was scoped to `wardnet`. `contextual-orchestrator#1221@4dcf9e32b057cde83bca67bfd45975fc6deda458` exercises the same Noema continuation path after provider HTTP 504. | Canonical owner is `.github/workflows/{strix,noema-review}.yml`. Both continuation jobs now request `id-token: write`, exchange OIDC through the established `/exchange_github_app_token` contract, and bind only the returned App token to the central dispatch step. RED contract tests failed on the absent OIDC grant. This stack carries `.github#2532` and closes the adjacent Noema `HTTPError` lifecycle; focused contracts are `24 passed` and the warning-fatal review suite is `586 passed, 2 skipped, 21 subtests passed`. A consumer exact-head run must still prove the central dispatch and a fresh exact-head model verdict before merge. |
+
 ### 2026-09-30 GitHub API response lifecycle incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
