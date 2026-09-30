@@ -53,7 +53,7 @@ def test_strix_anyio_security_pin_is_an_explicit_lock_input() -> None:
 
 
 def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
-    """Keep the patched PyJWT version reproducible from the source input."""
+    """Keep PyJWT above the GHSA-42vr-xj54-vc7v parser DoS fix."""
     requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
         encoding="utf-8"
     )
@@ -61,8 +61,9 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
         REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
     ).read_text(encoding="utf-8")
 
-    assert _locked_requirement_versions(requirements, "pyjwt") == ["2.14.0"]
-    assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.14.0"]
+    assert _locked_requirement_versions(requirements, "pyjwt") == ["2.15.0"]
+    assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.15.0"]
+
 
 def test_shared_urllib3_security_pin_is_an_explicit_lock_input() -> None:
     """Keep both audited dependency closures above the urllib3 CVE fixes."""
