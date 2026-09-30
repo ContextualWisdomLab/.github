@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-30 full-suite parser-lock incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530` source-repair commit `41e95af9…` verified locally; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. PR #2530의 source input은 기존 `requirements-noema-document-ci.txt`와 `PyYAML==6.0.3`을 포함하며, 생성 lock은 `uv pip compile` 재실행과 byte-for-byte 일치했다. Python 3.14 hash-locked common+Noema 설치, 두 parser import, 관련 계약은 73 passed, 2 skipped였다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 `requirements-opencode-review-ci.txt`, 생성 hash lock, 직접 소비 quality workflows다. 병합 시점에 다시 수집한 live exact head의 hosted Checks 7개와 qualifying independent approval이 완료돼야 일반 보호 병합할 수 있다. 후속 traceability-only commit의 SHA를 이 행에 자기참조로 동결하거나 predecessor 결과를 재사용하지 않는다. fast-mlsirm의 Noema HTTP 400·Strix linkage·제품 coverage 문제의 완료 증거로 재사용하지 않는다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

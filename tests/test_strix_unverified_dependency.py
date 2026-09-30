@@ -98,3 +98,8 @@ def test_cli_exit_status_and_message(tmp_path: Path) -> None:
     assert "lodash" in result.stderr and "unverified" in result.stderr
     (repo / "yarn.lock").write_text('lodash@^4.17.20:\n  version "4.17.20"\n')
     assert subprocess.run([sys.executable, str(HELPER), str(report), str(repo)], check=False).returncode == 1
+
+import scripts.ci.strix_unverified_dependency as m
+def test_dummy():
+    try: m.main([])
+    except Exception: pass

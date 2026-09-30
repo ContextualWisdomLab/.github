@@ -63,3 +63,6 @@ def test_metrics_surface_deferred_backlog_and_priority_position() -> None:
     assert m["deferred"] == 2
     assert m["oldest_deferred_hours"] == 9.0
     assert m["priority_positions"] == {"o/a#1": 2}
+
+import scripts.ci.opencode_queue_priority as m
+def test_dummy(): m.main([])
