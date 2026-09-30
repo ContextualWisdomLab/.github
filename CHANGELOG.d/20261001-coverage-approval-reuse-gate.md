@@ -13,3 +13,12 @@
 - Existing approval reuse now evaluates the latest exact-head OpenCode
   publication decision instead of skipping a newer `CHANGES_REQUESTED` or
   otherwise invalid decision and resurrecting an older `APPROVED` review.
+- The canonical Noema document-reader lock now selects `fast-uri` 3.1.8 and
+  `ip-address` 10.7.2, removing CVE-2026-86472, CVE-2026-101911, and
+  CVE-2026-101912 from the exact runtime installed by the hosted review lane.
+  The bundle contract pins both transitive security versions so a later lock
+  regeneration cannot silently restore the vulnerable releases.
+- The central Strix input and generated hash lock now select LiteLLM 1.94.3,
+  the patched 1.94 release for CVE-2026-84377. This closes the authenticated
+  provider-credential forwarding and SSRF boundary exposed by 1.94.1 while
+  preserving the existing Strix package and override set.

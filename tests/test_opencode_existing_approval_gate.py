@@ -346,10 +346,9 @@ def test_has_reusable_real_model_approval_logs_rejected_candidates():
     log = io.StringIO()
     assert not gate.has_reusable_real_model_approval(
         [
-            review(state="COMMENTED"),
+            fallback,
             review(commit_id="b" * 40),
             review(user={"login": "unknown"}),
-            fallback,
         ],
         HEAD,
         log=log,
