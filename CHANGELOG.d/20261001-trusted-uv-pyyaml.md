@@ -7,7 +7,8 @@
 - Refresh vulnerable Noema reader and Cargo coverage-fixture locks to
   `fast-uri` 3.1.8, `ip-address` 10.7.2, and PyO3 0.29.3.
 - Pin and regenerate the pip-audit and Strix locks with urllib3 2.8.0 and
-  PyJWT 2.15.0 after exact-head Python Security findings.
+  PyJWT 2.15.1 after exact-head Python Security findings and the subsequent
+  recursion-hardening release.
 - Fetch complete Git comparison history in the Trusted uv full-suite gate so
   published-lineage contracts can resolve current-HEAD ancestors, and restore
   the baseline's required APA 7th reference section.

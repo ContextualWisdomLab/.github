@@ -41,7 +41,7 @@ remain fail-closed.
 
 The next Python Security run found newly published urllib3 and PyJWT advisories
 in the generated pip-audit and Strix locks. The source inputs now explicitly
-pin urllib3 2.8.0 and PyJWT 2.15.0 so regeneration cannot silently return to
+pin urllib3 2.8.0 and PyJWT 2.15.1 so regeneration cannot silently return to
 the vulnerable transitive versions. Both regenerated full locks pass
 `pip-audit` with no known vulnerabilities, and four source-to-lock contracts
 pass. This is dependency repair only; it does not convert the Draft PR or the
