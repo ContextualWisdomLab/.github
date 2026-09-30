@@ -166,6 +166,19 @@ def _bytez_non_token_price_evidence(
     return None
 
 
+def _normalize_input_modalities(value: object) -> tuple[str, ...]:
+    """Preserve declared input evidence without turning malformed data into unknown."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = (value,)
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(modality, str) or not modality.strip() for modality in value
+    ):
+        raise PolicyError("discovery model input_modalities must contain nonempty strings")
+    return tuple(dict.fromkeys(modality.strip().casefold() for modality in value))
+
+
 def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate and normalize a contextual-orchestrator discovery report."""
     rows = report.get("models")
@@ -246,6 +259,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "completion_price_per_1k": completion_price,
                 "currency_code": currency_code,
                 "non_token_price_evidence": non_token_price_evidence,
+                "input_modalities": _normalize_input_modalities(row.get("input_modalities")),
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
                 "credential_key": credential_key,
                 "auth_scheme": row.get("auth_scheme")
@@ -395,6 +409,7 @@ def build_zdr_prioritized_catalog(
                     "review",
                     f"cost:{evidence}",
                     "zdr" if zdr else "non-zdr",
+                    *(f"input:{modality}" for modality in row.get("input_modalities", ())),
                 ],
                 "priority": -rank,
                 "disabled": False,

@@ -82,6 +82,57 @@ def _openai_text(content: str) -> dict[str, object]:
     return {"choices": [{"message": {"content": content}}]}
 
 
+@pytest.mark.parametrize(
+    ("modalities", "expected_tags"),
+    [
+        (("text",), ["input:text"]),
+        (("text", "image"), ["input:text", "input:image"]),
+        (["image"], ["input:image"]),
+        (" IMAGE ", ["input:image"]),
+        ([" Text ", "TEXT", "audio"], ["input:text", "input:audio"]),
+        ((), []),
+        (None, []),
+    ],
+)
+def test_discovered_input_modalities_survive_review_catalog(modalities, expected_tags):
+    """Discovery input evidence must reach the gateway without removing image routes."""
+    model = SimpleNamespace(
+        provider_name="nvidia_nim",
+        model_id="review-model",
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+        input_modalities=modalities,
+    )
+    rows = _load_launcher()["_report_rows"](
+        [model], frozenset({("nvidia_nim", "review-model")})
+    )
+    normalized = policy.parse_discovery_report({"models": rows})
+    catalog = policy.build_zdr_prioritized_catalog(normalized)
+    agent = catalog["agents"][0]
+    assert [tag for tag in agent["tags"] if tag.startswith("input:")] == expected_tags
+    assert agent["model"] == "review-model"
+    assert agent["credential_key"] == "NVIDIA_NIM_API_KEY"
+    assert "cost:free" in agent["tags"]
+    assert catalog["report"]["free_selected_count"] == 1
+
+
+@pytest.mark.parametrize("modalities", [True, 1, {}, [None], [""], ["text", 3]])
+def test_discovery_rejects_malformed_input_modality_evidence(modalities):
+    """Malformed input evidence must not disappear and admit a blind free route."""
+    row = {
+        "provider": "nvidia_nim",
+        "model": "review-model",
+        "is_free": True,
+        "prompt_price_per_1k": 0.0,
+        "completion_price_per_1k": 0.0,
+        "currency_code": "USD",
+        "input_modalities": modalities,
+    }
+    with pytest.raises(policy.PolicyError, match="input_modalities"):
+        policy.parse_discovery_report({"models": [row]})
+
+
 def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     """Evidence-only rows (e.g. OpenRouter) must never enter live selection."""
     namespace = _load_launcher()
