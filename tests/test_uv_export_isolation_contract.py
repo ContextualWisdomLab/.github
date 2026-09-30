@@ -118,6 +118,37 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
     ]
 
 
+def test_uv_export_accepts_vcs_source_for_proven_coverage_python_floor() -> None:
+    """A lower bound already met by the fixed coverage image is safe to erase."""
+    requirement = (
+        "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@"
+        + "a" * 40
+        + " ; python_full_version >= '3.12'\n"
+    )
+
+    registry, vcs_sources = materializer._partition_uv_export(requirement.encode())
+
+    assert registry == b""
+    assert vcs_sources == [
+        {
+            "package": "fast-mlsirm",
+            "import_name": "fast_mlsirm",
+            "repository": "fast-mlsirm",
+            "commit": "a" * 40,
+        }
+    ]
+
+
+def test_vcs_marker_floor_is_bound_to_the_fixed_coverage_python_image() -> None:
+    """The marker proof must move with the coverage interpreter version."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert materializer.TRUSTED_COVERAGE_PYTHON_MAJOR_MINOR == (3, 14)
+    assert "FROM docker.io/library/python:3.14-slim@sha256:" in workflow
+
+
 @pytest.mark.parametrize(
     "requirement",
     [
@@ -127,6 +158,12 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
         "demo @ git+https://github.com/ContextualWisdomLab/demo.git@"
         + "a" * 40
         + "#subdirectory=python",
+        "demo @ git+https://github.com/ContextualWisdomLab/demo.git@"
+        + "a" * 40
+        + " ; python_full_version >= '3.15'",
+        "demo @ git+https://github.com/ContextualWisdomLab/demo.git@"
+        + "a" * 40
+        + " ; sys_platform == 'linux'",
     ],
 )
 def test_uv_export_rejects_unbounded_vcs_sources(requirement: str) -> None:

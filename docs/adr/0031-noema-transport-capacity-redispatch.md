@@ -1,0 +1,96 @@
+# ADR-0031: Noema transport-capacity failures schedule a bounded continuation re-dispatch
+
+- **Status:** Accepted
+- **Date:** 2026-09-17
+- **Scope:** `scripts/ci/noema_review_gate.py`, `.github/actions/noema-review/two_phase.py`, `.github/workflows/noema-review.yml`
+- **Issue:** ContextualWisdomLab/.github#2165
+- **Does not amend:** ADR-0003 (gateway owns provider failover), ADR-0005 (no model-path wall-clock timeout; superseded attempt ceilings stay historical)
+
+## Problem
+
+`Required Noema Review` is an organization required check. The Noema caller issues
+exactly one gateway request and delegates provider discovery, repair, and failover to
+contextual-orchestrator (ADR-0003). When every free-pool route is transiently
+unavailable or rate-limited, the gateway returns a terminal HTTP 429 or 5xx after it has
+already exhausted its own failover chain. The caller then fails closed with
+`NoemaTransportError` and `caller attempts=1`. That is correct for review integrity —
+the check must not be skipped — but it leaves consumer PRs permanently BLOCKED until a
+human re-dispatches into a healthier window, even when the PR's own code checks are green
+(#2165 evidence on four-pillars and fast-mlsirm).
+
+Holding the same job open to retry the model call would occupy a scarce Actions runner
+for provider capacity that the gateway already reported as exhausted. Product goal
+directive §8 and ADR-0005 forbid converting elapsed inference time into a local
+model-failure verdict or restoring fixed model-path attempt ceilings.
+
+## Decision
+
+1. **Classify, do not re-interpret.** HTTP 429 and 5xx from the already-failed-over
+   gateway are typed as `provider_capacity_unavailable`. Malformed model output, 4xx
+   other than 429, and local validation failures stay terminal review failures. The
+   required check still fails; review is never skipped or auto-approved.
+2. **One gateway request per job stays the contract.** `call_llm` does not gain a caller-side retry loop. Provider failover remains contextual-orchestrator's job.
+3. **Continuation re-dispatch is the recovery lever.** When the failure is
+   `provider_capacity_unavailable` and the run's `transport_retry_attempt` is below the
+   bound (`MAX_TRANSPORT_REDISPATCH_ATTEMPTS = 2`), the workflow schedules exactly one
+   same-head `repository_dispatch` (`noema-review`) with an incremented attempt counter
+   after a short jitter delay. The new job is a fresh admission/continuation; the failed
+   job remains failed evidence for that attempt. A malformed supplied counter exhausts
+   the budget rather than starting it over.
+4. **Jitter is post-failure scheduling, not a model timeout.** Prefer a whole-seconds
+   `Retry-After` from the gateway error when present and in `[1, 300]`. Otherwise use a
+   deterministic delay in `[60, 180]` seconds derived from the exact head SHA and attempt
+   number so concurrent capacity failures do not stampede the free pool. That sleep runs
+   only in the post-failure scheduling step and never wraps `opener.open`.
+5. **Surface gateway attempt evidence.** When the error envelope carries an `attempts`
+   list (orchestrator failover telemetry), the public Actions warning and exception text
+   include `provider_attempt_count=<n>` alongside the existing last-attempt fields so
+   capacity incidents are distinguishable from code-review verdicts without dumping raw
+   provider bodies.
+6. **Isolate dispatch authority.** The failed review job exports only typed retry
+   evidence and retains read-only repository contents access. A dependent job alone
+   receives repository-scoped Contents write through `GITHUB_TOKEN`; it has no
+   checkout or model inputs, and rechecks the live repository, PR head, and base
+   before dispatch. The reviewer App token remains limited to Contents read.
+
+## Consequences
+
+- A capacity storm produces at most three Noema jobs per head (initial + two automatic
+  re-dispatches) before failing closed for operator intervention.
+- Runner occupancy for a dead pool is one failed inference plus ≤180 s of scheduling
+  jitter, not another multi-hour in-job wait on the same slot.
+- Gateway routing bugs (for example a non-transient 400 on one ready route while others
+  remain unused) are **out of scope** here; they belong to contextual-orchestrator route
+  selection, not this caller (#2165 consumer notes on vision-model 400s).
+- Private-target ZDR pool exhaustion (#2148) shares the classification and attempt
+  evidence, but does not widen this ADR's re-dispatch bound.
+
+## Alternatives considered
+
+- **In-job retry of `call_llm`.** Rejected: duplicates gateway failover, burns the runner
+  against an exhausted pool, and conflicts with the single-request contract tests.
+- **Mark the required check neutral/success on capacity loss.** Rejected: weakens
+  "review cannot be skipped."
+- **Unbounded re-dispatch.** Rejected: amplifies 429 pressure (#2165 filing notes).
+- **Rely only on the merge scheduler's next tick.** Deferred as a complementary path;
+  it does not give the Noema workflow its own bounded, evidence-typed recovery when the
+  scheduler is not looking at that head.
+
+## Proposed Strix startup extension — 2026-09-27
+
+- **Status:** Proposed; deployment and independent review remain unverified.
+- **Context:** Strix all-429 preflight fails before its model gate can retry;
+  late-life-anxiety-reanalysis #257/#269 have exact-job evidence of this path.
+- **Decision:** Reuse the bounded classifier in a separate post-failure dispatch
+  job, with live repository/head/base/ref/Ready validation and the same two-attempt
+  ceiling. Retain the failed scan and status; never infer approval from recovery.
+- **Consequences:** Automatic recovery can enter a healthier provider window and
+  uses up to two additional scan admissions. Persistent capacity failure still
+  requires operator action. Consumer execution needs the existing central
+  dispatch credential; its absence remains visible and fail-closed.
+- **Alternatives:** Model-gate retries cannot run before successful startup;
+  in-job startup loops hold a scan runner; unbounded dispatch amplifies capacity
+  pressure; neutral/success status would weaken the required security gate.
+
+See `../doctoring/strix-preflight-capacity-continuation-20260927.md` for evidence
+and the local-versus-hosted verification boundary.
