@@ -1881,6 +1881,17 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
   stays Draft; hosted exact-head GREEN and independent current-head review have
   not been claimed.
 
+- **2026-10-01 exact-head follow-up:** The first published PyYAML repair let the
+  Trusted uv gate collect, but Agent Mention Router Quality still ran the whole
+  repository with only the OpenCode lock and failed 13 Noema imports on missing
+  `defusedxml`. Its RED contract now binds the Noema lock to both trigger and
+  installation surfaces. The same exact-head Security run reported vulnerable
+  fixture/runtime locks: `fast-uri` 3.1.7, `ip-address` 10.7.0, and PyO3 0.22.6.
+  The owner locks move to 3.1.8, 10.7.2, and 0.29.3 respectively; `npm audit`
+  reports zero production vulnerabilities and the locked Cargo fixture passes
+  its unit and doc tests. These repairs do not waive the separate 100% coverage
+  deficit, fresh hosted exact-head Checks, or independent approval.
+
 ## 2026-09-19 GitHub API production-opener redirect proof
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.

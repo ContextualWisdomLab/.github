@@ -27,3 +27,14 @@ mandatory 100% threshold because inherited production paths still contain 178
 uncovered statements; that distinct failure remains fail-closed and keeps
 #2040 Draft pending owner coverage repair, hosted exact-head evidence, and an
 independent current-head review.
+
+The next exact-head Agent Mention Router Quality run exposed the same boundary
+at a second consumer: it executed the complete repository suite while
+installing only the OpenCode lock, so 13 Noema tests failed collection on
+missing `defusedxml`. That workflow now declares the Noema lock as a trigger,
+cache input, and hash-required install. The concurrent Security gate also found
+five known vulnerabilities in checked-in runtime/fixture locks; `fast-uri`,
+`ip-address`, and PyO3 are refreshed to 3.1.8, 10.7.2, and 0.29.3. Local
+evidence is a clean production `npm audit`, a passing locked Cargo fixture, and
+seven passing Agent Mention workflow contracts. Coverage and hosted admission
+remain fail-closed.
