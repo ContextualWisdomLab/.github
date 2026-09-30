@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      id-token: write
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -31,12 +32,78 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Exchange OpenCode app token for cross-repo reads
+        id: queue_read_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Collect read-only repository and runner evidence
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.queue_read_app_token.outputs.token }}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is required for cross-repository queue reads."
+            echo "::error::PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token is required for cross-repository queue reads."
             exit 1
           fi
           echo "::add-mask::$GH_TOKEN"
