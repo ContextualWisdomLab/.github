@@ -33,6 +33,8 @@ MAX_BINARY_BYTES = 32 * 1024 * 1024
 
 def _download(filename: str) -> bytes:
     url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
+    if not url.startswith("https://"):
+        raise ValueError("Invalid URL scheme")  # pragma: no cover
     with urlopen(Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60) as response:
         raw = response.read(MAX_ASSET_BYTES + 1)
     if len(raw) > MAX_ASSET_BYTES:
