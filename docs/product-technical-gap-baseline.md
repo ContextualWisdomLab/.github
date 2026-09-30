@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 review-transport credential character boundary
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The proposed Strix/Noema exchange accepted NUL and other C0 controls; Bash then removed NUL and used a mutated credential | #2540 review on predecessor `612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; direct reproduction accepted `abc\\u0000def` as `abcdef` with status 0 | Enforce the exact ASCII token alphabet inside jq and execute NUL/BEL actual-shell cases for both OIDC and App-token fields before any Authorization, mask, or output use | **Proposed / Draft; Noema #735/#736 release, exact-head Checks, and independent approval required** |
+
 ## 2026-10-01 shared PyJWT parser DoS closure
 
 | Gap | Exact evidence | Action | Status |

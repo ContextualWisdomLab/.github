@@ -11,8 +11,9 @@
 ### Proposed review transport continuation fails closed pending owner capability
 
 - The proposed Strix and Noema capacity-continuation adapter removes the
-  consumer-scoped `github.token` fallback and strictly rejects non-string,
-  whitespace-bearing, multiline, or multi-object OIDC/App-token responses.
+  consumer-scoped `github.token` fallback and strictly accepts only nonempty ASCII alphanumeric, dot, underscore, and hyphen
+  credentials, rejecting every control-bearing, whitespace-bearing, multiline,
+  typed, or multi-object OIDC/App-token response.
   The continuation jobs retain only read access to consumer contents and pull
   requests. A retained run proves that a consumer-origin exchanged token still
   receives HTTP 403 when posting to `ContextualWisdomLab/.github`; therefore

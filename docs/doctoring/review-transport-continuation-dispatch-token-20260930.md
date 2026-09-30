@@ -99,3 +99,23 @@ all of the following on one current head:
 
 No manual status, skipped job, predecessor verdict, or rerun without a cause
 change satisfies this acceptance contract.
+
+## 2026-10-01 control-character review repair
+
+An exact-head review of predecessor `612d8e77cf13eba84782a22587a72d3ffb4b6c6e`
+found that the whitespace-only predicate accepted NUL and other C0 controls.
+Bash command substitution then deleted NUL before use, so the shell could send,
+mask, or publish credential bytes different from the authenticated JSON value.
+The direct RED reproduction accepted both `\\u0000` and `\\u0007`;
+the NUL case emitted `abcdef` from input `abc\\u0000def`.
+
+Both exchange steps now admit only the exact token alphabet
+`[A-Za-z0-9._-]+`, which covers JWT base64url segments and GitHub installation
+tokens while rejecting all controls, whitespace, quoting, and shell
+metacharacters inside jq before raw output. Actual-shell fixtures exercise NUL
+and BEL in both OIDC and App-token fields, require a nonzero exit, prohibit
+mask/output emission, and prove malformed OIDC never reaches the second curl.
+Valid positive controls still require two curl calls, one mask record, and one
+output record. The Noema owner release prerequisite and Draft/merge HOLD are
+unchanged.
+

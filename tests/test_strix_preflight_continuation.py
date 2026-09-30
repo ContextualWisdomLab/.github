@@ -21,7 +21,7 @@ def test_transport_continuation_uses_oidc_app_token_for_central_dispatch():
 
 
 def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path: Path):
-    """The actual exchange shell must not emit typed or multiline credentials."""
+    """The actual shell must reject typed, control-bearing, and multiline credentials."""
     workflow = Path(".github/workflows/strix.yml").read_text()
     shell = workflow_step(
         workflow,
@@ -30,6 +30,7 @@ def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path:
     fake_curl = tmp_path / "curl"
     fake_curl.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$CURL_LOG"\n'
         'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$APP_RESPONSE"; '
         'else printf "%s" "$OIDC_RESPONSE"; fi\n'
     )
@@ -43,16 +44,22 @@ def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path:
         "OPENCODE_API_BASE_URL": "https://fixture.invalid",
     }
     malformed_pairs = (
-        ('{"value":7}', '{"token":"valid-app"}'),
-        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}'),
-        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}'),
+        ('{"value":7}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}', 2),
+        ('{"value":"bad\\u0000oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0007oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0000app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0007app"}', 2),
     )
     valid_output = tmp_path / "output-valid"
+    valid_curl_log = tmp_path / "curl-valid"
     valid_result = subprocess.run(
         ["bash", "-c", shell],
         env=base_env
         | {
             "GITHUB_OUTPUT": str(valid_output),
+            "CURL_LOG": str(valid_curl_log),
             "OIDC_RESPONSE": '{"value":"valid-oidc"}',
             "APP_RESPONSE": '{"token":"valid-app"}',
         },
@@ -63,13 +70,18 @@ def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path:
     assert valid_result.returncode == 0
     assert valid_result.stdout.splitlines() == ["::add-mask::valid-app"]
     assert valid_output.read_text().splitlines() == ["token=valid-app"]
-    for case_number, (oidc_response, app_response) in enumerate(malformed_pairs):
+    assert len(valid_curl_log.read_text().splitlines()) == 2
+    for case_number, (oidc_response, app_response, expected_calls) in enumerate(
+        malformed_pairs
+    ):
         output = tmp_path / f"output-{case_number}"
+        curl_log = tmp_path / f"curl-{case_number}"
         result = subprocess.run(
             ["bash", "-c", shell],
             env=base_env
             | {
                 "GITHUB_OUTPUT": str(output),
+                "CURL_LOG": str(curl_log),
                 "OIDC_RESPONSE": oidc_response,
                 "APP_RESPONSE": app_response,
             },
@@ -78,7 +90,9 @@ def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path:
             check=False,
         )
         assert result.returncode != 0
+        assert "::add-mask::" not in result.stdout
         assert not output.exists()
+        assert len(curl_log.read_text().splitlines()) == expected_calls
 
 
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):

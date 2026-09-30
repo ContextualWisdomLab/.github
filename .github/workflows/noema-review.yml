@@ -1037,7 +1037,7 @@ jobs:
             echo "::error::Noema continuation dispatch could not obtain its OIDC response."
             exit 1
           fi
-          if ! oidc_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].value | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$oidc_response")"; then
+          if ! oidc_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].value | select(type == "string" and test("^[A-Za-z0-9._-]+$"))' <<<"$oidc_response")"; then
             echo "::error::Noema continuation dispatch received a malformed OIDC response."
             exit 1
           fi
@@ -1045,7 +1045,7 @@ jobs:
             echo "::error::Noema continuation dispatch could not obtain its app token response."
             exit 1
           fi
-          if ! app_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].token | select(type == "string" and length > 0 and (test("[[:space:]]") | not))' <<<"$token_response")"; then
+          if ! app_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].token | select(type == "string" and test("^[A-Za-z0-9._-]+$"))' <<<"$token_response")"; then
             echo "::error::Noema continuation dispatch received a malformed repository-scoped app token response."
             exit 1
           fi
