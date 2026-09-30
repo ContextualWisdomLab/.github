@@ -109,6 +109,7 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
                 raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} metadata is ambiguous")
             metadata_root = PurePosixPath(metadata[0]).parent
             def read_file(path: str) -> bytes:
+                """Read one bounded package metadata or license member."""
                 entry = members.get(f"{name}/{path}")
                 if entry is None or entry.file_size > 4 * 1024 * 1024:
                     raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} text file is missing or oversized")
@@ -402,6 +403,7 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 def main() -> None:
+    """Prescreen runtime archives and write the sealed license inventory."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--verified-scope", required=True)
     parser.add_argument("--scope-root", required=True)

@@ -46,3 +46,20 @@ the vulnerable transitive versions. Both regenerated full locks pass
 `pip-audit` with no known vulnerabilities, and four source-to-lock contracts
 pass. This is dependency repair only; it does not convert the Draft PR or the
 separate coverage failure into accepted evidence.
+
+Exact-head Trusted uv run `36775249483`, job `110091412037`, then exposed a
+separate checkout-depth defect. The complete repository suite executes G-17's
+published-lineage contract, which resolves every documented evidence commit
+and requires it to be an ancestor of the current HEAD. The Trusted uv job used
+the checkout action's shallow default, so published ancestors were absent from
+the local object database even though they are reachable from protected
+`main`. The Agent Mention full-suite gate already used `fetch-depth: 0` and did
+not reproduce that false negative.
+
+The repair keeps the ancestry contract fail closed and gives the Trusted uv
+gate the comparison history it is required to inspect. A workflow regression
+asserts exactly one `fetch-depth: 0`; credentials remain non-persistent and the
+exact PR head remains explicitly selected. The same hosted run also exposed
+the baseline's pre-existing missing `APA 7th references` marker, so the live
+baseline now carries the heading and directly relevant primary Git/GitHub
+references instead of weakening its governance test.

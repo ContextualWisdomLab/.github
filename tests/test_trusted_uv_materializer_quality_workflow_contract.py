@@ -62,6 +62,7 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
         "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
     ) == 2
     assert workflow.count("persist-credentials: false") == 1
+    assert workflow.count("fetch-depth: 0") == 1
     assert workflow.count(
         "ref: ${{ github.event.pull_request.head.sha || github.sha }}"
     ) == 1
