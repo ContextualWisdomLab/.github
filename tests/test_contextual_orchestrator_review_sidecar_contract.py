@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import runpy
 import subprocess
+import sys
 from types import SimpleNamespace
 
 _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -608,7 +609,7 @@ def test_sidecar_uses_lock_compatible_isolated_python() -> None:
     """Every entry point provisions the wheel ABI before an isolated installation."""
     text = _read(SIDECAR)
     guard = text.index('sys.version_info[:2] == (3, 12)')
-    venv = text.index('"$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"')
+    venv = text.index('"$sidecar_python" -m venv --clear "$ORCHESTRATOR_WORK/.venv"')
     select = text.index('sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"')
     install = text.index('"$sidecar_python" -m pip install')
     assert guard < venv < select < install
@@ -648,3 +649,24 @@ def test_sidecar_selects_matching_shared_python_library(tmp_path) -> None:
         )
         expected = f"{library}:/consumer/python/lib" if present else "/consumer/python/lib"
         assert result.stdout == expected
+
+
+def test_sidecar_rebuilds_a_damaged_persistent_venv(tmp_path) -> None:
+    """A venv left half-written by a cancelled job must not poison later jobs.
+
+    Self-hosted runners keep ``$RUNNER_TEMP/contextual-orchestrator-review``;
+    re-running ``venv`` over a damaged ``pip`` package leaves it unimportable.
+    """
+    text = _read(SIDECAR)
+    line = next(l for l in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in l)
+    work = tmp_path / "work"
+    site = work / ".venv" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
+    env = {"PATH": os.environ["PATH"], "ORCHESTRATOR_WORK": str(work),
+           "sidecar_python": sys.executable}
+    subprocess.run(["bash", "-c", line], env=env, check=True)
+    for name in ("__init__.py", "__main__.py"):
+        (site / "pip" / name).unlink()
+    subprocess.run(["bash", "-c", line], env=env, check=True)
+    result = subprocess.run([str(work / ".venv" / "bin" / "python"), "-m", "pip", "--version"],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
