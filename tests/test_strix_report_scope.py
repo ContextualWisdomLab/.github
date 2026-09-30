@@ -142,6 +142,19 @@ def test_validate_rejects_bare_or_partial_file_names(tmp_path: Path, report: str
         scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
 
 
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Reviewed scripts/ci/strix_quick_gate.sh.bak.\\n",
+        "Reviewed scripts/ci/strix_quick_gate.sh/notes.\\n",
+        "Scope: other/scripts/ci/. Reviewed other/strix_quick_gate.sh.\\n",
+    ],
+)
+def test_names_changed_path_rejects_longer_or_unrelated_paths(report: str) -> None:
+    """A suffix or same-named file under another directory is not the changed file."""
+    assert not scope.names_changed_path(report, "scripts/ci/strix_quick_gate.sh")
+
+
 def test_validate_accepts_file_name_within_a_reported_ancestor_directory(tmp_path: Path) -> None:
     """fast-mlsirm#2052 named the crate directory and the file, not ``src/``."""
     _scan(
