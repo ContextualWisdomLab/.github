@@ -1,3 +1,11 @@
+### Shared urllib3 locks close proxy and streaming CVEs
+
+- Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
+  Strix security-tooling closures, regenerate their hash locks without unrelated
+  version movement, and add a four-file parity contract. This closes
+  CVE-2026-97687 and CVE-2026-97689 found by exact-head Python Security while
+  preserving hash checking and the existing Strix cryptography override.
+
 ### Full-suite parser locks and honest branch coverage converge
 
 - Consolidated the complete valid ancestry of `.github#2521` into `.github#2530`

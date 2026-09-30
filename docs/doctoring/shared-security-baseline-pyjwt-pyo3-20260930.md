@@ -101,3 +101,23 @@ https://github.com/advisories/GHSA-chgr-c6px-7xpp
 Open Source Vulnerabilities. (2026). *CVE-2026-102274: PyJWT RSA JWK Set
 availability failure*.
 https://osv.dev/vulnerability/CVE-2026-102274
+
+## 2026-10-01 urllib3 audit follow-up
+
+Python Security run `36733279716`, job `109949358063`, found two newly
+published vulnerabilities in urllib3 2.7.0: CVE-2026-97687 permits target TLS
+policy to weaken or replace HTTPS proxy TLS policy, and CVE-2026-97689 permits
+an unbounded chunk-size line to consume memory in streaming clients. Both are
+fixed in urllib3 2.8.0. The same vulnerable transitive pin appeared in the
+pip-audit and Strix hash locks, so this remains one central security-owner
+repair rather than two consumer workarounds.
+
+The repair adds urllib3 2.8.0 to both source inputs and regenerates both locks
+with their recorded uv commands. A contract requires exactly one 2.8.0 row in
+each source input and generated lock. Comparison against exact predecessor
+`d1aa3659fca527a6c7330151f3ab4df3d7578391` shows no unrelated package-version
+movement. Repeated compilation produced identical SHA-256 digests, and
+pip-audit 2.10.1 reported no known vulnerabilities for either generated lock.
+These local results are not merge authority: exact-head hosted security Checks,
+terminal authenticated CodeQL evidence, independent approval, and ordinary
+protected merge remain required.
