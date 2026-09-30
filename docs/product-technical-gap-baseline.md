@@ -2349,3 +2349,12 @@ lock. No scanner suppression, threshold change, provider route, model, or paid
 fallback was added. Detailed constraints, failure scene, and APA 7th references
 are in
 [`docs/doctoring/shared-security-baseline-litellm-20261001.md`](doctoring/shared-security-baseline-litellm-20261001.md).
+
+**Integrated-suite follow-up.** Repository Metadata run `36779627842`, job
+`110106171836`, collected and executed the complete suite after the Noema lock
+repair: 5,271 tests passed, 5 optional skips, and 40 subtests. Two stale
+contracts then failed because one still searched only the OpenCode lock for
+Noema's `defusedxml`, and another retained the predecessor PyO3 0.29.2 literal
+after the reviewed fixture advanced to 0.29.3. The contracts now aggregate the
+two installed locks and bind the exact current fixture version; production
+code and security gates are unchanged.

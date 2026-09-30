@@ -13,7 +13,7 @@ FIXTURE_ROOT = REPOSITORY_ROOT / "tests" / "fixtures" / "coverage-cargo"
 
 
 def test_coverage_fixture_uses_patched_pyo3_release() -> None:
-    """Keep the fixture manifest and lock on the reviewed PyO3 0.29.2 release."""
+    """Keep the fixture manifest and lock on the reviewed PyO3 0.29.3 release."""
     manifest = tomllib.loads(
         (FIXTURE_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     )
@@ -26,8 +26,8 @@ def test_coverage_fixture_uses_patched_pyo3_release() -> None:
         if package_entry["name"] == "pyo3"
     ]
 
-    assert manifest["dependencies"]["pyo3"]["version"] == "=0.29.2"
+    assert manifest["dependencies"]["pyo3"]["version"] == "=0.29.3"
     assert {package_entry["version"] for package_entry in pyo3_packages} == {
-        "0.29.2"
+        "0.29.3"
     }
     assert len(pyo3_packages) == 1

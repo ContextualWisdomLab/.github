@@ -18,3 +18,6 @@
 - Pin LiteLLM 1.94.3 in the Strix source and regenerated hash lock after
   Python Security found CVE-2026-84377 credential exfiltration and SSRF in
   1.94.1.
+- Reconcile full-suite dependency and Rust-fixture contracts with the merged
+  split OpenCode/Noema locks and PyO3 0.29.3 artifact instead of retaining
+  predecessor-version assertions.

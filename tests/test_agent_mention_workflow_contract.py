@@ -54,12 +54,14 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
 
 def test_full_suite_tooling_lock_includes_collection_dependencies() -> None:
     """A quality install must provide both parsers imported during suite collection."""
-    lock = (ROOT / "requirements-opencode-review-ci-hashes.txt").read_text(
-        encoding="utf-8"
+    locks = (
+        ROOT / "requirements-opencode-review-ci-hashes.txt",
+        ROOT / "requirements-noema-document-ci-hashes.txt",
     )
     requirements = {
         line.split("==", 1)[0].casefold()
-        for line in lock.splitlines()
+        for lock_path in locks
+        for line in lock_path.read_text(encoding="utf-8").splitlines()
         if line and not line.startswith(("#", " ", "-")) and "==" in line
     }
     assert {"defusedxml", "pyyaml"} <= requirements
