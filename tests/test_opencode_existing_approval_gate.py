@@ -472,6 +472,12 @@ def test_parse_args_and_main(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([[review()]])))
     assert gate.main(["--head", HEAD, *coverage_args]) == 0
 
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+    assert gate.main(
+        ["--head", HEAD, "--coverage-summary", "- Result: NOT MEASURED"]
+    ) == 1
+    assert "coverage decision is not PASS" in capsys.readouterr().err
+
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
     assert gate.main(["--head", HEAD, *coverage_args]) == 2
     assert "could not parse reviews" in capsys.readouterr().err
