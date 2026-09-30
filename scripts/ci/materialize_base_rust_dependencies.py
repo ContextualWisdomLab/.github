@@ -446,6 +446,12 @@ def materialize(
             vendor_dir = output_dir / "vendor"
             try:
                 completed = _run_cargo_vendor(manifest_path, vendor_dir, sync_manifests)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"could not run trusted cargo vendor for base manifest {lock_path}: "
+                    "cargo is not installed or not on PATH on this runner "
+                    "(self-hosted runners keep it in ~/.cargo/bin)"
+                ) from exc
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise RuntimeError(
                     f"could not run trusted cargo vendor for base manifest {lock_path}: "

@@ -58,6 +58,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
 MAX_BLOB_BYTES = 100_000_000
+# Decoded-pixel bound for PNG validation, separate from the HTTP response cap:
+# a valid 2238x2052 RGBA screenshot decodes to 18.4 MB. 128 MiB covers 16-bit
+# RGBA up to 4K and 8-bit RGBA up to 6K while keeping zlib output bounded.
+MAX_PNG_DECODED_BYTES = 134_217_728
 REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # A base ref threaded into evaluate_pull_request may be either a branch name
@@ -833,7 +837,7 @@ def _is_complete_png(raw: bytes) -> bool:
                 pass_height = (height - y_start + y_step - 1) // y_step
                 row_bytes = (pass_width * channels * bit_depth + 7) // 8
                 expected_size += pass_height * (row_bytes + 1)
-                if expected_size > MAX_RESPONSE_BYTES:
+                if expected_size > MAX_PNG_DECODED_BYTES:
                     return False
                 scanlines.append((pass_height, row_bytes, pass_width))
             decoder = zlib.decompressobj()
