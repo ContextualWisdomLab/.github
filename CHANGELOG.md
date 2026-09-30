@@ -1,12 +1,3 @@
-### Noema document reader closes newly disclosed npm advisories
-
-- Pin the reviewed HWP reader's transitive `fast-uri` and `ip-address`
-  dependencies to `3.1.8` and `10.7.1`, respectively, closing
-  CVE-2026-86472, CVE-2026-101911, and CVE-2026-101912 without changing the
-  direct reader packages. A source-override and generated-lock contract keeps
-  future installs from returning to the vulnerable releases. Exact-head hosted
-  security Checks and independent approval remain required before merge.
-
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT

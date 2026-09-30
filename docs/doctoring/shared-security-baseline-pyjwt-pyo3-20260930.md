@@ -155,3 +155,4 @@ after correcting the advisory's attack-vector wording.
 GitHub. (2026). *PyJWT has a denial of service vulnerability via maliciously
 crafted JWT token with deeply nested payload* (GHSA-42vr-xj54-vc7v).
 https://github.com/jpadilla/pyjwt/security/advisories/GHSA-42vr-xj54-vc7v
+
