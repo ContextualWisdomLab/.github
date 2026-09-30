@@ -21,6 +21,14 @@ by Noema; `ContextualWisdomLab/contextual-orchestrator#1221` at
 `4dcf9e32b057cde83bca67bfd45975fc6deda458` reached that path after a provider
 HTTP 504.
 
+The current production recurrence is
+`ContextualWisdomLab/contextual-orchestrator#1349@832291c11da301e919d9dc20fda99f0847142dd8`.
+Noema job `109737701886` classified the gateway HTTP 429 as typed
+`provider_capacity_unavailable`; continuation job `109778469161` then waited
+the emitted 93 seconds and failed the central dispatch with the same HTTP 403.
+This binds the authority defect to the current consumer head and separates it
+from provider-capacity classification.
+
 ## Root cause and boundary
 
 The continuation jobs ran inside each consumer repository's required-workflow
