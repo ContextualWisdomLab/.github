@@ -2441,7 +2441,12 @@ jobs:
           if [ "$not_measured" -ne 0 ]; then
             append "- Not measured: ${not_measured} Rust coverage command(s) exceeded the 900 s per-command cap; line coverage for that code is unproven, not failed."
           fi
-          if [ "$failures" -eq 0 ]; then
+          if [ "$failures" -eq 0 ] && [ "$not_measured" -ne 0 ]; then
+            append "- Result: NOT MEASURED"
+            append "- Test evidence: incomplete; timed-out Rust suites are not proven passing."
+            append "- Coverage thresholds: not proven satisfied for unmeasured Rust code."
+            append "- Review handling: advisory only; this result is not approval evidence and does not replace required verification."
+          elif [ "$failures" -eq 0 ]; then
             append "- Result: PASS"
             if [ "$measured_any" -eq 0 ]; then
               append "- Test coverage: not applicable (no supported changed source files or package manifests)"
@@ -7480,6 +7485,11 @@ jobs:
                 fi
                 echo "::endgroup::"
                 exit 1
+              fi
+              coverage_decision="$(printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
+              if [ "$coverage_decision" != '- Result: PASS' ]; then
+                stop_approval_without_review "COVERAGE_NOT_MEASURED" \
+                  "Coverage measurement is incomplete or its decision is missing. A successful advisory job is not approval evidence and does not replace required verification."
               fi
               if request_changes_for_merge_conflict_if_present; then
                 echo "::endgroup::"
