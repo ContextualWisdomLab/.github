@@ -54,3 +54,7 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+
+## 2026-10-15 - Replace `str.find()` with `str.rfind()` for backwards substring scanning
+**Learning:** In `scripts/ci/opencode_review_normalize_output.py`, scanning for the last occurrence of a substring by iteratively calling `text.find()` from the beginning introduces unnecessary O(N) scanning overhead.
+**Action:** Use `str.rfind()` to search backwards from the end of the string when only the last occurrence is needed.
