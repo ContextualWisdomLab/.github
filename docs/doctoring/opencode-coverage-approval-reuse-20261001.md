@@ -33,15 +33,28 @@ workflow now supplies the current coverage summary to both consumers.
 The focused approval, security-boundary, workflow-contract, executable shell,
 and reviewed-blob suites pass 186 tests with 1 optional LLVM-platform skip.
 This includes concurrent exact-head commits
-`87ffafa2f6b19080c01f6ee24b987b37cb92dcb8` and
-`0bcded6b08af4554541223438d046bc412c4b093`; their additional environment,
-prefixed-result, contradictory-result, and implementation cases were preserved
-rather than overwritten. After integration, the
+`87ffafa2f6b19080c01f6ee24b987b37cb92dcb8`,
+`0bcded6b08af4554541223438d046bc412c4b093`, and
+`feb88e34c9197275a58310306492069e25eb0b67`; their additional environment,
+prefixed-result, contradictory-result, implementation, and coverage cases were
+preserved rather than overwritten. After integration, the
 warnings-as-errors repository suite passes 5,255 tests, 5 optional skips, and 40
 subtests. No timeout, coverage threshold, exact-head rule, independent-review
 rule, or required Check is relaxed. Missing or ambiguous evidence remains a
 failure, while an honest unmeasured result remains diagnostic rather than being
 relabeled as a code finding.
+
+Fresh exact-head Trusted uv run
+[`36751696675`](https://github.com/ContextualWisdomLab/.github/actions/runs/36751696675),
+job `110011676248`, then exposed a test-contract omission: the suite passed, but
+`scripts/ci/opencode_existing_approval_gate.py:241-242` remained unexecuted, so
+the repository coverage gate reported 18,252 statements with 2 misses and
+7,498 branches with 1 partial branch (99%). The repair executes the real CLI
+with `NOT MEASURED` and asserts its fail-closed diagnostic. It does not exclude
+the branch or lower the 100% threshold. The exact hosted command reproduced
+locally with 5,255 passed, 5 optional skips, and 40 subtests, covering all
+18,252 production statements and 7,498 branches at 100% with zero misses or
+partial branches.
 
 ## Operational consequence
 

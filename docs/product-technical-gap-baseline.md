@@ -3801,3 +3801,14 @@ LLVM-platform skip, including concurrent exact-head test commit
 The warnings-as-errors repository suite passes 5,255 tests, 5 optional skips,
 and 40 subtests. No threshold or required gate changed. Fresh exact-head hosted
 evidence remains mandatory before integration.
+
+**Hosted follow-up.** Exact-head Trusted uv run
+[`36751696675`](https://github.com/ContextualWisdomLab/.github/actions/runs/36751696675),
+job `110011676248`, passed the tests but correctly failed the 100% repository
+coverage gate because the new CLI rejection at
+`scripts/ci/opencode_existing_approval_gate.py:241-242` had no direct caller.
+The added regression executes a `NOT MEASURED` decision and verifies the
+fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
+the exact hosted command now covers all 18,252 production statements and 7,498
+branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
+Fresh exact-head hosted revalidation is required.
