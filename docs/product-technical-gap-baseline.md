@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-30 Strix report path-token false-positive delta
+
+| Gap ID | 상태 | exact evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STRIX-REPORT-PATH-TOKEN-02 | **Proposed — RED→GREEN source repair; hosted exact-head acceptance pending** | `.github#2504`의 이전 `names_changed_path`는 전체 경로의 `.bak`/child suffix와 `other/scripts/ci/` 아래 동명 파일을 changed source로 오인했다. RED `fcf03118df421be7eff73964e711aaf1cd8312e6`이 두 오탐을 executable regression으로 고정했고, GREEN `ff64cfaa607a413976a8a85c9cd5a003289ef292`은 direct path·directory·filename을 완전 token 경계로 검증한다. focused path-boundary 계약은 7/7 GREEN이며 protected `main@37b10243cec3d160ecc9c1be75c71428b160a703`를 ordinary merge `e8fd6123c1ff6f4fd89848d15f07cb6ae5eb35b4`로 통합했다. | Canonical owner는 중앙 `scripts/ci/strix_report_scope.py`다. exact-head hosted security/quality Checks와 fresh independent review가 terminal GREEN이 되기 전에는 Accepted·merge authority로 승격하지 않는다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
