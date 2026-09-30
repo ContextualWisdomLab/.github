@@ -17,7 +17,7 @@ def test_report_scope_rejects_unrelated_success_and_accepts_scoped_success(tmp_p
     run = tmp_path / "current-scan"
     run.mkdir()
     (run / "run.json").write_text(
-        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True}}),
+        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True, "executive_summary": "No issues in the changed file.", "methodology": "Reviewed the changed source file.", "technical_analysis": "No untrusted input reaches the change.", "recommendations": "No remediation required."}}),
         encoding="utf-8",
     )
     report = run / "penetration_test_report.md"
@@ -41,7 +41,7 @@ def _scan(tmp_path: Path, metadata: object, report: str = f"Assessed {CHANGED}.\
     return run
 
 
-COMPLETED = {"status": "completed", "scan_results": {"scan_completed": True, "success": True}}
+COMPLETED = {"status": "completed", "scan_results": {"scan_completed": True, "success": True, "executive_summary": "No issues in the changed file.", "methodology": "Reviewed the changed source file.", "technical_analysis": "No untrusted input reaches the change.", "recommendations": "No remediation required."}}
 
 
 def test_validate_accepts_one_completed_report_naming_changed_source(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def _completed_run(tmp_path: Path, report: str) -> None:
     run = tmp_path / "current-scan"
     run.mkdir()
     (run / "run.json").write_text(
-        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True}}),
+        json.dumps({"status": "completed", "scan_results": {"scan_completed": True, "success": True, "executive_summary": "No issues in the changed file.", "methodology": "Reviewed the changed source file.", "technical_analysis": "No untrusted input reaches the change.", "recommendations": "No remediation required."}}),
         encoding="utf-8",
     )
     (run / "penetration_test_report.md").write_text(report, encoding="utf-8")
