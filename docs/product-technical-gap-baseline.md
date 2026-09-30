@@ -3676,3 +3676,32 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; hosted exact-head
+revalidation and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` metadata-maintenance bounded
+context owns its workflow and repository-wide evidence contracts. Git object
+ancestry is local runner evidence; no product repository may fabricate or copy
+that result.
+
+**Gap / RCA.** Exact-head run
+[`36720930491`](https://github.com/ContextualWisdomLab/.github/actions/runs/36720930491),
+job `109905558240`, checked out
+`737fc6fd3b536495a7d5f8bbbae9d0474771d21f` at depth one. The full suite then
+failed because documented G-17 evidence commit
+`57477289ebec5631b0c48f0bc419f336dbe19deb` was absent from that shallow object
+database. This was a workflow-fixture defect: the test deliberately proves
+reachability with `git cat-file` and `git merge-base --is-ancestor`, while the
+workflow supplied only the exact tip object. The earlier local full-history run
+masked the hosted condition.
+
+**RED → GREEN / action.** A new contract first failed on the missing complete-
+history input. Commit `3bc859c73ed67074df13b2e01aa89dff2159e260`
+sets `fetch-depth: 0` only on the validation checkout; exact revision
+verification, `persist-credentials: false`, apply credentials, and all gates
+remain unchanged. The focused workflow plus G-17 ancestry suites pass 37 tests.
+Publication must trigger fresh checks on the new exact head; predecessor GREEN
+and queued/skipped/pending conclusions do not authorize merge.
