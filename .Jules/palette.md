@@ -1,7 +1,5 @@
-## 2024-05-20 - Repository without UI Codebase
-**Learning:** This repository is a GitHub organization profile consisting entirely of Markdown documentation and static assets, and does not contain an active UI or frontend application codebase.
-**Action:** Since there is no UI, no UX enhancements can be applied. Aborting UX enhancements and PR creation as per instructions.
+## 2026-09-29 - Product UI boundary confirmed
 
-## 2026-09-29 - UI 코드베이스 부재 확인
-**Learning:** 이 저장소는 GitHub 조직 프로필, 마크다운 문서 및 정적 자산만 포함하며 활성화된 UI나 프론트엔드 애플리케이션 코드베이스가 없음을 확인했습니다.
-**Action:** UI가 존재하지 않으므로 UX 개선 작업을 중단하고 관련 PR 생성을 생략합니다.
+**Learning:** This repository owns the ContextualWisdomLab GitHub Actions control plane, including production CI scripts, tests, workflows, and documentation. It does not own an interactive product UI or frontend application.
+
+**Action:** Do not invent product UI work in this repository. Improve the control-plane artifacts here and route reusable product UI work to its canonical product owner.
