@@ -27,3 +27,16 @@ def test_strix_anyio_security_pin_is_an_explicit_lock_input() -> None:
 
     assert "anyio==4.14.2" in requirements.splitlines()
     assert "anyio==4.14.2 \\" in requirements_lock.splitlines()
+
+
+def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
+    """Keep the patched PyJWT version reproducible from the source input."""
+    requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
+        encoding="utf-8"
+    )
+    requirements_lock = (
+        REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "pyjwt==2.14.0" in requirements.splitlines()
+    assert "pyjwt==2.14.0 \\" in requirements_lock.splitlines()
