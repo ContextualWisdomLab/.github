@@ -467,11 +467,17 @@ def _github_open_json(url: str, token: str) -> object:
         with github_opener.open(request, timeout=30) as response:
             payload = response.read(MAX_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
-        if isinstance(exc, HTTPError) and exc.code == 404:
-            raise ArtifactDeclarationNotFoundError(
-                f"GitHub API reported no resource for policy evidence at {url}"
+        try:
+            if isinstance(exc, HTTPError) and exc.code == 404:
+                raise ArtifactDeclarationNotFoundError(
+                    f"GitHub API reported no resource for policy evidence at {url}"
+                ) from exc
+            raise PolicyError(
+                f"GitHub API request failed for policy evidence: {type(exc).__name__}"
             ) from exc
-        raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
+        finally:
+            if isinstance(exc, HTTPError):
+                exc.close()
     if len(payload) > MAX_RESPONSE_BYTES:
         raise PolicyError("GitHub API policy response exceeded the bounded response size")
     try:
@@ -497,7 +503,13 @@ def _github_open_raw_bytes(url: str, token: str, max_bytes: int) -> bytes:
         with github_opener.open(request, timeout=30) as response:
             raw = response.read(max_bytes + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise PolicyError(f"GitHub raw blob request failed: {type(exc).__name__}") from exc
+        try:
+            raise PolicyError(
+                f"GitHub raw blob request failed: {type(exc).__name__}"
+            ) from exc
+        finally:
+            if isinstance(exc, HTTPError):
+                exc.close()
     if len(raw) > max_bytes:
         raise PolicyError("GitHub raw blob exceeded the bounded response size")
     return raw

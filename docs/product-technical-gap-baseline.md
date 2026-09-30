@@ -13,6 +13,28 @@
 |---|---|---|---|
 | CONTROL-STRIX-REPORT-PATH-TOKEN-02 | **Proposed — RED→GREEN source repair; hosted exact-head acceptance pending** | `.github#2504`의 이전 `names_changed_path`는 전체 경로의 `.bak`/child suffix와 `other/scripts/ci/` 아래 동명 파일을 changed source로 오인했다. RED `fcf03118df421be7eff73964e711aaf1cd8312e6`이 두 오탐을 executable regression으로 고정했고, GREEN `ff64cfaa607a413976a8a85c9cd5a003289ef292`은 direct path·directory·filename을 완전 token 경계로 검증한다. focused path-boundary 계약은 7/7 GREEN이며 protected `main@37b10243cec3d160ecc9c1be75c71428b160a703`를 ordinary merge `e8fd6123c1ff6f4fd89848d15f07cb6ae5eb35b4`로 통합했다. | Canonical owner는 중앙 `scripts/ci/strix_report_scope.py`다. exact-head hosted security/quality Checks와 fresh independent review가 terminal GREEN이 되기 전에는 Accepted·merge authority로 승격하지 않는다. |
 
+### 2026-09-30 full-suite parser-lock incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530@ef28f6bc…` integration successor (tree `76ec51bb…`) preserves security prerequisite `.github#2531@d1aa3659…` and response-lifecycle prerequisite `.github#2532@9d3ec75d…`; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. #2530의 parser-lock head `bc40de51…`에 #2531과 #2532의 exact owner heads를 두 ordinary merge commit의 부모로 보존해 순환 full-suite 의존성을 해소했다. 통합 tree `76ec51bb…`에서 Python 3.14 warning-fatal 전체 suite는 5,173 passed, 6 skipped, 40 subtests passed였고, focused cross-owner regression은 524 passed, 2 skipped였다. ref는 force 없이 fast-forward됐다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 `requirements-opencode-review-ci.txt`, 생성 hash lock, 직접 소비 quality workflows다. #2530은 Draft로 유지하고 새 exact head의 hosted Checks, 미해결 thread 0, qualifying independent approval을 다시 수집한다. #2531/#2532는 protected integration과 complete carryover가 검증되기 전 닫지 않으며, #2531 ordinary merge 뒤 #2530 base를 current `main` ancestry에 맞춰 비강제 retarget한다. full-quality의 honest 99% coverage failure는 별도 coverage owner #2521에서 통합·수리하며 이 stack으로 waive하지 않는다. fast-mlsirm의 Noema HTTP 400·Strix linkage·제품 coverage 문제의 완료 증거로 재사용하지 않는다. |
+
+### 2026-09-30 공유 보안 기준 exact-head delta
+
+이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
+보호 `main`은 `37b10243cec3d160ecc9c1be75c71428b160a703`이고, live API의 첫
+페이지에는 열린 PR 50개가 있었다. 페이지 전체를 조직의 총 PR 수로 추론하지 않는다.
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
+
+### 2026-09-30 GitHub API response lifecycle incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-GITHUB-API-HTTP-ERROR-CLOSE-01 | **Proposed — protected-main RED reproduced; source repair under hosted exact-head verification** | 보호된 `.github/main@37b10243cec3d160ecc9c1be75c71428b160a703`의 Python 3.14.7 `tests/test_github_api_url_boundary.py -W error`가 실제 CodeQL/Strix opener의 synthetic 302 여덟 경우에서 `ResourceWarning: Implicitly cleaning up <HTTPError 302>`로 `8 failed, 26 passed`였다. 첫 repair의 warning-fatal full suite가 동일 defect를 Noema/Pingora/preflight/Pages/sandbox readiness에서 추가로 드러냈다. | Canonical owner는 중앙 `.github`이다. 각 caller가 기존 bounded status/telemetry와 fail-closed mapping을 보존한 뒤 file-like error response를 명시적으로 닫는다. `5161 passed, 10 skipped, 40 subtests passed`로 complete warning-fatal local tree가 GREEN이다. [RCA와 acceptance](doctoring/github-api-http-error-response-lifecycle.md)를 따라 exact-head hosted security, independent review, ordinary protected merge를 완료한 뒤 `.github#2040`과 review-transport stack이 새 protected head를 정상 병합해 downstream 증거를 재생성해야 한다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
