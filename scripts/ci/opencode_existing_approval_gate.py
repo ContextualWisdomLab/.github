@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from typing import Any, TextIO
@@ -44,6 +45,12 @@ REQUIRED_PROBE_FIELDS = (
     "evidence",
     "outcome",
 )
+
+
+def coverage_decision_is_pass(summary: str) -> bool:
+    """Return whether coverage published exactly one unambiguous PASS decision."""
+    decisions = [line for line in summary.splitlines() if line.startswith("- Result:")]
+    return decisions == ["- Result: PASS"]
 
 
 def flatten_reviews(document: object) -> list[dict[str, Any]]:
@@ -209,6 +216,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     """Read paginated reviews from stdin and evaluate reusable approval evidence."""
     args = parse_args(argv)
+    if not coverage_decision_is_pass(os.environ.get("COVERAGE_EVIDENCE_SUMMARY", "")):
+        print(
+            "existing-approval gate requires one exact coverage PASS decision",
+            file=sys.stderr,
+        )
+        return 1
     if not SHA_RE.fullmatch(args.head):
         print(
             "existing-approval gate requires a 40-character head SHA", file=sys.stderr

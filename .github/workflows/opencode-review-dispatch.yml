@@ -7157,6 +7157,10 @@ jobs:
             if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
               return 1
             fi
+            coverage_decision="$(printf '%s\\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
+            if [ "$coverage_decision" != '- Result: PASS' ]; then
+              return 1
+            fi
 
             printf '::notice::Current-head model-unavailable evidence fallback candidate: scope=%s changed_count=%s head=%s repository=%s.\n' \
               "${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}" \
@@ -7872,6 +7876,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
+          COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
@@ -7905,6 +7910,7 @@ jobs:
               python3 scripts/ci/opencode_dispatch_status.py \
                 --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
                 --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
+                --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}" \
                 --expected-head "$PR_HEAD_SHA" \
                 --pull-request-file "$pull_request_file" \
                 --reviews-file "$reviews_file"
@@ -7964,6 +7970,7 @@ jobs:
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
