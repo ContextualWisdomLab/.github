@@ -3737,3 +3737,34 @@ tests, 5 optional skips, and 40 subtests. No audit threshold, failure mode, or
 workflow gate changes. Fresh exact-head Python Security and the remaining
 applicable checks are mandatory; the failed predecessor and any skipped or
 pending result are not acceptance evidence.
+
+## 2026-09-30 Shared Strix PyJWT recursion security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks and qualifying independent
+review.
+
+**Context Map / owner.** Central `.github` owns the hash-locked Strix CI
+runtime. PyJWT and its signed package artifacts are upstream evidence; product
+repositories consume only an ordinarily integrated central workflow revision.
+
+**Gap / RCA.** Exact-head Security Scan run
+[`36740858208`](https://github.com/ContextualWisdomLab/.github/actions/runs/36740858208),
+job `109974634074`, found PyJWT 2.14.0 affected by GHSA-42vr-xj54-vc7v in
+`requirements-strix-ci.txt`. The dependency-review support probe succeeded and
+the run's Gitleaks, Scorecard, Trivy, and OSV jobs passed, isolating the actual
+failure to PyJWT's unauthenticated nested-payload recursion path rather than a
+permissions or network condition.
+
+**RED → repair.** The existing source/lock parity contract first failed with
+the old 2.14.0 pin. Both surfaces now select PyJWT 2.15.1 with the signed PyPI
+artifact hashes. Upstream documents the recursion hardening in 2.15.0; 2.15.1
+retains it and fixes Base64URL padding. Detailed evidence and APA 7th references
+are in
+[`docs/doctoring/shared-security-baseline-pyjwt-recursion-20260930.md`](doctoring/shared-security-baseline-pyjwt-recursion-20260930.md).
+No dependency-review threshold, fail-closed behavior, or workflow gate changes.
+The focused dependency contract passes 5 tests; pip-audit 2.10.1's strict
+exact-pin audit reports no known vulnerabilities; and the warnings-as-errors
+repository suite passes 5,236 tests, 5 optional skips, and 40 subtests. Ruff and
+`git diff --check` pass. Fresh exact-head hosted security evidence remains
+mandatory.

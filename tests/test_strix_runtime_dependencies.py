@@ -63,8 +63,8 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
         REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
     ).read_text(encoding="utf-8")
 
-    assert _locked_requirement_versions(requirements, "pyjwt") == ["2.14.0"]
-    assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.14.0"]
+    assert _locked_requirement_versions(requirements, "pyjwt") == ["2.15.1"]
+    assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.15.1"]
 
 
 def test_python_security_inputs_pin_patched_urllib3() -> None:
