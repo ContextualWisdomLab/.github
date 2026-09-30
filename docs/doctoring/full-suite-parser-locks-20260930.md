@@ -34,7 +34,12 @@ A contract regression requires both parser packages in the installed lock.
 RED: one failing test because both packages were absent. GREEN: 36 tests passed
 and two optional document-format tests skipped after hash-locked installation.
 The full repository suite is a separate verification step, not implied by that
-focused result.
+focused result. On code head `41e95af9dd1ac95dea716d53c44df1eacbd81d9d`, the final
+isolated run finished with 5,165 passed, five skipped and 40 subtests passed in
+356.08 seconds. It used only the common quality lock plus the project-pinned
+pip seed, disabled incidental pytest plugin autoload and cleared live event/token
+environment variables. An inherited ResourceWarning from a synthetic HTTPError
+fixture remains visible; it is not suppressed or treated as a product failure.
 
 ## Verification environment
 
@@ -45,6 +50,13 @@ paths beneath the host home, which the sandbox correctly refuses. Installing
 project-pinned pip 26.2.1 and using an isolated `/tmp` basetemp made all seven
 reproductions pass. These local environment corrections do not weaken sandbox
 validation and are not changes to production code.
+
+An initial clean-lock run had one further environment failure: macOS inherited
+`/tmp` group 0, which this user does not belong to, and silently cleared the
+setgid bit when the test requested mode 2600. A direct mode probe observed 600,
+while a staff-owned directory retained 2600. The final run used a unique
+staff-owned parent outside the host home; the security check itself was not
+changed. Both the targeted permission test and the complete suite passed there.
 
 Source-repair's own two scripts separately measured 100% statement/branch
 coverage and 100% docstrings. Neither those measurements nor the parser repair
