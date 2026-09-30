@@ -3768,3 +3768,36 @@ exact-pin audit reports no known vulnerabilities; and the warnings-as-errors
 repository suite passes 5,236 tests, 5 optional skips, and 40 subtests. Ruff and
 `git diff --check` pass. Fresh exact-head hosted security evidence remains
 mandatory.
+
+## 2026-10-01 OpenCode coverage approval-reuse evidence contract
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks, resolution of the actionable
+review thread, and qualifying independent approval.
+
+**Context Map / owner.** Central `.github` owns the OpenCode coverage producer,
+existing-approval gate, and repository-dispatch status publisher. Consumer
+repositories receive only the released workflow contract and must not reinterpret
+advisory job success as a passing coverage decision.
+
+**Gap / RCA.** CodeRabbit review thread `PRRT_kwDOS_C14s6nmf3Q` showed that two
+approval-reuse paths checked only whether the coverage job concluded `success`;
+a subsequent call-site audit found that the merge-scheduler approval gate did
+not receive the summary at all.
+The producer deliberately uses a successful job to publish an honest
+`NOT MEASURED` diagnostic, so this result is necessary but not sufficient
+approval evidence. A same-head approval could therefore be reused without a
+current unique `PASS` decision.
+
+**RED → repair.** New regressions reject missing, `NOT MEASURED`, malformed,
+and duplicate decisions. A shared validator and the workflow shell guard now
+require exactly one `- Result: PASS` line before either existing-approval reuse
+or success-status publication; the current summary is passed explicitly across
+all approval consumers. The integrated focused suite passes 186 tests with 1 optional
+LLVM-platform skip, including concurrent exact-head test commit
+`87ffafa2f6b19080c01f6ee24b987b37cb92dcb8` and implementation commit
+`0bcded6b08af4554541223438d046bc412c4b093`. Detailed evidence is in
+[`docs/doctoring/opencode-coverage-approval-reuse-20261001.md`](doctoring/opencode-coverage-approval-reuse-20261001.md).
+The warnings-as-errors repository suite passes 5,255 tests, 5 optional skips,
+and 40 subtests. No threshold or required gate changed. Fresh exact-head hosted
+evidence remains mandatory before integration.

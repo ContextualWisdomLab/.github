@@ -134,6 +134,51 @@ def review(**overrides):
     return value
 
 
+@pytest.mark.parametrize(
+    "summary",
+    (
+        "## Coverage Decision\n\n- Result: NOT MEASURED\n",
+        "## Coverage Decision\n\n",
+        "- Result: PASS\n- Result: PASS\n",
+        "- Result: PASSING\n",
+    ),
+)
+def test_coverage_summary_rejects_every_non_unique_pass(summary):
+    """Reusable approval requires one exact passing coverage decision."""
+    assert gate.coverage_summary_rejection_reason(summary)
+
+
+def test_coverage_summary_accepts_one_exact_pass():
+    """Diagnostic prose may surround the one authoritative PASS line."""
+    assert (
+        gate.coverage_summary_rejection_reason(
+            "## Coverage Decision\n\n- Result: PASS\n\n- Rust: measured\n"
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "summary",
+    (
+        "",
+        "- Result: NOT MEASURED",
+        "prefix - Result: PASS",
+        "- Result: PASS (assumed)",
+        "- Result: PASS\n- Result: PASS",
+        "- Result: PASS\n- Result: NOT MEASURED",
+    ),
+)
+def test_coverage_decision_rejects_missing_ambiguous_or_incomplete_summary(summary):
+    """Existing approval reuse requires one exact PASS decision."""
+    assert gate.coverage_decision_is_pass(summary) is False
+
+
+def test_coverage_decision_accepts_one_exact_pass_line():
+    """One exact PASS line is reusable coverage evidence."""
+    assert gate.coverage_decision_is_pass("detail\n- Result: PASS\n") is True
+
+
 @pytest.mark.parametrize("payload", [[review()], [[review()]]])
 def test_flatten_reviews_and_accept_real_model_approval(payload):
     reviews = gate.flatten_reviews(payload)
@@ -414,51 +459,35 @@ def test_adversarial_validation_rejects_forged_traversal_receipt():
 
 
 def test_parse_args_and_main(monkeypatch, capsys):
-    args = gate.parse_args(["--head", HEAD])
+    coverage_args = ["--coverage-summary", "- Result: PASS"]
+    args = gate.parse_args(["--head", HEAD, *coverage_args])
     assert args.head == HEAD
     assert not args.require_opencode_app
 
-    strict_args = gate.parse_args(["--head", HEAD, "--require-opencode-app"])
+    strict_args = gate.parse_args(
+        ["--head", HEAD, *coverage_args, "--require-opencode-app"]
+    )
     assert strict_args.require_opencode_app
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([[review()]])))
-    assert gate.main(["--head", HEAD]) == 0
+    assert gate.main(["--head", HEAD, *coverage_args]) == 0
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
-    assert gate.main(["--head", HEAD]) == 2
+    assert gate.main(["--head", HEAD, *coverage_args]) == 2
     assert "could not parse reviews" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
-    assert gate.main(["--head", "short"]) == 2
+    assert gate.main(["--head", "short", *coverage_args]) == 2
     assert "40-character" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
-    assert gate.main(["--head", HEAD]) == 1
+    assert gate.main(["--head", HEAD, *coverage_args]) == 1
 
     monkeypatch.setattr(
         sys,
         "stdin",
         io.StringIO(json.dumps([[review(user={"login": "github-actions[bot]"})]])),
     )
-    assert gate.main(["--head", HEAD, "--require-opencode-app"]) == 1
-
-
-@pytest.mark.parametrize(
-    "summary",
-    (
-        "",
-        "- Result: NOT MEASURED",
-        "prefix - Result: PASS",
-        "- Result: PASS (assumed)",
-        "- Result: PASS\n- Result: PASS",
-        "- Result: PASS\n- Result: NOT MEASURED",
-    ),
-)
-def test_coverage_decision_rejects_missing_ambiguous_or_incomplete_summary(summary):
-    """Existing approval reuse requires one exact PASS decision."""
-    assert gate.coverage_decision_is_pass(summary) is False
-
-
-def test_coverage_decision_accepts_one_exact_pass_line():
-    """One exact PASS line is reusable coverage evidence."""
-    assert gate.coverage_decision_is_pass("detail\n- Result: PASS\n") is True
+    assert gate.main(
+        ["--head", HEAD, *coverage_args, "--require-opencode-app"]
+    ) == 1

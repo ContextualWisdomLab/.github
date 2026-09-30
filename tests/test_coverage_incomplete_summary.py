@@ -38,6 +38,11 @@ def test_complete_success_still_passes() -> None:
 def approval_prefix(decision: str) -> subprocess.CompletedProcess[str]:
     """Run the real APPROVE preconditions with a successful advisory job."""
     text = WORKFLOW.read_text(encoding="utf-8")
+    helper_start = text.index("          coverage_decision_is_pass() {")
+    helper_end = text.index("\n          }", helper_start) + len("\n          }")
+    helper = "\n".join(
+        line[10:] for line in text[helper_start:helper_end].splitlines()
+    )
     start = text.index("            APPROVE)") + len("            APPROVE)")
     end = text.index("              if request_changes_for_merge_conflict_if_present", start)
     block = "\n".join(line[14:] for line in text[start:end].splitlines())
@@ -45,7 +50,10 @@ def approval_prefix(decision: str) -> subprocess.CompletedProcess[str]:
         "set -eu\nCOVERAGE_EVIDENCE_RESULT=success\n"
         'COVERAGE_EVIDENCE_SUMMARY="$1"\n'
         'stop_approval_without_review(){ printf "%s\\n" "$1"; exit 1; }\n'
-        + block + '\nprintf "approval_allowed\\n"\n'
+        + helper
+        + "\n"
+        + block
+        + '\nprintf "approval_allowed\\n"\n'
     )
     return subprocess.run(["bash", "-c", script, "test", decision], capture_output=True, text=True)
 

@@ -11,13 +11,13 @@ from typing import Any, Sequence
 try:
     from opencode_existing_approval_gate import (
         OPENCODE_APP_APPROVAL_AUTHORS,
-        coverage_decision_is_pass,
+        coverage_summary_rejection_reason,
         review_rejection_reason,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from scripts.ci.opencode_existing_approval_gate import (
         OPENCODE_APP_APPROVAL_AUTHORS,
-        coverage_decision_is_pass,
+        coverage_summary_rejection_reason,
         review_rejection_reason,
     )
 
@@ -54,8 +54,8 @@ def decide_status(
     live_head = str((pull_request.get("head") or {}).get("sha") or "")
     if coverage_result != "success":
         reason = "OpenCode coverage evidence did not pass for the current head."
-    elif not coverage_decision_is_pass(coverage_summary):
-        reason = "OpenCode coverage decision is missing, incomplete, or ambiguous."
+    elif coverage_summary_rejection_reason(coverage_summary):
+        reason = "OpenCode coverage decision is missing, non-passing, or ambiguous."
     elif not expected_head or live_head.lower() != expected_head.lower():
         reason = "OpenCode status target is stale or the live PR head is unavailable."
     elif not _has_current_approval(reviews, expected_head):

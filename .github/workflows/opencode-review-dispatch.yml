@@ -7057,6 +7057,12 @@ jobs:
               grep -Fq -- "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
           }
 
+          coverage_decision_is_pass() {
+            local coverage_decision
+            coverage_decision="$(printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
+            [ "$coverage_decision" = '- Result: PASS' ]
+          }
+
           collect_successful_r_cmd_check_evidence() {
             local output_file="$1"
             if ! gh pr checks "$PR_NUMBER" \
@@ -7154,11 +7160,8 @@ jobs:
           publish_blockers_after_model_unavailable() {
             local pending_wait_status body
 
-            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
-              return 1
-            fi
-            coverage_decision="$(printf '%s\\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
-            if [ "$coverage_decision" != '- Result: PASS' ]; then
+            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ] ||
+              ! coverage_decision_is_pass; then
               return 1
             fi
 
@@ -7287,6 +7290,7 @@ jobs:
             printf '%s\n' "$reviews_json" |
               python3 scripts/ci/opencode_existing_approval_gate.py \
                 --head "$HEAD_SHA" \
+                --coverage-summary "$COVERAGE_EVIDENCE_SUMMARY" \
                 --require-opencode-app
           }
 
@@ -7490,8 +7494,7 @@ jobs:
                 echo "::endgroup::"
                 exit 1
               fi
-              coverage_decision="$(printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
-              if [ "$coverage_decision" != '- Result: PASS' ]; then
+              if ! coverage_decision_is_pass; then
                 stop_approval_without_review "COVERAGE_NOT_MEASURED" \
                   "Coverage measurement is incomplete or its decision is missing. A successful advisory job is not approval evidence and does not replace required verification."
               fi
@@ -8002,6 +8005,7 @@ jobs:
               if printf '%s\n' "$reviews_json" |
                 python3 scripts/ci/opencode_existing_approval_gate.py \
                   --head "$PR_HEAD_SHA" \
+                  --coverage-summary "$COVERAGE_EVIDENCE_SUMMARY" \
                   --require-opencode-app \
                   2>"$gate_error_file"; then
                 approval_visible=1

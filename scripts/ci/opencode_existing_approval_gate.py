@@ -47,10 +47,21 @@ REQUIRED_PROBE_FIELDS = (
 )
 
 
-def coverage_decision_is_pass(summary: str) -> bool:
-    """Return whether coverage published exactly one unambiguous PASS decision."""
+def coverage_summary_rejection_reason(summary: str) -> str | None:
+    """Explain why a coverage summary cannot authorize approval reuse."""
     decisions = [line for line in summary.splitlines() if line.startswith("- Result:")]
-    return decisions == ["- Result: PASS"]
+    if not decisions:
+        return "coverage decision is missing"
+    if len(decisions) != 1:
+        return "coverage decision is duplicated or contradictory"
+    if decisions[0] != "- Result: PASS":
+        return "coverage decision is not PASS"
+    return None
+
+
+def coverage_decision_is_pass(summary: str) -> bool:
+    """Return whether a summary has one authoritative PASS decision."""
+    return coverage_summary_rejection_reason(summary) is None
 
 
 def flatten_reviews(document: object) -> list[dict[str, Any]]:
@@ -206,6 +217,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", required=True)
     parser.add_argument(
+        "--coverage-summary",
+        default=os.environ.get("COVERAGE_EVIDENCE_SUMMARY", ""),
+    )
+    parser.add_argument(
         "--require-opencode-app",
         action="store_true",
         help="accept only reviews authored by the OpenCode GitHub App",
@@ -216,17 +231,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     """Read paginated reviews from stdin and evaluate reusable approval evidence."""
     args = parse_args(argv)
-    if not coverage_decision_is_pass(os.environ.get("COVERAGE_EVIDENCE_SUMMARY", "")):
-        print(
-            "existing-approval gate requires one exact coverage PASS decision",
-            file=sys.stderr,
-        )
-        return 1
     if not SHA_RE.fullmatch(args.head):
         print(
             "existing-approval gate requires a 40-character head SHA", file=sys.stderr
         )
         return 2
+    coverage_error = coverage_summary_rejection_reason(args.coverage_summary)
+    if coverage_error:
+        print(f"existing-approval gate rejected evidence: {coverage_error}", file=sys.stderr)
+        return 1
     try:
         reviews = flatten_reviews(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError) as exc:

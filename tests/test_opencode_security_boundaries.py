@@ -592,6 +592,55 @@ def test_dispatch_status_fails_closed_without_validated_approval(
     assert decision["description"]
 
 
+@pytest.mark.parametrize(
+    "coverage_summary",
+    ("- Result: NOT MEASURED", "", "- Result: PASS\n- Result: PASS"),
+)
+def test_dispatch_status_rejects_nonpassing_coverage_summary(
+    coverage_summary: str,
+    trusted_dispatch_status_artifacts: None,
+) -> None:
+    """A successful advisory job cannot replace a unique PASS decision."""
+    head = "a" * 40
+    decision = dispatch_status.decide_status(
+        model_outcome="success",
+        coverage_result="success",
+        coverage_summary=coverage_summary,
+        expected_head=head,
+        pull_request={"head": {"sha": head}},
+        reviews=[approval_review(head)],
+    )
+
+    assert decision["state"] == "failure"
+    assert "coverage decision" in decision["description"].lower()
+
+
+@pytest.mark.parametrize(
+    "coverage_summary",
+    (
+        "",
+        "- Result: NOT MEASURED",
+        "- Result: PASS\n- Result: PASS",
+        "- Result: PASS\n- Result: FAIL",
+    ),
+)
+def test_dispatch_status_rejects_non_pass_coverage_decisions(
+    coverage_summary: str,
+    trusted_dispatch_status_artifacts: None,
+) -> None:
+    """Job success cannot publish success without one exact PASS decision."""
+    head = "a" * 40
+    decision = dispatch_status.decide_status(
+        model_outcome="exhausted",
+        coverage_result="success",
+        coverage_summary=coverage_summary,
+        expected_head=head,
+        pull_request={"head": {"sha": head}},
+        reviews=[approval_review(head)],
+    )
+    assert decision["state"] == "failure"
+
+
 def test_dispatch_status_cli_and_evidence_shape_validation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -631,29 +680,3 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
     with pytest.raises(SystemExit) as exc:
         runpy.run_path("scripts/ci/opencode_dispatch_status.py", run_name="__main__")
     assert exc.value.code == 0
-
-
-@pytest.mark.parametrize(
-    "coverage_summary",
-    (
-        "",
-        "- Result: NOT MEASURED",
-        "- Result: PASS\n- Result: PASS",
-        "- Result: PASS\n- Result: FAIL",
-    ),
-)
-def test_dispatch_status_rejects_non_pass_coverage_decisions(
-    coverage_summary: str,
-    trusted_dispatch_status_artifacts: None,
-) -> None:
-    """Job success cannot publish success without one exact PASS decision."""
-    head = "a" * 40
-    decision = dispatch_status.decide_status(
-        model_outcome="exhausted",
-        coverage_result="success",
-        coverage_summary=coverage_summary,
-        expected_head=head,
-        pull_request={"head": {"sha": head}},
-        reviews=[approval_review(head)],
-    )
-    assert decision["state"] == "failure"
