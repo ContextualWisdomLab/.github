@@ -540,3 +540,33 @@ def test_materialize_rejects_bad_sha_and_symlinked_output_dir(tmp_path: Path) ->
     linked_output.symlink_to(real_dir)
     with pytest.raises(ValueError, match="must not be a symlink"):
         materializer.materialize(Path("/unused"), "a" * 40, linked_output)
+
+
+def test_missing_cargo_is_reported_as_a_runner_toolchain_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A runner without cargo on PATH gets an actionable message, not a bare exception name."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "Cargo.toml").write_text(
+        '[package]\nname = "foo"\nversion = "0.1.0"\nedition = "2021"\n', encoding="utf-8"
+    )
+    (repo / "src").mkdir()
+    (repo / "src" / "lib.rs").write_text("pub fn x() {}\n", encoding="utf-8")
+    (repo / "Cargo.lock").write_text(
+        'version = 3\n\n[[package]]\nname = "foo"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    base_sha = _commit_all(repo)
+
+    def no_cargo(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "cargo")
+
+    monkeypatch.setattr(materializer, "_run_cargo_vendor", no_cargo)
+    exit_code = materializer.main(
+        ["--repo-root", str(repo), "--base-sha", base_sha, "--output-dir", str(tmp_path / "out")]
+    )
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "cargo is not installed or not on PATH" in err
+    assert "~/.cargo/bin" in err
