@@ -24,12 +24,12 @@ def _names_scoped_ancestor(report: str, changed_paths: list[str]) -> bool:
 
 def _token(text: str) -> re.Pattern[str]:
     """Match text only where it is not part of a longer name or path segment."""
-    return re.compile(rf"(?<![\w.-]){re.escape(text)}(?![\w-]|\.\w)")
+    return re.compile(rf"(?<![\w./-]){re.escape(text)}(?![\w-]|\.\w)")
 
 
 def _file_token(text: str) -> re.Pattern[str]:
     """Match a file name only when no longer name or child path continues it."""
-    return re.compile(rf"(?<![\w.-]){re.escape(text)}(?![\w/-]|\.\w)")
+    return re.compile(rf"(?<![\w./-]){re.escape(text)}(?![\w/-]|\.\w)")
 
 
 def names_changed_path(report: str, path: str) -> bool:
@@ -38,12 +38,12 @@ def names_changed_path(report: str, path: str) -> bool:
     The directory may be the file's own directory or any ancestor of at least two
     segments; a lone top-level name such as ``crates`` is too generic to scope a file.
     """
-    if path in report:
+    if _file_token(path).search(report) is not None:
         return True
     directory, _, name = path.rpartition("/")
     if not directory or _file_token(name).search(report) is None:
         return False
-    if f"{directory}/" in report:
+    if _token(directory).search(report) is not None:
         return True
     parts = directory.split("/")
     return any(_token("/".join(parts[:depth])).search(report) for depth in range(2, len(parts) + 1))
