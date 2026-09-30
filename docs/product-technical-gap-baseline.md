@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-30 Strix parallel-request capacity delta
+
+| Gap ID | 상태 | exact evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STRIX-PARALLEL-REQUEST-CAPACITY-03 | **Proposed — executable config repair; hosted exact-head acceptance pending** | `.github#2490`은 Strix 병렬 Agent 요청이 generic 8-slot bound를 소진한 증거에 따라 16-slot sidecar bound를 제안했다. 기존 회귀는 source 문자열만 확인해 실제 `SecurityConfig` 값과 무관하게 통과할 수 있었다. RED `85bdcc5bd7f31e7b13fb500af1dba2750d8b6825`은 실행 가능한 config factory를 요구하고, GREEN `acee83861ee59f986157c14a81ad8d70eb4f2bc3`은 production call과 test를 같은 factory에 묶었다. protected `main@37b10243cec3d160ecc9c1be75c71428b160a703` 통합은 ordinary merge `a57e32ae0d87d5b28179c402b66019bbed4e856d`다. | Canonical owner는 중앙 review sidecar launcher다. fresh exact-head hosted security/coverage/review Checks와 independent approval이 terminal GREEN이 되기 전에는 Accepted·merge authority가 아니다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
