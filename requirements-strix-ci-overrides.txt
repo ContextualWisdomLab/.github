@@ -13,3 +13,4 @@
 #
 # Re-verify this override whenever strix-agent is bumped again.
 cryptography==50.0.0
+pyjwt==2.14.0
