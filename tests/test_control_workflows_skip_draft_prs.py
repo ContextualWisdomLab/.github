@@ -77,6 +77,7 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
 
 QUEUE_RETIREMENT_WORKFLOWS = [
     "codeql-pr.yml",
+    "pr-review-merge-scheduler.yml",
     "sast-semgrep.yml",
     "security-scan.yml",
     "python-security.yml",
