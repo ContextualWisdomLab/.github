@@ -11,7 +11,17 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530` source-repair commit `41e95af9…` verified locally; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. PR #2530의 source input은 기존 `requirements-noema-document-ci.txt`와 `PyYAML==6.0.3`을 포함하며, 생성 lock은 `uv pip compile` 재실행과 byte-for-byte 일치했다. Python 3.14 hash-locked common+Noema 설치, 두 parser import, 관련 계약은 73 passed, 2 skipped였다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 `requirements-opencode-review-ci.txt`, 생성 hash lock, 직접 소비 quality workflows다. 병합 시점에 다시 수집한 live exact head의 hosted Checks 7개와 qualifying independent approval이 완료돼야 일반 보호 병합할 수 있다. 후속 traceability-only commit의 SHA를 이 행에 자기참조로 동결하거나 predecessor 결과를 재사용하지 않는다. fast-mlsirm의 Noema HTTP 400·Strix linkage·제품 coverage 문제의 완료 증거로 재사용하지 않는다. |
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530` source head `bc40de51…` stacked on security prerequisite `.github#2531@d1aa3659…`; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. PR #2530의 source input은 기존 `requirements-noema-document-ci.txt`와 `PyYAML==6.0.3`을 포함하며, 생성 lock은 `uv pip compile` 재실행과 byte-for-byte 일치했다. Python 3.14 hash-locked common+Noema 설치, 두 parser import, 관련 계약은 73 passed, 2 skipped였다. 이전 base의 Python Security/Security Scan 실패는 #2531이 소유한 PyJWT/PyO3 기준이 원인이므로, parser 델타를 복제하지 않고 prerequisite를 ordinary merge-forward한다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 `requirements-opencode-review-ci.txt`, 생성 hash lock, 직접 소비 quality workflows다. #2531의 ordinary protected merge 뒤 #2530을 current `main`으로 retarget하고, successor exact head의 hosted Checks와 qualifying independent approval을 다시 수집해야 한다. full-quality의 honest 99% coverage failure는 별도 coverage owner #2521에서 통합·수리하며 이 stack으로 waive하지 않는다. fast-mlsirm의 Noema HTTP 400·Strix linkage·제품 coverage 문제의 완료 증거로 재사용하지 않는다. |
+
+### 2026-09-30 공유 보안 기준 exact-head delta
+
+이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
+보호 `main`은 `37b10243cec3d160ecc9c1be75c71428b160a703`이고, live API의 첫
+페이지에는 열린 PR 50개가 있었다. 페이지 전체를 조직의 총 PR 수로 추론하지 않는다.
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
 
 ### 2026-09-19 exact-head incident delta
 

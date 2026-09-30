@@ -9,6 +9,17 @@
   optional skips. Hosted exact-head Checks and qualifying independent review
   remain required before protected merge.
 
+### Shared security fixtures use patched PyJWT and PyO3 releases
+
+- The Strix hash lock now takes PyJWT `2.14.0` as an explicit source input,
+  closing CVE-2026-102274 without hiding the dependency in the cryptography-only
+  override file. The offline Rust coverage fixture advances from PyO3 `0.22.6`
+  to `0.29.2`, beyond the `0.29.0` fixes for GHSA-36hh-v3qg-5jq4 and
+  GHSA-chgr-c6px-7xpp. Source/lock parity tests prevent either generated lock
+  from silently returning to the vulnerable versions. Protected integration,
+  immutable consumer-pin advancement, and fresh exact-head hosted security
+  Checks remain required before release admission.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
