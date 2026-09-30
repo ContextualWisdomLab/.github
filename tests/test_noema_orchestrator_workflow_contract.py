@@ -270,8 +270,10 @@ def test_noema_continuation_rejects_malformed_exchange_credentials(tmp_path: Pat
         ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}', 2),
         ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}', 2),
         ('{"value":"bad\\u0000oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0001oidc"}', '{"token":"valid-app"}', 1),
         ('{"value":"bad\\u0007oidc"}', '{"token":"valid-app"}', 1),
         ('{"value":"valid-oidc"}', '{"token":"bad\\u0000app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0001app"}', 2),
         ('{"value":"valid-oidc"}', '{"token":"bad\\u0007app"}', 2),
     )
     valid_output = tmp_path / "output-valid"

@@ -12,9 +12,11 @@
 ### Proposed review transport continuation fails closed pending owner capability
 
 - The proposed Strix and Noema capacity-continuation adapter removes the
-  consumer-scoped `github.token` fallback and strictly accepts only nonempty ASCII alphanumeric, dot, underscore, and hyphen
+  consumer-scoped `github.token` fallback and strictly accepts only nonempty
+  ASCII alphanumeric, dot, underscore, and hyphen
   credentials, rejecting every control-bearing, whitespace-bearing, multiline,
-  typed, or multi-object OIDC/App-token response.
+  typed, or multi-object OIDC/App-token response. The same boundary covers the
+  existing Strix metadata exchange.
   The continuation jobs retain only read access to consumer contents and pull
   requests. A retained run proves that a consumer-origin exchanged token still
   receives HTTP 403 when posting to `ContextualWisdomLab/.github`; therefore
@@ -23,7 +25,7 @@
   adapter remains Draft until an immutable owner release is pinned. The
   stacked validation also found and repaired Noema's unclosed file-like
   `HTTPError` response after bounded telemetry extraction. The combined
-  warning-fatal suite is `5172 passed, 6 skipped, 40 subtests passed`. Hosted
+  warning-fatal suite is `5300 passed, 5 skipped, 40 subtests passed`. Hosted
   exact-head dispatch and a fresh model verdict remain required after owner
   adoption.
 

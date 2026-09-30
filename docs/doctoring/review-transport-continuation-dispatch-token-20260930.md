@@ -52,7 +52,10 @@ would repeat a known-failing authority pattern.
 The consumer adapter in this proposal removes the consumer-token fallback,
 keeps consumer `contents` and `pull-requests` access read-only, and fails closed
 when exchange credentials are absent or are not a single JSON object containing
-a nonempty whitespace-free string. It is not mergeable until Noema issue #735
+a nonempty whitespace-free string without C0 or DEL control characters. This
+guard is shared by the existing Strix metadata exchange and both proposed
+continuation adapters so Bash never receives a credential after command
+substitution has altered its bytes. It is not mergeable until Noema issue #735
 delivers a versioned least-privilege contract and immutable release that binds
 the OIDC identity, exact source revision, explicit central target, and allowed
 dispatch action. No PAT or inherited-secret workaround is permitted.
@@ -63,15 +66,24 @@ Before the implementation change, executable shell regressions proved that a
 numeric OIDC value, object App token, and multiline App token all exited zero;
 the multiline value could append another `$GITHUB_OUTPUT` record. The proposed
 adapter now reuses the strict single-object/string parsing contract already
-exercised by Strix admission. After the parser repair:
+exercised by Strix admission. Current-head review then found that jq accepted
+JSON `U+0000`: Bash removed the NUL during command substitution, warned, and
+continued with a different credential at exit zero. Actual-shell RED fixtures
+reproduced that behavior for both Strix and Noema. They now cover NUL, SOH, and BEL
+in both OIDC and App-token fields, prove malformed OIDC stops before the POST,
+and require zero mask/output emission. After the parser repair:
 
 - both malformed-response RED tests pass against the actual workflow shells;
-- the four affected workflow contract files report `120 passed` with warnings
+- the four affected workflow contract files report `124 passed` with warnings
   fatal;
 - both workflow files parse with `yaml.safe_load`;
 - the combined warning-fatal suite reports
-  `5172 passed, 6 skipped, 40 subtests passed` on Python 3.12.14;
+  `5300 passed, 5 skipped, 40 subtests passed` on Python 3.14;
 - `git diff --check` passes.
+
+The control-character repair's three directly affected contract files report
+`52 passed` with warnings fatal. These local counts are not exact-head hosted
+acceptance for this new source tree.
 
 A broader warning-fatal Strix/Noema suite on protected `main@37b10243` first
 exposed nine `HTTPError` response-lifecycle warnings. Stacking the existing
@@ -118,4 +130,3 @@ mask/output emission, and prove malformed OIDC never reaches the second curl.
 Valid positive controls still require two curl calls, one mask record, and one
 output record. The Noema owner release prerequisite and Draft/merge HOLD are
 unchanged.
-
