@@ -1,5 +1,6 @@
 strix-agent==1.5.3
 anyio==4.14.2
+pyjwt==2.15.1
 openai[httpx2]==2.54.0
 aiohttp==3.14.3
 google-cloud-aiplatform==1.133.0
@@ -7,3 +8,4 @@ protobuf<8.0.0
 cryptography==50.0.0
 python-multipart==0.0.32
 pyasn1==0.6.4
+urllib3==2.8.0
