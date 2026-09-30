@@ -10,3 +10,6 @@
 - The existing-approval CLI regression executes the non-passing decision branch
   directly, preserving the repository's 100% statement/branch coverage gate
   instead of excluding or suppressing the new fail-closed path.
+- Existing approval reuse now evaluates the latest exact-head OpenCode
+  publication decision instead of skipping a newer `CHANGES_REQUESTED` or
+  otherwise invalid decision and resurrecting an older `APPROVED` review.

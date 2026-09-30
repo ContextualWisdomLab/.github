@@ -388,6 +388,20 @@ def test_opencode_app_only_mode_accepts_app_approval():
     assert "author=opencode-agent[bot]" in log.getvalue()
 
 
+def test_newer_same_head_changes_requested_revokes_reusable_approval():
+    """The latest exact-head OpenCode decision supersedes historical approval."""
+    log = io.StringIO()
+    older_approval = review(id=7)
+    newer_rejection = review(id=8, state="CHANGES_REQUESTED")
+
+    assert not gate.has_reusable_real_model_approval(
+        [older_approval, newer_rejection],
+        HEAD,
+        log=log,
+    )
+    assert "latest same-head review" in log.getvalue()
+
+
 def test_adversarial_validation_rejects_circular_or_unanchored_evidence():
     weak = {
         "status": "passed",

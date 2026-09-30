@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 OpenCode approval-order delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-LATEST-REVIEW-01 | **Proposed — local RED→GREEN; hosted exact-head acceptance pending** | `.github#2536@18c886cb…`에서 existing-approval gate가 같은 head의 최신 `CHANGES_REQUESTED`를 건너뛰고 과거 validated `APPROVED`를 재사용하는 RED를 재현했다. Gate를 dispatch-status와 동일한 latest-decision authority로 정렬한 focused suite는 44 passed다. | Canonical owner는 중앙 `scripts/ci/opencode_existing_approval_gate.py`다. #2536의 현재 head를 force 없이 갱신하고 full warning-fatal/coverage, hosted security/review Checks와 qualifying independent approval을 exact head에서 새로 확인한다. |
+
 ### 2026-09-30 central coverage owner stack delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
