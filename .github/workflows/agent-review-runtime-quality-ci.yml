@@ -64,6 +64,7 @@ on:
       - "tests/test_zdr_policy.py"
       - "tests/test_contextual_orchestrator_review_policy.py"
       - "tests/test_contextual_orchestrator_review_sidecar_contract.py"
+      - "tests/test_sidecar_disk_free_guard.py"
       - "tests/test_hourly_review_repair_callers.py"
       - "tests/test_github_hourly_conflict_repair.py"
       - "tests/test_hourly_scheduler_runtime_budget.py"
@@ -267,6 +268,7 @@ jobs:
               tests/test_zdr_policy.py|\
               tests/test_contextual_orchestrator_review_policy.py|\
               tests/test_contextual_orchestrator_review_sidecar_contract.py|\
+              tests/test_sidecar_disk_free_guard.py|\
               tests/test_hourly_review_repair_callers.py|\
               tests/test_github_hourly_conflict_repair.py|\
               tests/test_hourly_scheduler_runtime_budget.py|\
@@ -448,6 +450,7 @@ jobs:
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
+            tests/test_sidecar_disk_free_guard.py \
             tests/test_hourly_review_repair_callers.py \
             tests/test_github_hourly_conflict_repair.py \
             tests/test_hourly_scheduler_runtime_budget.py \
@@ -486,6 +489,7 @@ jobs:
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
+            tests/test_sidecar_disk_free_guard.py \
             tests/test_hourly_review_repair_callers.py \
             tests/test_github_hourly_conflict_repair.py \
             tests/test_hourly_scheduler_runtime_budget.py \
