@@ -1,3 +1,11 @@
+### Shared urllib3 locks close proxy and streaming CVEs
+
+- Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
+  Strix security-tooling closures, regenerate their hash locks without unrelated
+  version movement, and add a four-file parity contract. This closes
+  CVE-2026-97687 and CVE-2026-97689 found by exact-head Python Security while
+  preserving hash checking and the existing Strix cryptography override.
+
 ### Shared security fixtures use patched PyJWT and PyO3 releases
 
 - The Strix hash lock now takes PyJWT `2.14.0` as an explicit source input,
