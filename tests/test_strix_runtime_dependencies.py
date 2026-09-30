@@ -10,9 +10,20 @@ def _locked_requirement_versions(requirements_text: str, package_name: str) -> l
         requirement_name, separator, version_and_hash_marker = (
             requirement_line.strip().partition("==")
         )
+        requirement_name = requirement_name.split("[", 1)[0].strip()
         if separator and requirement_name.casefold() == package_name.casefold():
             package_versions.append(version_and_hash_marker.split()[0])
     return package_versions
+
+
+def test_locked_requirement_versions_normalizes_extras() -> None:
+    """Treat extras as the same distribution when detecting duplicate pins."""
+    requirements = "pyjwt==2.14.0\npyjwt[crypto]==2.13.0\n"
+
+    assert _locked_requirement_versions(requirements, "pyjwt") == [
+        "2.14.0",
+        "2.13.0",
+    ]
 
 
 def test_strix_installs_openai_httpx2_runtime() -> None:
