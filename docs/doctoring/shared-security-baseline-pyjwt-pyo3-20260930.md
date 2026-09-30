@@ -121,3 +121,35 @@ pip-audit 2.10.1 reported no known vulnerabilities for either generated lock.
 These local results are not merge authority: exact-head hosted security Checks,
 terminal authenticated CodeQL evidence, independent approval, and ordinary
 protected merge remain required.
+
+## 2026-10-01 PyJWT recursion denial-of-service follow-up
+
+Security Scan run `36741151937` found GHSA-42vr-xj54-vc7v /
+CVE-2026-101918 in PyJWT 2.14.0. Dependency Review job `109975641239` and OSV
+job `109975641271` both rejected that shared Strix lock. An attacker-controlled,
+deeply nested unsigned JWT payload can exhaust Python recursion during unverified
+payload parsing, before key lookup, and raise an uncaught request-level exception;
+the available evidence does not establish a process crash or authentication
+bypass. PyJWT 2.15.0 contains the upstream fix.
+
+The canonical-owner repair advances the explicit source pin and generated lock
+to 2.15.0. Lock regeneration changes only the PyJWT version and its wheel/sdist
+hashes; urllib3 2.8.0, PyO3 0.29.2, and the single-purpose cryptography override
+remain unchanged. The existing parity test was first changed to require 2.15.0
+and failed against the 2.14.0 source and lock before implementation. Hosted
+exact-head Security, CodeQL, independent approval, ordinary protected merge,
+and immutable consumer-pin advancement remain release gates.
+
+Local verification used the hosted-workflow Python 3.12 line. The focused
+source/lock contract passed 5 tests and the warnings-as-errors repository suite
+passed 5,167 tests, 6 skips, and 40 subtests. Repeating the recorded `uv 0.12.18`
+compile command was byte-identical at lock SHA-256 `76443a3300d0…`; a
+hash-enforced, no-dependency installation loaded PyJWT 2.15.0 and urllib3 2.8.0.
+`pip-audit 2.10.1` reported no known vulnerabilities. The repository's existing
+97% docstring baseline remains a separate HOLD and is not represented as green.
+An independent review found no remaining Critical, Important, or Minor finding
+after correcting the advisory's attack-vector wording.
+
+GitHub. (2026). *PyJWT has a denial of service vulnerability via maliciously
+crafted JWT token with deeply nested payload* (GHSA-42vr-xj54-vc7v).
+https://github.com/jpadilla/pyjwt/security/advisories/GHSA-42vr-xj54-vc7v

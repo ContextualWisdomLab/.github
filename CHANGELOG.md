@@ -1,3 +1,12 @@
+### Shared Strix lock advances beyond the PyJWT recursion DoS
+
+- Pin PyJWT `2.15.0` as the explicit Strix source input and regenerate the
+  hash lock, closing GHSA-42vr-xj54-vc7v / CVE-2026-101918 without moving any
+  unrelated dependency. The existing source/lock parity contract now rejects
+  a return to `2.14.0`. Exact-head hosted security Checks, independent approval,
+  ordinary protected integration, and immutable consumer-pin advancement remain
+  required before release admission.
+
 ### Shared urllib3 locks close proxy and streaming CVEs
 
 - Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and

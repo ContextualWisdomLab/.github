@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 PyJWT recursion denial-of-service closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v / CVE-2026-101918 was published | Security Scan run `36741151937`, dependency-review job `109975641239` and OSV job `109975641271`; canonical owner PR #2531 exact predecessor `dde3ea7876ceb1569db717975cc74f44cc8d18f9` | In canonical owner PR #2531, pin PyJWT 2.15.0 in the source input, regenerate the hash lock without unrelated package movement, and preserve the existing source/lock parity contract | **Proposed / exact-head Checks and independent approval required** |
+
 ## 2026-10-01 shared urllib3 security closure
 
 | Gap | Exact evidence | Action | Status |
