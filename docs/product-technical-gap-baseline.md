@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 trusted review archive transient transport
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| Required Noema resolved the correct immutable trusted source but a single GitHub archive API HTTP 502 exhausted materialization before model setup | `.github` run `36760921156`, job `110043067331`; protected source `37b10243cec3d160ecc9c1be75c71428b160a703`; combined successor predecessor `.github#2530@5b3a76ea71d7ae2fa9b1719f4f82df8d52e98082` | At the central `.github` owner, add bounded native transport retries to Noema, OpenCode, and merge-scheduler trusted archive downloads; prove the actual commands against a deterministic 502→200 server without changing exact-SHA, credential, extraction, or fail-closed contracts | **Proposed / local RED→GREEN complete; exact-head hosted Checks and independent approval required** |
+
 ## 2026-10-01 PyJWT recursion denial-of-service closure
 
 | Gap | Exact evidence | Action | Status |
