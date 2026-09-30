@@ -1375,6 +1375,19 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section(
+            "coverage: stale\ncoverage: current\nsecurity: ok", "coverage:"
+        )
+        == " current\n"
+    )
+    assert (
+        norm.label_section(
+            "coverage: direct\ndocstring coverage: docs\nsecurity: ok",
+            "coverage:",
+        )
+        == " direct\n"
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
