@@ -32,13 +32,16 @@ HTTP error path violated the same lifecycle boundary.
 
 The repair keeps the existing fail-closed redirect policy and error mapping:
 
-- `codeql_ghas_configuration_identity._request_json` reads the bounded diagnostic
-  body and closes the `HTTPError` in `finally`, including decode/read failures;
+- `codeql_ghas_configuration_identity._request_json` reads at most 400 bytes of
+  diagnostic body and closes the `HTTPError` in `finally`, including decode/read
+  failures;
 - `strix_evidence_binding.default_github_opener` snapshots the status code,
   closes the response, and then raises `EvidenceBindingError`;
 - the production-opener regression now asserts that the single synthetic 302
   response is closed as well as proving no redirected bearer request occurs.
 
+The 400-byte intake bound matches the pre-existing 400-character public
+diagnostic limit without reading an arbitrarily large untrusted response first.
 No warning filter, security suppression, redirect allowance, timeout, or check
 threshold changed.
 
@@ -54,8 +57,9 @@ threshold changed.
 5. `.github#2040` then merges the protected repair normally and regenerates its
    own exact-head evidence; stale predecessor failures are not rerun as proof.
 
-Local repair evidence on Python 3.14.7 is `34 passed` for the original
-URL-authority RED, `219 passed` for the eight-file CodeQL/Strix impact suite,
+Local repair evidence on Python 3.14.7 is `35 passed` for the URL-authority
+suite after adding the bounded-intake regression (`1 failed` before the repair),
+`220 passed` for the eight-file CodeQL/Strix impact suite,
 and `5159 passed, 10 skipped, 40 subtests passed` for the complete test tree.
 The two affected modules each report 100% statement/branch coverage, while the
 repository-wide report remains at its pre-existing 99% because unrelated

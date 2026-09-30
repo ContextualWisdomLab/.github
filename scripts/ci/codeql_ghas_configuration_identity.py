@@ -29,6 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
 GITHUB_API_AUTHORITY = "api.github.com"
+MAX_HTTP_ERROR_DIAGNOSTIC_BYTES = 400
 
 
 class ConfigurationIdentityError(RuntimeError):
@@ -200,7 +201,9 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         try:
-            body = exc.read().decode("utf-8", errors="replace")[-400:]
+            body = exc.read(MAX_HTTP_ERROR_DIAGNOSTIC_BYTES).decode(
+                "utf-8", errors="replace"
+            )
         finally:
             exc.close()
         raise ConfigurationIdentityError(
