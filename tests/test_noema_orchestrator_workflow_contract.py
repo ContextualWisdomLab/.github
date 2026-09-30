@@ -269,6 +269,22 @@ def test_noema_continuation_rejects_malformed_exchange_credentials(tmp_path: Pat
         ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}'),
         ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}'),
     )
+    valid_output = tmp_path / "output-valid"
+    valid_result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", shell],
+        env=base_env
+        | {
+            "GITHUB_OUTPUT": str(valid_output),
+            "OIDC_RESPONSE": '{"value":"valid-oidc"}',
+            "APP_RESPONSE": '{"token":"valid-app"}',
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid_result.returncode == 0
+    assert valid_result.stdout.splitlines() == ["::add-mask::valid-app"]
+    assert valid_output.read_text().splitlines() == ["token=valid-app"]
     for case_number, (oidc_response, app_response) in enumerate(malformed_pairs):
         output = tmp_path / f"output-{case_number}"
         result = subprocess.run(
