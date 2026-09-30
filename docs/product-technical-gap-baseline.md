@@ -7,6 +7,14 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 OpenCode approval-order delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-LATEST-REVIEW-01 | **Proposed — exact head `ba55414b…`; local RED→GREEN; hosted exact-head acceptance pending** | `.github#2536@18c886cb…`에서 existing-approval gate가 같은 head의 최신 `CHANGES_REQUESTED`를 건너뛰고 과거 validated `APPROVED`를 재사용하는 RED를 재현했다. Gate를 dispatch-status와 동일한 latest-decision authority로 정렬한 focused suite는 44 passed다. 후속 coverage 회귀가 stale-head와 unknown-actor skip 분기를 실제 실행하며 최종 warning-fatal coverage suite는 5,257 passed, 5 optional skips, 40 subtests, 18,252/18,252 statements와 7,498/7,498 branches다. 첫 수리는 ordinary one-parent commit `ba55414b…`로 force 없이 게시됐다. | Canonical owner는 중앙 `scripts/ci/opencode_existing_approval_gate.py`다. 후속 보안 delta를 ordinary descendant로 게시하고 hosted quality/review Checks와 qualifying independent approval을 새 exact head에서 확인한다. queued/skipped/pending은 acceptance evidence가 아니다. |
+| CONTROL-NOEMA-DOCUMENT-LOCK-01 | **Proposed — hosted Security RED repaired and integrated locally; republish pending** | exact-head Security Scan run `36779214593`, Trivy job `110104871060`이 중앙 Noema document-reader lock의 `fast-uri` 3.1.7(CVE-2026-86472)과 `ip-address` 10.7.0(CVE-2026-101911, CVE-2026-101912)을 검출했다. 회귀는 vulnerable lock에서 1 failed / 11 passed / 2 skipped였고, `fast-uri` 3.1.8 및 `ip-address` 10.7.2로 재생성한 lock에서 12 passed / 2 skipped다. `npm audit --omit=dev --audit-level=moderate`는 109 production dependencies와 vulnerability 0을 보고했고 통합 full coverage도 100%다. | Canonical owner는 중앙 `scripts/ci/noema-document-reader/package-lock.json`이다. ordinary descendant로 #2536을 갱신한 뒤 fresh exact-head Security/quality/review Checks를 수집한다. |
+| CONTROL-STRIX-LITELLM-LOCK-01 | **Proposed — hosted Python Security RED repaired and integrated locally; republish pending** | exact-head Python Security run `36779214017`, pip-audit job `110104825199`이 Strix hash lock의 LiteLLM 1.94.1에서 CVE-2026-84377을 검출했다. Source input에 fixed 1.94-line release `litellm==1.94.3`을 명시하고 기존 uv command/override로 hash lock을 재생성했다. 새 source/lock parity regression은 old lock에서 RED였다. strict exact-pin pip-audit는 known vulnerability 0이며 통합 full coverage도 100%다. | Canonical owner는 중앙 `requirements-strix-ci.txt`와 생성 `requirements-strix-ci-hashes.txt`다. ordinary descendant를 게시하고 fresh exact-head Python Security 및 review Checks를 수집한다. |
+
 ### 2026-09-30 central coverage owner stack delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
