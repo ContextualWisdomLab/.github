@@ -121,3 +121,27 @@ pip-audit 2.10.1 reported no known vulnerabilities for either generated lock.
 These local results are not merge authority: exact-head hosted security Checks,
 terminal authenticated CodeQL evidence, independent approval, and ordinary
 protected merge remain required.
+
+## 2026-10-01 PyJWT parser availability follow-up
+
+Security Scan run [36741151937](https://github.com/ContextualWisdomLab/.github/actions/runs/36741151937),
+dependency-review job `109975641239` and OSV job `109975641271`, found
+PyJWT 2.14.0 affected by GHSA-42vr-xj54-vc7v. An unauthenticated token can
+cause unbounded recursive pre-verification payload parsing through
+`PyJWKClient.get_signing_key_from_jwt`, terminating availability with
+`RecursionError`. PyJWT 2.15.0 contains the upstream fix.
+
+The finding surfaced on dependent PR #2540, but the central Strix lock is owned
+by #2531. The repair therefore advances the explicit source pin and generated
+hash lock here and leaves #2540 untouched. The RED contract observed 2.14.0 in
+both files; GREEN requires exactly one 2.15.0 entry in each. Recompiling with
+the recorded Python 3.13 manylinux command was byte-identical with SHA-256
+`76443a3300d08a8a9aabea6e4adbc96e1031eb9503213ef9683faf8f5eb1e8ba`.
+pip-audit 2.10.1 reported no known vulnerabilities. These are local source
+proofs only; fresh exact-head hosted Checks, independent approval, ordinary
+protected merge, and dependent-stack merge-forward remain mandatory.
+
+GitHub. (2026). *PyJWT denial of service via uncontrolled recursion in
+pre-verification payload parsing* (GHSA-42vr-xj54-vc7v). GitHub Advisory
+Database. https://github.com/advisories/GHSA-42vr-xj54-vc7v
+

@@ -1,3 +1,13 @@
+### PyJWT parser DoS is removed from the shared Strix lock
+
+- Advance the explicit Strix source pin and generated hash lock from PyJWT
+  `2.14.0` to `2.15.0`, closing GHSA-42vr-xj54-vc7v. Exact Security
+  Scan run `36741151937` found the advisory in dependent PR #2540; the
+  canonical owner repair stays in #2531. A source/lock contract, deterministic
+  lock regeneration, and pip-audit evidence keep the dependent branch free of
+  a leaf workaround. Exact-head hosted Checks and independent approval remain
+  required before ordinary merge.
+
 ### Shared urllib3 locks close proxy and streaming CVEs
 
 - Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
