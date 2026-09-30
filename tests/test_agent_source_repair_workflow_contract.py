@@ -64,6 +64,18 @@ def test_worker_validates_changed_yaml_before_publication() -> None:
     assert "YAML.parse_file" in validation
 
 
+def test_quality_installs_the_locked_document_dependency() -> None:
+    """Full-suite collection must receive the document parser's pinned dependency."""
+    text = (ROOT / ".github/workflows/agent-source-repair-quality-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    lock = "requirements-noema-document-ci-hashes.txt"
+    assert f"-r {lock}" in text
+    assert text.count(f'      - "{lock}"') == 2
+    cache = text.split("cache-dependency-path:", 1)[1].split("- name:", 1)[0]
+    assert lock in cache
+
+
 def test_review_mentions_remain_separate_from_source_mutation() -> None:
     """The source writer is a distinct command path and does not weaken review workflows."""
     text = WORKFLOW.read_text(encoding="utf-8")
