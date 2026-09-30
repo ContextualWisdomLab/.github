@@ -16,17 +16,41 @@ LOCK_FILE = (
 PACKAGE_FILE = LOCK_FILE.with_name("package.json")
 
 
-def _version_tuple(package_name: str) -> tuple[int, ...]:
-    """Return the numeric release tuple recorded for one locked package."""
-    lock_data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
-    package_data = lock_data["packages"][f"node_modules/{package_name}"]
-    return tuple(int(part) for part in package_data["version"].split("."))
+def _locked_versions(lock_data: dict[str, object], package_name: str) -> list[tuple[int, ...]]:
+    """Return every hoisted or nested locked release for one package."""
+    package_records = lock_data["packages"]
+    assert isinstance(package_records, dict)
+    path_suffix = f"node_modules/{package_name}"
+    release_versions: list[tuple[int, ...]] = []
+    for package_path, package_data in package_records.items():
+        if package_path != path_suffix and not package_path.endswith(f"/{path_suffix}"):
+            continue
+        assert isinstance(package_data, dict)
+        release_versions.append(tuple(int(part) for part in package_data["version"].split(".")))
+    return release_versions
 
 
 def test_document_reader_transitives_include_security_fixes() -> None:
     """Reject releases affected by the September 2026 URI and IP advisories."""
-    assert _version_tuple("fast-uri") >= (3, 1, 8)
-    assert _version_tuple("ip-address") >= (10, 7, 2)
+    lock_data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+    for package_name, minimum_version in {
+        "fast-uri": (3, 1, 8),
+        "ip-address": (10, 7, 1),
+    }.items():
+        locked_versions = _locked_versions(lock_data, package_name)
+        assert locked_versions
+        assert all(version >= minimum_version for version in locked_versions)
+
+
+def test_nested_vulnerable_transitive_is_detected() -> None:
+    """Do not let a patched hoisted package hide a vulnerable nested copy."""
+    lock_data = {
+        "packages": {
+            "node_modules/ip-address": {"version": "10.7.1"},
+            "node_modules/parent/node_modules/ip-address": {"version": "10.7.0"},
+        }
+    }
+    assert _locked_versions(lock_data, "ip-address") == [(10, 7, 1), (10, 7, 0)]
 
 
 def test_document_reader_source_owns_transitive_security_fixes() -> None:
@@ -35,5 +59,5 @@ def test_document_reader_source_owns_transitive_security_fixes() -> None:
 
     assert package_data["overrides"] == {
         "fast-uri": "3.1.8",
-        "ip-address": "10.7.2",
+        "ip-address": "10.7.1",
     }
