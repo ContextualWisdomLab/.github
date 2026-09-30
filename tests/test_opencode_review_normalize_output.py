@@ -1367,6 +1367,18 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
+def test_label_section_uses_last_non_docstring_coverage_label() -> None:
+    """Ignore embedded docstring labels while selecting the last test label."""
+    combined = (
+        "coverage: stale evidence "
+        "docstring coverage: 100% documentation evidence "
+        "coverage: 100% current evidence "
+        "performance: measured"
+    )
+
+    assert norm.label_section(combined, "coverage:") == " 100% current evidence "
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
@@ -1375,6 +1387,19 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section(
+            "coverage: stale\ncoverage: current\nperformance: measured", "coverage:"
+        )
+        == " current\n"
+    )
+    assert (
+        norm.label_section(
+            "coverage: direct\ndocstring coverage: docs\nperformance: measured",
+            "coverage:",
+        )
+        == " direct\n"
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
