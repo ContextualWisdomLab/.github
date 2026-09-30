@@ -3689,3 +3689,37 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-10-01 Noema document-reader npm security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; the published head
+`f79a617aef6eca2e83f822a0014130372ffa54ef` remains failed and is not merge
+authority. A repaired successor head, fresh hosted Checks, and qualifying
+independent approval are required.
+
+**Context Map / owner.** The central `.github` Noema review bounded context owns
+the reviewed HWP reader runtime and its generated npm lock. `hwp-mcp` and
+`@rhwp/core` remain direct upstream dependencies; `fast-uri` and `ip-address`
+are transitive upstream dependencies. Product repositories consume the central
+workflow contract and do not copy or bypass this runtime.
+
+**Gap / RCA.** Exact-head Security Scan run
+[`36770011020`](https://github.com/ContextualWisdomLab/.github/actions/runs/36770011020),
+job `110073743404`, found CVE-2026-86472 in `fast-uri` `3.1.7` and
+CVE-2026-101911/CVE-2026-101912 in `ip-address` `10.7.0`. GitHub's reviewed
+advisories specify `3.1.8` and `10.7.1` as the first fixed releases in those
+major lines. The scanner recovered from its first registry mirror's
+`BLOB_UNKNOWN` response, downloaded the database from GHCR, and emitted SARIF;
+the three dependency findings, not that transient mirror response, caused the
+gate failure.
+
+**RED → GREEN action / evidence.** The existing Noema hosted-reader contract
+was extended first and failed on `fast-uri` `3.1.7`. Exact npm overrides now
+pin `fast-uri` `3.1.8` and `ip-address` `10.7.1`; deterministic lock
+regeneration changes only those two package records. The focused contract is
+`1 passed`, `npm ci` installs all 108 production packages, and a lock-only
+moderate-threshold npm audit reports `0` vulnerabilities. The complete RCA,
+primary advisory citations, and merge boundary are recorded in
+`docs/doctoring/noema-document-reader-npm-security-20261001.md`. No finding or
+gate is suppressed, and local evidence is not substituted for protected
+exact-head results.
