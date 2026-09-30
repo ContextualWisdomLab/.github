@@ -13,7 +13,7 @@ def test_strix_installs_openai_httpx2_runtime() -> None:
 
     assert "openai[httpx2]==2.54.0" in requirements.splitlines()
     assert "openai==2.54.0 \\" in requirements_lock.splitlines()
-    assert "httpx2==2.12.0 \\" in requirements_lock.splitlines()
+    assert "httpx2==2.13.1 \\" in requirements_lock.splitlines()
 
 
 def test_strix_anyio_security_pin_is_an_explicit_lock_input() -> None:
