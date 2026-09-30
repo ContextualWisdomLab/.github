@@ -14,6 +14,15 @@ from scripts.ci import strix_report_scope as report_scope
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/ci/strix_report_scope.py"
 CHANGED_PATH = "python/fast_mlsirm/report.py"
+SCOPED_DIRECTORY_REPORT = """# Methodology
+
+**Scope:**
+- `/workspace/strix-pr-scope.AoFHD6/crates/mlsirm-core` (Core Rust implementation)
+- `/workspace/strix-pr-scope.AoFHD6/crates/fast-mlsirm-py` (PyO3 bindings)
+- `/workspace/strix-pr-scope.AoFHD6/python/fast_mlsirm` (Python wrapper)
+
+No security vulnerabilities were identified during this assessment.
+"""
 
 
 def _write_report(
@@ -63,7 +72,9 @@ def test_validate_requires_exactly_one_real_run_directory(tmp_path: Path) -> Non
     (output_dir / "noise.txt").write_text("ignored", encoding="utf-8")
     linked_target = tmp_path / "linked-target"
     linked_target.mkdir()
-    (output_dir / "linked-run").symlink_to(linked_target, target_is_directory=True)
+    (output_dir / "linked-run").symlink_to(
+        linked_target, target_is_directory=True
+    )
     with pytest.raises(ValueError, match="exactly one current scan report"):
         report_scope.validate(output_dir, [CHANGED_PATH])
 
@@ -95,10 +106,31 @@ def test_validate_rejects_missing_or_linked_report_files(
     ("metadata", "expected_error"),
     [
         ([], "metadata is not an object"),
-        ({"status": "completed", "scan_results": ["invalid"]}, "results are not an object"),
-        ({"status": "running", "scan_results": {"scan_completed": True, "success": True}}, "report is incomplete"),
-        ({"status": "completed", "scan_results": {"scan_completed": False, "success": True}}, "report is incomplete"),
-        ({"status": "completed", "scan_results": {"scan_completed": True, "success": False}}, "report is incomplete"),
+        (
+            {"status": "completed", "scan_results": ["invalid"]},
+            "results are not an object",
+        ),
+        (
+            {
+                "status": "running",
+                "scan_results": {"scan_completed": True, "success": True},
+            },
+            "report is incomplete",
+        ),
+        (
+            {
+                "status": "completed",
+                "scan_results": {"scan_completed": False, "success": True},
+            },
+            "report is incomplete",
+        ),
+        (
+            {
+                "status": "completed",
+                "scan_results": {"scan_completed": True, "success": False},
+            },
+            "report is incomplete",
+        ),
     ],
 )
 def test_validate_rejects_malformed_or_incomplete_metadata(
@@ -122,13 +154,54 @@ def test_validate_rejects_malformed_json_and_unrelated_scope(tmp_path: Path) -> 
         report_scope.validate(tmp_path, [CHANGED_PATH])
 
 
+def test_scan_scope_directory_containing_a_changed_file_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """A reviewed scope directory binds changed files beneath that directory."""
+    _write_report(tmp_path, report_text=SCOPED_DIRECTORY_REPORT)
+    changed_paths = [
+        "crates/mlsirm-core/src/gpu_regression.rs",
+        "python/fast_mlsirm/regression.py",
+    ]
+    report_scope.validate(tmp_path, changed_paths)
+
+
+def test_scan_scope_directory_unrelated_to_changed_files_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A directory scope cannot authorize unrelated changed paths."""
+    _write_report(tmp_path, report_text=SCOPED_DIRECTORY_REPORT)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        report_scope.validate(tmp_path, ["docs/methods.md", "tests/test_regression.py"])
+
+
+@pytest.mark.parametrize(
+    "report_text",
+    [
+        "Audited crates/mlsirm-core; nothing found.\n",
+        "Scope: `/workspace/strix-pr-scope.AoFHD6/`; nothing found.\n",
+        "Scope: `/workspace/strix-pr-scope.AoFHD6/.`; nothing found.\n",
+    ],
+)
+def test_bare_repository_directory_or_scope_root_is_rejected(
+    tmp_path: Path, report_text: str
+) -> None:
+    """Bare directory prose and repository roots bind no changed file."""
+    _write_report(tmp_path, report_text=report_text)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        report_scope.validate(
+            tmp_path, ["crates/mlsirm-core/src/gpu_regression.rs"]
+        )
+
+
 def test_cli_reports_validation_error_and_accepts_scoped_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The command boundary maps validation failures to exit 1 and stderr."""
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), str(tmp_path), CHANGED_PATH])
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as missing_report_exit:
         runpy.run_path(str(SCRIPT), run_name="__main__")
+    assert missing_report_exit.value.code == 1
     assert "ERROR: Strix report scope: expected exactly one" in capsys.readouterr().err
 
     _write_report(tmp_path)
