@@ -37,6 +37,11 @@ production scripts retain 100% statement/branch coverage (398 statements,
 148 branches) and 100% docstrings. A stored-claim/failed-dispatch regression also
 proves that advancing the head does not replay the same command revision.
 
-The full repository suite, fresh hosted current-head checks, independent review
-and protected integration remain separate acceptance steps. Consumer opt-in
+On code head `c0733dde27e7fc02496ec2381bc1f9ac1b59192d`, the full repository
+suite completed with 5,246 passed, five skipped, 40 subtests passed in 433.42
+seconds. The original log records `exit_code=0`; an inherited synthetic
+HTTPError ResourceWarning remains visible and is not suppressed.
+
+Fresh hosted current-head checks, independent review and protected integration
+remain separate acceptance steps. Consumer opt-in
 and live model-to-commit acceptance are not implied by these local repairs.
