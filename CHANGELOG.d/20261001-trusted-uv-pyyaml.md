@@ -12,3 +12,6 @@
 - Fetch complete Git comparison history in the Trusted uv full-suite gate so
   published-lineage contracts can resolve current-HEAD ancestors, and restore
   the baseline's required APA 7th reference section.
+- Install the hash-pinned Noema document toolchain in Repository Metadata
+  Reconcile before its repository-wide pytest step, preventing `defusedxml`
+  collection failures after the coverage prerequisite merge.

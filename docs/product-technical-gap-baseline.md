@@ -2295,3 +2295,29 @@ fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
 the exact hosted command now covers all 18,252 production statements and 7,498
 branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
 Fresh exact-head hosted revalidation is required.
+
+## 2026-10-01 Repository Metadata full-suite dependency closure
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2040`; merge remains HOLD
+pending fresh exact-head hosted Checks, non-skipped CodeQL evidence where
+required, and qualifying independent approval.
+
+**Context Map / owner.** Central `.github` owns the Repository Metadata
+Reconcile workflow and its hash-locked test environment. Noema owns the
+document parser dependency contract; the metadata workflow consumes only its
+released hash lock and does not copy parser source.
+
+**Gap / RCA.** Exact-head run
+[`36778720069`](https://github.com/ContextualWisdomLab/.github/actions/runs/36778720069),
+job `110103096014`, passed metadata validation, both targeted 100% branch
+coverage reports, and docstring validation, then failed while collecting the
+repository-wide suite because it installed only the OpenCode lock. Thirteen
+Noema test modules imported `defusedxml`, which is supplied by the separate
+Noema document lock.
+
+**RED → repair.** The workflow contract first failed because the install step
+and pull-request triggers omitted `requirements-noema-document-ci-hashes.txt`.
+Repository Metadata Reconcile now installs both hash locks and observes both
+Noema dependency surfaces. The focused contract passes without weakening the
+100% coverage, exact-revision, or fail-closed gates. Fresh successor-head
+hosted evidence is mandatory; the failed run is retained as causal evidence.

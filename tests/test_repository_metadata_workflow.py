@@ -27,3 +27,16 @@ def test_metadata_validation_checks_out_published_evidence_ancestry() -> None:
     )[0]
 
     assert "fetch-depth: 0" in checkout_source
+
+
+def test_metadata_full_suite_installs_noema_document_lock() -> None:
+    """The repository-wide pytest step must install every imported parser."""
+    source = WORKFLOW.read_text(encoding="utf-8")
+    validate_source = source.split("jobs:\n  validate:", 1)[1].split("\n  apply:", 1)[0]
+    install_source = validate_source.split(
+        "- name: Install hash-locked test tooling", 1
+    )[1].split("- name: Validate desired state", 1)[0]
+
+    assert "-r requirements-opencode-review-ci-hashes.txt" in install_source
+    assert "-r requirements-noema-document-ci-hashes.txt" in install_source
+    assert '      - "requirements-noema-document-ci-hashes.txt"' in source

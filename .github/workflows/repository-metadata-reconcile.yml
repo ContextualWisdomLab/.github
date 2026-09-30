@@ -18,6 +18,8 @@ on:
       - "tests/test_repository_label_convergence.py"
       - "tests/test_repository_label_identity.py"
       - "tests/test_repository_label_live_verification.py"
+      - "requirements-noema-document-ci.txt"
+      - "requirements-noema-document-ci-hashes.txt"
       - ".github/workflows/repository-metadata-reconcile.yml"
   schedule:
     - cron: "23 * * * *"
@@ -55,6 +57,7 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          -r requirements-noema-document-ci-hashes.txt
       - name: Validate desired state
         run: |
           set -euo pipefail
