@@ -387,10 +387,15 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
 
 
-def test_launcher_reserves_capacity_for_parallel_strix_agents() -> None:
-    """Strix may send more than eight simultaneous requests to one sidecar."""
-    text = _read(LAUNCHER)
-    assert "max_concurrent_runs=16" in text
+def test_launcher_builds_parallel_strix_security_config() -> None:
+    """Exercise the configured bound instead of accepting a matching source string."""
+    launcher = runpy.run_path(str(LAUNCHER))
+    security_config = launcher["_review_security_config"](
+        SimpleNamespace, "synthetic-test-bearer"
+    )
+    assert security_config.auth_token == "synthetic-test-bearer"
+    assert security_config.max_body_bytes == 512 * 1024 * 1024
+    assert security_config.max_concurrent_runs == 16
 
 
 def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
