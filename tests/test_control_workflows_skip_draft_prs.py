@@ -24,10 +24,7 @@ WORKFLOWS = [
     "codeql-pr.yml",
     "pr-review-merge-scheduler.yml",
 ]
-DRAFT_GUARD = (
-    "(github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' "
-    "|| github.event.action == 'closed')"
-)
+DRAFT_GUARD = "github.event.pull_request.draft != true"
 
 
 def _load(name: str) -> dict:
