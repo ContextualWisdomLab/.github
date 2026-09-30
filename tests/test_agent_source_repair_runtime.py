@@ -382,7 +382,7 @@ def test_claim_receipt_requires_bot_and_exact_revision_marker() -> None:
     assert repair.source_repair_already_claimed(client, expected) is True
 
 
-def test_dispatch_dry_run_duplicate_success_and_ack_failure(capsys: pytest.CaptureFixture[str]) -> None:
+def test_dispatch_dry_run_duplicate_and_success(capsys: pytest.CaptureFixture[str]) -> None:
     expected = _expected()
     target = FakeClient()
     dispatch = DispatchClient()
@@ -396,9 +396,63 @@ def test_dispatch_dry_run_duplicate_success_and_ack_failure(capsys: pytest.Captu
     target.conversation = [[]]
     assert repair.dispatch_source_repair(target_client=target, dispatch_client=dispatch, expected=expected)
     assert dispatch.calls[-1][1]["event_type"] == "agent-source-repair"
-    target.raise_ack = RuntimeError("token secret should not escape")
-    assert repair.dispatch_source_repair(target_client=target, dispatch_client=dispatch, expected=expected)
-    assert "acknowledgement failed" in capsys.readouterr().out
+
+
+def test_failed_claim_never_dispatches_source_mutation() -> None:
+    """A missing durable command claim must fail before any worker is enqueued."""
+    target = FakeClient()
+    target.raise_ack = RuntimeError("claim unavailable")
+    dispatch = DispatchClient()
+    with pytest.raises(RuntimeError, match="claim unavailable"):
+        repair.dispatch_source_repair(
+            target_client=target, dispatch_client=dispatch, expected=_expected()
+        )
+    assert dispatch.calls == []
+
+
+def test_dispatch_requires_a_durable_claim_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exact comment revision must be claimed before the dispatch side effect."""
+    target = FakeClient()
+    dispatch = DispatchClient()
+    original_request = dispatch.request
+
+    def request_after_claim(args: list[str], *, input_payload: Any = None) -> Any:
+        claim_args, claim_payload = target.calls[-1]
+        assert claim_args == [f"repos/{REPOSITORY}/issues/7/comments", "-X", "POST"]
+        digest = hashlib.sha256(BODY.encode()).hexdigest()
+        assert f"<!-- cwl-agent-source-repair:9001:{digest} -->" in claim_payload["body"]
+        return original_request(args, input_payload=input_payload)
+
+    monkeypatch.setattr(dispatch, "request", request_after_claim)
+    assert repair.dispatch_source_repair(
+        target_client=target, dispatch_client=dispatch, expected=_expected()
+    )
+    assert len(dispatch.calls) == 1
+
+
+def test_claim_survives_failed_dispatch_and_head_advance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored claim blocks replay of the same command even at a later PR head."""
+    target = FakeClient()
+    dispatch = DispatchClient()
+
+    def failed_dispatch(args: list[str], *, input_payload: Any = None) -> Any:
+        dispatch.calls.append((args, input_payload))
+        raise RuntimeError("dispatch unavailable")
+
+    monkeypatch.setattr(dispatch, "request", failed_dispatch)
+    with pytest.raises(RuntimeError, match="dispatch unavailable"):
+        repair.dispatch_source_repair(
+            target_client=target, dispatch_client=dispatch, expected=_expected()
+        )
+    claim = target.calls[-1][1]["body"]
+    target.conversation = [[{"body": claim, "user": {"type": "Bot"}}]]
+    target.pull["head"]["sha"] = "c" * 40
+    next_expected = repair.expected_from_comment(REPOSITORY, 7, target.pull, target.comment)
+    with pytest.raises(repair.SourceRepairAlreadyClaimed):
+        repair.dispatch_source_repair(
+            target_client=target, dispatch_client=dispatch, expected=next_expected
+        )
+    assert len(dispatch.calls) == 1
 
 
 def test_worker_context_writes_deterministic_nul_scope_hash_and_quoted_instruction(tmp_path: Path) -> None:

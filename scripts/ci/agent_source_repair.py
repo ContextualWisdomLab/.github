@@ -484,31 +484,24 @@ def dispatch_source_repair(
             f"head={expected.pull_request_head_sha} comment={expected.source_comment_id}"
         )
         return False
+    acknowledgement = (
+        f"{receipt_marker(expected)}\n"
+        f"Claimed explicit source repair for PR #{expected.pull_request_number} at exact head "
+        f"`{expected.pull_request_head_sha}` before dispatch. The writer remains bounded to the protected-base "
+        "opt-in policy and the complete safe current-PR file scope; it cannot approve or merge the PR."
+    )
+    target_client.request(
+        [
+            f"repos/{expected.repository}/issues/{expected.pull_request_number}/comments",
+            "-X",
+            "POST",
+        ],
+        input_payload={"body": acknowledgement},
+    )
     dispatch_client.request(
         [f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/dispatches", "-X", "POST"],
         input_payload=dispatch_payload(validated),
     )
-    acknowledgement = (
-        f"{receipt_marker(expected)}\n"
-        f"Queued explicit source repair for PR #{expected.pull_request_number} at exact head "
-        f"`{expected.pull_request_head_sha}`. The writer remains bounded to the protected-base "
-        "opt-in policy and the complete safe current-PR file scope; it cannot approve or merge the PR."
-    )
-    try:
-        target_client.request(
-            [
-                f"repos/{expected.repository}/issues/{expected.pull_request_number}/comments",
-                "-X",
-                "POST",
-            ],
-            input_payload={"body": acknowledgement},
-        )
-    except Exception as exc:  # noqa: BLE001 - dispatch is already durable at GitHub
-        message = " ".join(str(exc).split()) or exc.__class__.__name__
-        print(
-            "::warning::Source-repair dispatch succeeded but acknowledgement failed; "
-            f"exact-head worker revalidation still prevents stale mutation: {message[:1000]}"
-        )
     return True
 
 

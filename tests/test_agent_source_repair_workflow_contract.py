@@ -1,6 +1,11 @@
 """Static security and architecture contracts for the explicit source-repair workflow."""
 from pathlib import Path
+import os
 import re
+import subprocess
+import textwrap
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-source-repair.yml"
@@ -74,6 +79,69 @@ def test_quality_installs_the_locked_document_dependency() -> None:
     assert text.count(f'      - "{lock}"') == 2
     cache = text.split("cache-dependency-path:", 1)[1].split("- name:", 1)[0]
     assert lock in cache
+
+
+def _workspace(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a repository without ignore rules and a sealed single-file scope."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "src").mkdir()
+    (workspace / "src/main.py").write_text("VALUE = 1\n")
+    for args in (
+        ["init"], ["config", "user.name", "Test"],
+        ["config", "user.email", "test@example.invalid"],
+    ):
+        subprocess.run(["git", "-C", str(workspace), *args], check=True, capture_output=True)
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    (runner_temp / "agent-source-repair-allowed-paths.zlist").write_bytes(b"src/main.py\0")
+    return workspace, runner_temp
+
+
+def _step_script(name: str, next_name: str | None = None) -> str:
+    """Extract the actual shell body of one trusted workflow step."""
+    block = WORKFLOW.read_text().split(f"- name: {name}\n", 1)[1]
+    if next_name is not None:
+        block = block.split(f"- name: {next_name}\n", 1)[0]
+    return textwrap.dedent(block.split("run: |\n", 1)[1])
+
+
+@pytest.mark.parametrize("shadow_module", [False, True])
+def test_python_validation_stays_outside_workspace(tmp_path: Path, shadow_module: bool) -> None:
+    """Compilation must create no unsealed bytecode or execute a PR-owned module."""
+    workspace, runner_temp = _workspace(tmp_path)
+    marker = runner_temp / "shadow-executed"
+    if shadow_module:
+        (workspace / "py_compile.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+        )
+    subprocess.run(["git", "-C", str(workspace), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(workspace), "commit", "-m", "base"], check=True, capture_output=True)
+    (workspace / "src/main.py").write_text("VALUE = 2\n")
+    env = {**os.environ, "TARGET_WORKSPACE": str(workspace), "RUNNER_TEMP": str(runner_temp)}
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    script = _step_script("Validate resulting diff", "Revalidate authority and push a normal commit")
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists()
+    assert list(workspace.rglob("*.pyc")) == []
+
+
+@pytest.mark.parametrize("extra_path", [None, "unsealed.txt"])
+def test_final_staging_checks_every_path(tmp_path: Path, extra_path: str | None) -> None:
+    """A late unsealed file must block publication after git add, not before it."""
+    workspace, runner_temp = _workspace(tmp_path)
+    if extra_path is not None:
+        (workspace / extra_path).write_text("late change\n")
+    script = _step_script("Revalidate authority and push a normal commit")
+    staging = "set -euo pipefail\ngit add -A\n" + script.split("git add -A\n", 1)[1].split(
+        "git -c core.hooksPath=/dev/null commit", 1
+    )[0]
+    result = subprocess.run(
+        ["bash", "-c", staging], cwd=workspace,
+        env={**os.environ, "RUNNER_TEMP": str(runner_temp)}, capture_output=True, text=True,
+    )
+    assert (result.returncode == 0) is (extra_path is None), result.stdout + result.stderr
 
 
 def test_review_mentions_remain_separate_from_source_mutation() -> None:

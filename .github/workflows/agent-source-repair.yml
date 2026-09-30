@@ -371,7 +371,9 @@ jobs:
             case "$changed_file" in *.py) python_files+=("$changed_file");; esac
             case "$changed_file" in *.yml|*.yaml) yaml_files+=("$changed_file");; esac
           done
-          if [ "${#python_files[@]}" -gt 0 ]; then python3 -m py_compile "${python_files[@]}"; fi
+          if [ "${#python_files[@]}" -gt 0 ]; then
+            python3 -I -X "pycache_prefix=$RUNNER_TEMP/source-repair-pycache" -m py_compile "${python_files[@]}"
+          fi
           if [ "${#yaml_files[@]}" -gt 0 ]; then
             ruby -e "require 'yaml'; ARGV.each { |path| YAML.parse_file(path) }" "${yaml_files[@]}"
           fi
@@ -397,6 +399,13 @@ jobs:
             exit 1
           fi
           git add -A
+          mapfile -d '' -t staged_files < <(git diff --cached --name-only -z)
+          for staged_file in "${staged_files[@]}"; do
+            if ! grep -qzxF -- "$staged_file" "$RUNNER_TEMP/agent-source-repair-allowed-paths.zlist"; then
+              printf '::error::Source repair staged path outside sealed scope: %q\n' "$staged_file"
+              exit 1
+            fi
+          done
           git -c core.hooksPath=/dev/null commit -m "fix(pr-${PR_NUMBER}): apply explicit source repair"
           git -c core.hooksPath=/dev/null push \
             "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git" "HEAD:${PR_HEAD_REF}"
