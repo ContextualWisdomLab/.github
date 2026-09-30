@@ -3,7 +3,9 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _locked_requirement_versions(requirements_text: str, package_name: str) -> list[str]:
+def _locked_requirement_versions(
+    requirements_text: str, package_name: str
+) -> list[str]:
     """Return every exact version row for one normalized package name."""
     package_versions = []
     for requirement_line in requirements_text.splitlines():
@@ -63,3 +65,18 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
 
     assert _locked_requirement_versions(requirements, "pyjwt") == ["2.14.0"]
     assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.14.0"]
+
+
+def test_python_security_inputs_pin_patched_urllib3() -> None:
+    """Keep both audited runtimes on the urllib3 security release."""
+    requirement_pairs = (
+        ("requirements-pip-audit-ci.txt", "requirements-pip-audit-ci-hashes.txt"),
+        ("requirements-strix-ci.txt", "requirements-strix-ci-hashes.txt"),
+    )
+
+    for source_name, lock_name in requirement_pairs:
+        source_text = (REPOSITORY_ROOT / source_name).read_text(encoding="utf-8")
+        lock_text = (REPOSITORY_ROOT / lock_name).read_text(encoding="utf-8")
+
+        assert _locked_requirement_versions(source_text, "urllib3") == ["2.8.0"]
+        assert _locked_requirement_versions(lock_text, "urllib3") == ["2.8.0"]

@@ -3705,3 +3705,35 @@ verification, `persist-credentials: false`, apply credentials, and all gates
 remain unchanged. The focused workflow plus G-17 ancestry suites pass 37 tests.
 Publication must trigger fresh checks on the new exact head; predecessor GREEN
 and queued/skipped/pending conclusions do not authorize merge.
+
+## 2026-09-30 Shared Python CI urllib3 security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks and qualifying independent
+review.
+
+**Context Map / owner.** Central `.github` owns the pip-audit and Strix
+hash-locked CI runtimes. urllib3 and its security advisories are upstream
+evidence; product repositories consume only an ordinarily integrated central
+workflow revision.
+
+**Gap / RCA.** Exact-head Python Security run
+[`36737059681`](https://github.com/ContextualWisdomLab/.github/actions/runs/36737059681),
+job `109961499214`, found urllib3 2.7.0 vulnerable to CVE-2026-97687,
+CVE-2026-97688, and CVE-2026-97689 in both the pip-audit installer lock and
+the Strix runtime lock. The upstream 2.8.0 release fixes the corresponding
+HTTPS-proxy TLS-policy crossover and chunked-stream CPU/memory denial-of-service
+issues. Because neither source input constrained urllib3, unrelated dependency
+resolution could retain the vulnerable transitive version.
+
+**RED → repair.** The retained regression first failed because the two source
+inputs had no urllib3 row. Both sources now require `urllib3==2.8.0`; both
+generated locks carry the same exact version and PyPI artifact hashes. The
+detailed evidence and APA 7th references are in
+[`docs/doctoring/shared-security-baseline-urllib3-20260930.md`](doctoring/shared-security-baseline-urllib3-20260930.md).
+Both exact-pin audits return no known vulnerabilities; the focused dependency
+contract passes 5 tests and the warnings-as-errors full suite passes 5,236
+tests, 5 optional skips, and 40 subtests. No audit threshold, failure mode, or
+workflow gate changes. Fresh exact-head Python Security and the remaining
+applicable checks are mandatory; the failed predecessor and any skipped or
+pending result are not acceptance evidence.

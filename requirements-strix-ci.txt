@@ -8,3 +8,4 @@ protobuf<8.0.0
 cryptography==50.0.0
 python-multipart==0.0.32
 pyasn1==0.6.4
+urllib3==2.8.0
