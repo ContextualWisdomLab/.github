@@ -63,3 +63,20 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
 
     assert _locked_requirement_versions(requirements, "pyjwt") == ["2.14.0"]
     assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.14.0"]
+
+def test_shared_urllib3_security_pin_is_an_explicit_lock_input() -> None:
+    """Keep both audited dependency closures above the urllib3 CVE fixes."""
+    requirement_paths = (
+        "requirements-pip-audit-ci.txt",
+        "requirements-pip-audit-ci-hashes.txt",
+        "requirements-strix-ci.txt",
+        "requirements-strix-ci-hashes.txt",
+    )
+
+    for requirement_path in requirement_paths:
+        requirements_text = (REPOSITORY_ROOT / requirement_path).read_text(
+            encoding="utf-8"
+        )
+        assert _locked_requirement_versions(requirements_text, "urllib3") == [
+            "2.8.0"
+        ]
