@@ -1,6 +1,7 @@
 # Review transport continuation dispatch token RCA
 
-Status: Proposed until protected integration and hosted exact-head evidence.
+Status: Proposed and blocked on `ContextualWisdomLab/noema#735`; no production
+authority claim is made by this document.
 
 ## Incident
 
@@ -30,21 +31,38 @@ token cannot create `repository_dispatch` in `ContextualWisdomLab/.github`.
 The failure is therefore owned by the central workflow contract, not by either
 consumer PR and not by the provider-capacity classification.
 
-The repository already uses one canonical cross-repository credential path:
-GitHub OIDC is exchanged at `/exchange_github_app_token` for a short-lived,
-repository-scoped OpenCode GitHub App token. The repair reuses that path in
-both continuation jobs. It removes the consumer-token fallback, keeps consumer
-`contents` and `pull-requests` access read-only, and fails closed if OIDC or the
-App token is absent.
+The repository already uses `/exchange_github_app_token` for some
+repository-scoped operations, but that does not prove authority for central
+dispatch. Retained protected evidence for
+`late-life-anxiety-reanalysis@34032cff52e8522db6ea0aad9f68ae0217e86ee3`
+shows the exchange at line 141 of
+`local/supervisor-audit-20260912/current-ci/103571810868.log` followed by the
+central dispatch at line 158 and the same HTTP 403 at line 173 (evidence blob
+`cb91b0c0bfe1ff9001cab9e1675d97b00cfcef32`). Thus merely reusing the endpoint
+would repeat a known-failing authority pattern.
+
+The consumer adapter in this proposal removes the consumer-token fallback,
+keeps consumer `contents` and `pull-requests` access read-only, and fails closed
+when exchange credentials are absent or are not a single JSON object containing
+a nonempty whitespace-free string. It is not mergeable until Noema issue #735
+delivers a versioned least-privilege contract and immutable release that binds
+the OIDC identity, exact source revision, explicit central target, and allowed
+dispatch action. No PAT or inherited-secret workaround is permitted.
 
 ## Test-first evidence
 
-Before the implementation change, the two new contract assertions failed
-because neither continuation job granted `id-token: write`. After the repair:
+Before the implementation change, executable shell regressions proved that a
+numeric OIDC value, object App token, and multiline App token all exited zero;
+the multiline value could append another `$GITHUB_OUTPUT` record. The proposed
+adapter now reuses the strict single-object/string parsing contract already
+exercised by Strix admission. After the parser repair:
 
-- the two RED tests pass;
-- the Strix, Noema, and required-runner workflow contracts report `24 passed`;
+- both malformed-response RED tests pass against the actual workflow shells;
+- the four affected workflow contract files report `120 passed` with warnings
+  fatal;
 - both workflow files parse with `yaml.safe_load`;
+- the combined warning-fatal suite reports
+  `5172 passed, 6 skipped, 40 subtests passed` on Python 3.12.14;
 - `git diff --check` passes.
 
 A broader warning-fatal Strix/Noema suite on protected `main@37b10243` first
@@ -59,8 +77,10 @@ warnings fatal; no warning was filtered or downgraded.
 
 ## Hosted acceptance
 
-Source convergence is not production evidence. Admission requires a consumer
-exact-head capacity failure to show all of the following on one current head:
+Source convergence is not production evidence. First, Noema #735 must publish
+an immutable, versioned capability release and this repository must pin that
+release. Admission then requires a consumer exact-head capacity failure to show
+all of the following on one current head:
 
 1. OIDC exchange succeeds without a repository secret or consumer token
    fallback.

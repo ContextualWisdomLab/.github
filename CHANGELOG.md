@@ -1,17 +1,19 @@
-### Review transport continuation dispatch uses a central repository token
+### Proposed review transport continuation fails closed pending owner capability
 
-- Strix and Noema capacity continuations now exchange their GitHub OIDC
-  identity for the existing repository-scoped OpenCode GitHub App token before
-  posting `repository_dispatch` to `ContextualWisdomLab/.github`. Consumer
-  required workflows no longer fall back to the consumer-scoped
-  `github.token`, which produced HTTP 403 after an otherwise valid bounded
-  backoff. The continuation jobs retain only read access to consumer contents
-  and pull requests; the App token is scoped by the exchange service. The
+- The proposed Strix and Noema capacity-continuation adapter removes the
+  consumer-scoped `github.token` fallback and strictly rejects non-string,
+  whitespace-bearing, multiline, or multi-object OIDC/App-token responses.
+  The continuation jobs retain only read access to consumer contents and pull
+  requests. A retained run proves that a consumer-origin exchanged token still
+  receives HTTP 403 when posting to `ContextualWisdomLab/.github`; therefore
+  this is not a completed transport repair. The versioned least-privilege
+  capability is owned by `ContextualWisdomLab/noema#735`, and this consumer
+  adapter remains Draft until an immutable owner release is pinned. The
   stacked validation also found and repaired Noema's unclosed file-like
-  `HTTPError` response after bounded telemetry extraction. Focused workflow
-  contracts are 24 passed; the warning-fatal Strix/Noema suite is 586 passed,
-  2 skipped, and 21 subtests passed. Hosted exact-head dispatch and resulting
-  fresh model verdict remain required before admission.
+  `HTTPError` response after bounded telemetry extraction. The combined
+  warning-fatal suite is `5172 passed, 6 skipped, 40 subtests passed`. Hosted
+  exact-head dispatch and a fresh model verdict remain required after owner
+  adoption.
 
 ### Intel macOS native archives are bound to x86_64 bytes
 

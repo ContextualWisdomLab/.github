@@ -242,6 +242,51 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
+def test_noema_continuation_rejects_malformed_exchange_credentials(tmp_path: Path) -> None:
+    """The actual exchange shell must not emit typed or multiline credentials."""
+    shell = workflow_step(
+        workflow_text("noema-review.yml"),
+        "Exchange OpenCode app token for central Noema continuation",
+    ).split("        run: |\n", 1)[1]
+    fake_curl = tmp_path / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$APP_RESPONSE"; '
+        'else printf "%s" "$OIDC_RESPONSE"; fi\n',
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    base_env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "synthetic-request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://fixture.invalid/oidc",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://fixture.invalid",
+    }
+    malformed_pairs = (
+        ('{"value":7}', '{"token":"valid-app"}'),
+        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}'),
+        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}'),
+    )
+    for case_number, (oidc_response, app_response) in enumerate(malformed_pairs):
+        output = tmp_path / f"output-{case_number}"
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", shell],
+            env=base_env
+            | {
+                "GITHUB_OUTPUT": str(output),
+                "OIDC_RESPONSE": oidc_response,
+                "APP_RESPONSE": app_response,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert not output.exists()
+
+
 def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_path: Path) -> None:
     """Central continuation preserves target identity and rejects stale or fork heads."""
     script = textwrap.dedent(

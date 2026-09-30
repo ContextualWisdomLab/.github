@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from scripts.ci import strix_runtime_capacity
+from tests.test_required_workflow_queue_contract import workflow_step
 
 
 def test_transport_continuation_uses_oidc_app_token_for_central_dispatch():
@@ -17,6 +18,51 @@ def test_transport_continuation_uses_oidc_app_token_for_central_dispatch():
     assert '/exchange_github_app_token' in continuation
     assert 'GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}' in continuation
     assert 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}' not in continuation
+
+
+def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path: Path):
+    """The actual exchange shell must not emit typed or multiline credentials."""
+    workflow = Path(".github/workflows/strix.yml").read_text()
+    shell = workflow_step(
+        workflow,
+        "Exchange OpenCode app token for central Strix continuation",
+    ).split("        run: |\n", 1)[1]
+    fake_curl = tmp_path / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$APP_RESPONSE"; '
+        'else printf "%s" "$OIDC_RESPONSE"; fi\n'
+    )
+    fake_curl.chmod(0o755)
+    base_env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "synthetic-request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://fixture.invalid/oidc",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://fixture.invalid",
+    }
+    malformed_pairs = (
+        ('{"value":7}', '{"token":"valid-app"}'),
+        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}'),
+        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}'),
+    )
+    for case_number, (oidc_response, app_response) in enumerate(malformed_pairs):
+        output = tmp_path / f"output-{case_number}"
+        result = subprocess.run(
+            ["bash", "-c", shell],
+            env=base_env
+            | {
+                "GITHUB_OUTPUT": str(output),
+                "OIDC_RESPONSE": oidc_response,
+                "APP_RESPONSE": app_response,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert not output.exists()
 
 
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):
