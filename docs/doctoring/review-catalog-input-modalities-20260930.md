@@ -45,8 +45,15 @@ carryover, so this repair does not authorize closing #1529 as superseded.
   evidence rejects blind text but admits mixed-image review; image-only evidence
   admits neither mixed text/image nor blind text. This uses the pinned predicate
   source, not a replacement routing heuristic. No provider request is made.
-- Full repository suite and hosted current-head verification remain separate
-  acceptance steps. No model verdict or independent approval is fabricated.
+- Full-suite retry on code head `92389c1cf` finished with 5,176 passed, five
+  skipped, 40 subtests passed and one failure in 912.52 seconds. The unchanged
+  `test_bare_origin_reproduces_the_route_not_found_outage` observed the expected
+  wrong route, but the installed CLI did not render `not found` before the
+  fixture stopped it. Its two CLI cases passed separately in 47.70 seconds.
+  The first full attempt was interrupted at ten minutes. These are incomplete
+  whole-suite acceptance, not failures invented from a model inference timer.
+- Hosted current-head verification and independent approval remain required;
+  no provider HTTP 400 resolution, model verdict or approval is fabricated.
 
 ## Ownership
 
