@@ -7119,6 +7119,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 scoped_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if [[ " $* " != *" --instruction For this pull request scan, name at least one repository-relative changed file that you actually inspected"* ]]; then
+	echo "Error: PR scan did not request source-specific report evidence" >&2
+	exit 69
+fi
+if [[ " $* " != *"Do not copy finish_scan parameter descriptions into the report"* ]]; then
+	echo "Error: PR scan did not reject finish-tool example prose" >&2
+	exit 70
+fi
 if [ ! -f "$scoped_file" ]; then
 	echo "Error: PR head scoped file missing ($scoped_file)" >&2
 	exit 61
@@ -7160,7 +7168,7 @@ else
 fi
 echo "scan ok with PR head content"
 mkdir -p strix_runs/current
-printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true,"executive_summary":"No issues in the changed file.","methodology":"Reviewed the changed source file.","technical_analysis":"No untrusted input reaches the change.","recommendations":"No remediation required."}}' >strix_runs/current/run.json
 printf 'Assessed %s\n' "$FAKE_STRIX_EXPECTED_CHANGED_FILE" >strix_runs/current/penetration_test_report.md
 EOF
 	chmod +x "$fake_strix"
@@ -7778,7 +7786,7 @@ if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
 fi
 
 mkdir -p strix_runs/current
-printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true,"executive_summary":"No issues in the changed file.","methodology":"Reviewed the changed source file.","technical_analysis":"No untrusted input reaches the change.","recommendations":"No remediation required."}}' >strix_runs/current/run.json
 printf '%s\n' 'Assessed backend/api/auth.py' >strix_runs/current/penetration_test_report.md
 if [ "$matched_backend_context" -eq 1 ]; then
 	exit 0
@@ -8113,7 +8121,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 set -euo pipefail
 echo "scan ok"
 mkdir -p strix_runs/current
-printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true}}' >strix_runs/current/run.json
+printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true,"success":true,"executive_summary":"No issues in the changed file.","methodology":"Reviewed the changed source file.","technical_analysis":"No untrusted input reaches the change.","recommendations":"No remediation required."}}' >strix_runs/current/run.json
 printf '%s\n' 'Assessed 한글 경로/app.py' >strix_runs/current/penetration_test_report.md
 exit 0
 EOF

@@ -2710,6 +2710,10 @@ run_strix_once() {
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
+	local report_scope_instruction=""
+	if is_pull_request_event; then
+		report_scope_instruction="For this pull request scan, name at least one repository-relative changed file that you actually inspected in the final report. State what you checked. Do not copy finish_scan parameter descriptions into the report. If no changed file was inspected, say so and do not claim a completed source review. Report vulnerabilities normally."
+	fi
 	if [ "$RUN_START_EPOCH" -le 0 ]; then
 		RUN_START_EPOCH="$(date +%s)"
 	fi
@@ -2771,6 +2775,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
+	STRIX_CHILD_REPORT_SCOPE_INSTRUCTION="$report_scope_instruction" \
 python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
@@ -2956,6 +2961,10 @@ REPORT_SCOPE_INSTRUCTION = (
     "In the final penetration test report, list every source file you reviewed "
     "by its path relative to the scan target, including files with no findings."
 )
+# PR scans prepend their source-specific evidence request so the scanner
+# receives one combined instruction rather than two competing flags.
+if os.environ.get("STRIX_CHILD_REPORT_SCOPE_INSTRUCTION"):
+    REPORT_SCOPE_INSTRUCTION = os.environ["STRIX_CHILD_REPORT_SCOPE_INSTRUCTION"] + " " + REPORT_SCOPE_INSTRUCTION
 command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]
 
 try:
