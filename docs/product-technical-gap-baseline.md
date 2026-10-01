@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 live-base diff incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-AGENT-QUALITY-LIVE-BASE-01 | **Proposed — shared workflow source repaired; hosted verification pending** | `.github#1678@b9651115…`의 Agent Review Runtime Quality CI run `36804488453`, job `110185716853`은 이벤트에 고정된 과거 base `f2506388…`와 exact head를 비교해, 현재 protected `main@37b10243…`에 이미 존재하는 CSV CRLF·라이선스 fixture 공백 407건을 PR delta로 오인했다. PR head는 현재 main을 선조로 이미 포함하며 live merge-base 기준 `git diff --check`는 통과한다. | Canonical owner는 `.github/workflows/agent-review-runtime-quality-ci.yml`이다. 전체 fetch된 `origin/<base-ref>`와 exact head의 merge-base를 changed-path 선택과 최종 whitespace gate가 함께 사용한다. 계약 RED 2건 뒤 focused 35건과 실제 #1678 그래프가 GREEN이다. 새 owner PR exact-head Checks·독립 리뷰·ordinary protected merge 후 #1678이 owner commit을 일반 병합하고 exact-head run을 다시 통과해야 한다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

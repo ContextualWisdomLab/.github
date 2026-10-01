@@ -1,3 +1,12 @@
+### Agent runtime quality compares the live base graph
+
+- `Agent Review Runtime Quality CI` now derives changed paths and whitespace
+  checks from the merge-base of the fetched live base ref and the exact PR
+  head. Long-lived PR events can no longer make already-protected-main files
+  look like new PR whitespace, while exact-head checkout and fail-closed diff
+  checks remain unchanged. Exact failure evidence is `.github#1678` run
+  `36804488453`, job `110185716853`.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

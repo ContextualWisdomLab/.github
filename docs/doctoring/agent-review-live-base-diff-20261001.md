@@ -1,0 +1,39 @@
+# Agent review live-base diff RCA
+
+Status: Proposed shared-workflow repair; hosted exact-head evidence and
+independent review remain mandatory.
+
+## Failure evidence
+
+Draft `.github#1678` exact head
+`b9651115be28f9dd46f8b93a2a753b2652c57970` failed Agent Review Runtime
+Quality CI run `36804488453`, job `110185716853`, step `Verify consolidated
+workflow contract`. All preceding contract suites succeeded. The terminal
+`git diff --check` used event base `f250638827f8252b0d9e5cb2601f4d333f96162f`
+and reported 407 whitespace violations across four files.
+
+## Root cause and boundary
+
+The PR head already contains protected `main@37b10243cec3d160ecc9c1be75c71428b160a703`
+as an ancestor through ordinary owner integration. The pull-request event still
+carried its older base SHA, so the workflow treated intervening protected-main
+history as the PR delta. The four files are clean relative to the live base;
+rewriting their historical contents in the consumer would hide the workflow
+identity defect and duplicate the `.github` control-plane responsibility.
+
+## Repair and verification
+
+The changed-path selector and terminal whitespace gate now compute the
+merge-base of the fetched `refs/remotes/origin/<base-ref>` and exact head. The
+head checkout assertion remains exact, and a missing merge-base fails closed.
+
+The regression contract was changed first and failed in two cases against the
+event-SHA implementation. After the workflow repair, 35 focused consolidation,
+single-runner, autofix-context, and runtime-budget tests pass. Applying the same
+command to the real #1678 graph resolves the live change base to
+`37b10243cec3d160ecc9c1be75c71428b160a703`; `git diff --check` succeeds.
+
+Completion requires a dedicated owner PR, exact-current-head hosted Checks,
+qualifying independent review, ordinary protected-main integration, ordinary
+merge of the owner into #1678, and a fresh successful #1678 run. Pending,
+queued, skipped, or predecessor results are not passing evidence.
