@@ -51,10 +51,14 @@ def named_packages(report: str) -> set[str]:
 
 
 def _is_requirements(name: str) -> bool:
+    """Return whether a filename is a supported requirements manifest."""
+
     return name.startswith("requirements") and name.endswith((".txt", ".in"))
 
 
 def _manifest_text(repo_root: Path) -> str:
+    """Return lower-cased text from bounded dependency manifests."""
+
     chunks = []
     for path in repo_root.rglob("*"):
         if any(part in SKIP_DIRS for part in path.relative_to(repo_root).parts[:-1]):
@@ -82,6 +86,8 @@ def unverified_dependency_finding(report: str, repo_root: Path) -> bool:
 
 
 def main(argv: list[str]) -> int:
+    """Classify command-line report paths and return a process status."""
+
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2
