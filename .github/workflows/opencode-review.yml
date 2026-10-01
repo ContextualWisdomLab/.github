@@ -501,6 +501,116 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$app_token"
+
+          # GitHub native concurrency replaces an older pending group member
+          # even when cancel-in-progress is false, so the receiver deliberately
+          # has no lossy concurrency group. Avoid duplicate work here instead:
+          # inventory every active admission state twice so a transition cannot
+          # disappear between status queries, and collect older-head central
+          # runs for exact-identity retirement before posting the current head.
+          active_dispatch_title="OpenCode Review Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}"
+          active_dispatch_prefix="OpenCode Review Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@"
+          stale_dispatches_file="$(mktemp)"
+          same_head_found=false
+          trap 'rm -f "$helper" "$stale_dispatches_file"' EXIT
+          for inventory_pass in 1 2; do
+            for active_status in requested waiting pending queued in_progress; do
+              runs_url="repos/ContextualWisdomLab/.github/actions/workflows/opencode-review-dispatch.yml/runs?event=repository_dispatch&status=${active_status}&per_page=100"
+              if ! active_runs="$(GH_TOKEN="$app_token" gh api --paginate "$runs_url")"; then
+                echo "::error::Could not inspect active OpenCode dispatches; refusing a duplicate scheduler wake."
+                exit 1
+              fi
+              if ! same_head_active="$(jq -r -s --arg title "$active_dispatch_title" --arg status "$active_status" '
+                if all(.[]; (.workflow_runs | type) == "array")
+                  and all(
+                    .[] | .workflow_runs[];
+                    (.id | type) == "number"
+                    and .path == ".github/workflows/opencode-review-dispatch.yml"
+                    and .event == "repository_dispatch"
+                    and .status == $status
+                    and (.display_title | type) == "string"
+                  )
+                then
+                  any(
+                    .[] | .workflow_runs[];
+                    (.display_title | ascii_downcase) == ($title | ascii_downcase)
+                  )
+                else
+                  error("invalid workflow-runs response")
+                end
+              ' <<<"$active_runs")"; then
+                echo "::error::Active OpenCode dispatch data was invalid; refusing a duplicate scheduler wake."
+                exit 1
+              fi
+              case "$same_head_active" in
+                true) same_head_found=true ;;
+                false) ;;
+                *)
+                  echo "::error::Active OpenCode dispatch guard returned an invalid state."
+                  exit 1
+                  ;;
+              esac
+              jq -r -s --arg prefix "$active_dispatch_prefix" --arg title "$active_dispatch_title" '
+                .[] | .workflow_runs[]
+                | select((.display_title | ascii_downcase) | startswith($prefix | ascii_downcase))
+                | select((.display_title | ascii_downcase) != ($title | ascii_downcase))
+                | .id
+              ' <<<"$active_runs" >>"$stale_dispatches_file"
+            done
+          done
+
+          live_authority_matches() {
+            local live_pr live_head live_draft live_state
+            live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")" || return 1
+            live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+            live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
+            live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+            [ "$live_state" = "open" ] && [ "$live_draft" = "false" ] &&
+              [ "${live_head,,}" = "${HEAD_SHA,,}" ]
+          }
+          if ! live_authority_matches; then
+            echo "Pull request authority changed before OpenCode dispatch; scheduler wake skipped."
+            exit 0
+          fi
+
+          while IFS= read -r stale_run_id; do
+            [ -n "$stale_run_id" ] || continue
+            if ! live_authority_matches; then
+              echo "Pull request authority changed before stale OpenCode retirement; scheduler wake skipped."
+              exit 0
+            fi
+            if ! GH_TOKEN="$app_token" gh api --method POST \
+              "repos/ContextualWisdomLab/.github/actions/runs/${stale_run_id}/cancel" >/dev/null; then
+              echo "::error::Could not cancel superseded central OpenCode dispatch ${stale_run_id}; refusing to add current-head work behind it."
+              exit 1
+            fi
+            if ! stale_status="$(GH_TOKEN="$app_token" gh api \
+              "repos/ContextualWisdomLab/.github/actions/runs/${stale_run_id}" --jq '.status')"; then
+              echo "::error::Could not verify superseded central OpenCode dispatch ${stale_run_id} cancellation."
+              exit 1
+            fi
+            case "$stale_status" in
+              requested|waiting|pending|queued|in_progress)
+                echo "Superseded central OpenCode dispatch ${stale_run_id} cancellation is still ${stale_status}; current-head admission continues without waiting."
+                ;;
+              completed) ;;
+              *)
+                echo "::error::Superseded central OpenCode dispatch ${stale_run_id} returned invalid status ${stale_status:-<empty>}."
+                exit 1
+                ;;
+            esac
+            echo "Cancellation accepted for superseded central OpenCode dispatch ${stale_run_id} after live exact-head revalidation."
+          done < <(sort -nu "$stale_dispatches_file")
+
+          if [ "$same_head_found" = "true" ]; then
+            echo "An exact-head OpenCode dispatch is already active; scheduler wake skipped after older-head retirement."
+            exit 0
+          fi
+
+          if ! live_authority_matches; then
+            echo "Pull request authority changed before OpenCode dispatch; scheduler wake skipped."
+            exit 0
+          fi
           jq -cn \
             --arg target_repository "$TARGET_REPOSITORY" \
             --arg pr_number "$PR_NUMBER" \

@@ -25,7 +25,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 4),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -356,8 +356,8 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
-def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission() -> None:
-    """A superseded dispatch must be cancelled while queued, not after it takes a runner.
+def test_privileged_review_dispatch_avoids_lossy_native_concurrency() -> None:
+    """The receiver must never let GitHub replace pending exact-head work.
 
     ``opencode-review-dispatch.yml`` carried its concurrency group only on the
     long ``opencode-review-target`` job. A job-level group is not evaluated
@@ -369,25 +369,16 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
     while they queued, every one of them after ``coverage-source-tree`` and
     ``coverage-evidence`` had already run.
 
-    The workflow-level group is keyed by the dispatched pull request, matching
-    ``codeql-scan-dispatch.yml``'s workflow-level group and the job-level group
-    this workflow keeps for the review job itself.
+    GitHub native concurrency retains at most one pending run per group and
+    replaces an older pending member even when ``cancel-in-progress`` is false.
+    The receiver therefore uses no native concurrency group. Trusted producer
+    deduplication and live-head cleanup remain the admission authorities.
     """
     workflow = workflow_text("opencode-review-dispatch.yml")
     header = workflow.split("permissions:", 1)[0]
-    concurrency_contract = header.split("concurrency:", 1)[1]
-    group_value = workflow_level_concurrency_group(workflow)
-
-    assert re.search(r"(?m)^concurrency:", header)
-    assert "opencode-review-dispatch-" in group_value
-    assert (
-        "github.event.client_payload.target_repository || github.repository"
-        in group_value
-    )
-    assert "github.event.client_payload.pr_number || github.run_id" in group_value
-    assert workflow_level_cancels_in_progress(workflow)
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert re.search(r"(?m)^    concurrency:", workflow)
+    assert not re.search(r"(?m)^concurrency:", header)
+    review_job = workflow.split("\n  opencode-review-target:\n", 1)[1]
+    assert not re.search(r"(?m)^    concurrency:", review_job)
 
 
 @pytest.mark.parametrize(

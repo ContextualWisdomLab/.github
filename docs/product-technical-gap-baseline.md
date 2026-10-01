@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 OpenCode same-head dispatch idempotency
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| A repeated required-check wake for unchanged `.github#2545@9a4af5e438283a31dc05814d6bc2818caee782a3` cancelled queued central dispatch `36776536447` when same-head run `36778773766` was created, resetting queue position without new source authority | [Run 36776536447](https://github.com/ContextualWisdomLab/.github/actions/runs/36776536447); [run 36778773766](https://github.com/ContextualWisdomLab/.github/actions/runs/36778773766); protected `main@37b10243cec3d160ecc9c1be75c71428b160a703` | At the central `.github` owner, inventory all five active admission states twice, validate run identity and fail closed on ambiguity, remove lossy native receiver concurrency, retire only canonical older-head central runs after live repository/PR/head validation, and continue current-head admission after an accepted asynchronous cancellation. Because producer inventory and POST are not atomic, authorize actor/sender/target and payload shape before OIDC, then acquire one repository/PR lease through the Contents API's blob-SHA compare-and-swap only after full live state/draft/base/head validation; active same-head losers terminate cheaply, self-reruns and terminal owners recover, and a freshly revalidated live head may replace a fully validated older-head owner. Isolate central `contents: write` in a dedicated lease job and keep later jobs read-only. After formal receipt, use repository-wide run inventory, bind PR number and `pull_requests[].head.sha` rather than the trusted-base run-level SHA, recursively partition the PR-lifetime `created` range below GitHub's 1,000-result ceiling, verify `total_count` completeness, and revalidate before each failed-job rerun so duplicate callbacks are unnecessary. See [RCA and executable acceptance](doctoring/opencode-same-head-dispatch-idempotency.md) | **Proposed / local RED→GREEN complete; exact-head hosted Checks and independent approval required** |
+
 ## 2026-10-01 gap baseline source integrity
 
 | Gap | Exact evidence | Action | Status |

@@ -1225,7 +1225,17 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     assert "opencode-exhausted-retry:" not in workflow
     assert "RETRY_DISPATCH_TOKEN" not in workflow
-    assert "contents: write" not in workflow
+    admission_job = workflow.split("  admit-exact-head-dispatch:\n", 1)[1].split(
+        "\n  validate-pr-metadata:", 1
+    )[0]
+    validation_job = workflow.split("  validate-pr-metadata:\n", 1)[1].split(
+        "\n  coverage-evidence:", 1
+    )[0]
+    review_job = workflow.split("  opencode-review-target:\n", 1)[1]
+    assert admission_job.count("contents: write") == 1
+    assert "opencode-dispatch-leases" in admission_job
+    assert "contents: write" not in validation_job
+    assert "contents: write" not in review_job
 
 
 def test_sandbox_git_config_env_trusts_only_the_validated_worktree(tmp_path):
@@ -1854,19 +1864,13 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    # The review job's own group, addressed by its indentation: the workflow
-    # also carries a workflow-level admission group (pinned in
-    # tests/test_required_workflow_queue_contract.py), so splitting on the
-    # first "concurrency:" would read that one instead of this one.
-    concurrency_contract = workflow.split("\n    concurrency:", 1)[1].split(
-        "\n    runs-on:", 1
-    )[0]
-    assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
-    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "github.event.client_payload.pr_number" not in concurrency_contract
-    assert "github.event.pull_request" not in concurrency_contract
+    # GitHub native concurrency replaces an older pending member even with
+    # cancel-in-progress disabled. Producer inventory and live-head retirement
+    # own admission, so the receiver intentionally has no concurrency group.
+    workflow_header = workflow.split("permissions:", 1)[0]
+    review_job = workflow.split("\n  opencode-review-target:\n", 1)[1]
+    assert not re.search(r"(?m)^concurrency:", workflow_header)
+    assert not re.search(r"(?m)^    concurrency:", review_job)
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"

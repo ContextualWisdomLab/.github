@@ -52,6 +52,26 @@ def admission_script() -> str:
     return textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n  changed-scope:", 1)[0])
 
 
+def central_single_flight_script() -> str:
+    """Extract the receiver's deterministic exact-head winner selection."""
+    workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Admit one exact-head central dispatch\n", 1
+    )[1]
+    block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    return textwrap.dedent(block)
+
+
+def central_authorization_script() -> str:
+    """Extract the unprivileged authorization boundary before token exchange."""
+    workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Authorize repository dispatch envelope\n", 1
+    )[1]
+    block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    return textwrap.dedent(block)
+
+
 def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
     """A delayed old synchronize event is retired by live-head admission."""
     fake_gh = tmp_path / "gh"
@@ -82,16 +102,401 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
     assert "retired a stale event" in result.stdout
 
 
-def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
-    """PR and repository_dispatch review jobs compute the same group text."""
+def test_opencode_dispatch_never_uses_lossy_native_concurrency() -> None:
+    """The receiver must not let GitHub replace a pending exact-head run."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "opencode-review-${{" in required
-    assert "opencode-review-${{" in dispatched
-    assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
-    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
-    assert workflow_level_cancels_in_progress(dispatched)
-    assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
+    header = dispatched.split("permissions:", 1)[0]
+    review_job = dispatched.split("\n  opencode-review-target:\n", 1)[1]
+    required_job = required.split("\n  opencode-review-target:\n", 1)[1]
+    assert not re.search(r"(?m)^concurrency:", header)
+    assert not re.search(r"(?m)^    concurrency:", review_job)
+    required_permissions = required_job.split("    permissions:\n", 1)[1].split(
+        "    steps:", 1
+    )[0]
+    assert "actions: write" not in required_permissions
+    admission_job = dispatched.split("\n  admit-exact-head-dispatch:\n", 1)[1].split(
+        "\n  validate-pr-metadata:\n", 1
+    )[0]
+    validation_job = dispatched.split("\n  validate-pr-metadata:\n", 1)[1].split(
+        "\n  coverage-evidence:\n", 1
+    )[0]
+    assert "contents: write" in admission_job
+    assert "contents: write" not in validation_job
+    assert "contents: read" in validation_job
+    assert "admitted: ${{ steps.single_flight.outputs.admitted }}" in admission_job
+    assert "needs.admit-exact-head-dispatch.outputs.admitted == 'true'" in dispatched
+    assert "pull_request_review:" not in required
+    assert "Wake every failed exact-head Required OpenCode workflow" in dispatched
+
+
+@pytest.mark.parametrize(
+    ("override", "error_text"),
+    (
+        ({"DISPATCH_SENDER": "untrusted"}, "rejected actor="),
+        (
+            {"TARGET_REPOSITORY": "ContextualWisdomLab/unlisted"},
+            "rejected target=",
+        ),
+        ({"SUPPLIED_HEAD_SHA": "mutable"}, "malformed PR identity metadata"),
+    ),
+)
+def test_central_authorization_rejects_before_any_token_or_lease_access(
+    tmp_path: Path, override: dict[str, str], error_text: str
+) -> None:
+    """Untrusted envelopes stop before OIDC exchange or Contents API mutation."""
+    workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    authorize = workflow.index(
+        "      - name: Authorize repository dispatch envelope\n"
+    )
+    exchange = workflow.index(
+        "      - name: Exchange OpenCode app token for target repository metadata reads\n"
+    )
+    lease = workflow.index("      - name: Admit one exact-head central dispatch\n")
+    assert authorize < exchange < lease
+
+    calls = tmp_path / "external-calls"
+    for command in ("curl", "gh"):
+        fake_command = tmp_path / command
+        fake_command.write_text(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$0 $*\" >>\"$EXTERNAL_CALLS\"\nexit 99\n",
+            encoding="utf-8",
+        )
+        fake_command.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "EXTERNAL_CALLS": str(calls),
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "opencode-agent[bot]",
+        "DISPATCH_SENDER": "opencode-agent[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "opencode-agent[bot]",
+        "ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/example",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "PR_NUMBER": "7",
+        "SUPPLIED_BASE_REF": "main",
+        "SUPPLIED_BASE_SHA": "b" * 40,
+        "SUPPLIED_HEAD_REF": "feature",
+        "SUPPLIED_HEAD_SHA": HEAD,
+        **override,
+    }
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_authorization_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert error_text in result.stdout
+    assert not calls.exists()
+
+
+@pytest.mark.parametrize(
+    "live_override",
+    (
+        {"state": "closed"},
+        {"draft": True},
+        {"base": {"ref": "release", "sha": "b" * 40, "repo": {"full_name": "owner/repo"}}},
+        {"base": {"ref": "main", "sha": "d" * 40, "repo": {"full_name": "owner/repo"}}},
+        {"head": {"ref": "other", "sha": HEAD, "repo": {"full_name": "owner/repo"}}},
+        {"head": {"ref": "feature", "sha": "d" * 40, "repo": {"full_name": "owner/repo"}}},
+    ),
+)
+def test_central_admission_rejects_changed_live_identity_before_contents_mutation(
+    tmp_path: Path, live_override: dict[str, object]
+) -> None:
+    """Every live state/base/head mismatch fails before the central lease write."""
+    live_pr: dict[str, object] = {
+        "state": "open",
+        "draft": False,
+        "base": {
+            "ref": "main",
+            "sha": "b" * 40,
+            "repo": {"full_name": "owner/repo"},
+        },
+        "head": {
+            "ref": "feature",
+            "sha": HEAD,
+            "repo": {"full_name": "owner/repo"},
+        },
+    }
+    live_pr.update(live_override)
+    calls = tmp_path / "calls"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  printf '%s' "$LIVE_PR"
+  exit 0
+fi
+exit 97
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALLS": str(calls),
+            "LIVE_PR": json.dumps(live_pr),
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "authority changed before atomic OpenCode admission" in result.stdout
+    assert calls.read_text().splitlines() == ["api repos/owner/repo/pulls/7"]
+
+
+@pytest.mark.parametrize(
+    ("lease_state", "owner_run_id", "owner_head", "owner_status", "expected_admitted"),
+    (
+        ("absent", 41, HEAD, "", True),
+        ("present", 41, HEAD, "in_progress", False),
+        ("present", 41, HEAD, "completed", True),
+        ("present", 42, HEAD, "in_progress", True),
+        ("present", 41, "d" * 40, "in_progress", True),
+        ("present", 43, "d" * 40, "in_progress", True),
+    ),
+)
+def test_central_dispatch_single_flight_uses_atomic_contents_lease(
+    tmp_path: Path,
+    lease_state: str,
+    owner_run_id: int,
+    owner_head: str,
+    owner_status: str,
+    expected_admitted: bool,
+) -> None:
+    """One atomic lease owner reaches expensive work; terminal leases recover."""
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
+  printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
+  if [[ "$FAKE_LEASE_STATE" == "absent" ]]; then exit 1; fi
+  owner_title="OpenCode Review Dispatch owner/repo#7@${FAKE_OWNER_HEAD}"
+  content="$(jq -cn --argjson owner "$FAKE_OWNER_ID" --arg title "$owner_title" --arg head "$FAKE_OWNER_HEAD" \
+    '{owner_run_id:$owner,exact_title:$title,head_sha:$head}')"
+  encoded="$(printf '%s' "$content" | base64 | tr -d '\n')"
+  jq -cn --arg encoded "$encoded" --arg sha "$(printf 'b%.0s' {1..40})" \
+    '{sha:$sha,encoding:"base64",content:$encoded}'
+elif [[ "$*" == *"actions/runs/"* ]]; then
+  owner_title="OpenCode Review Dispatch owner/repo#7@${FAKE_OWNER_HEAD}"
+  jq -cn --argjson owner "$FAKE_OWNER_ID" --arg status "$FAKE_OWNER_STATUS" --arg title "$owner_title" \
+    '{id:$owner,path:".github/workflows/opencode-review-dispatch.yml",event:"repository_dispatch",display_title:$title,status:$status}'
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" == *"--method PUT"* ]]; then
+  jq -cn --arg sha "$(printf 'c%.0s' {1..40})" '{content:{sha:$sha}}'
+else
+  printf 'unexpected gh call: %s\n' "$*" >&2
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    calls = tmp_path / "calls"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "FAKE_CALLS": str(calls),
+            "FAKE_LEASE_STATE": lease_state,
+            "FAKE_OWNER_ID": str(owner_run_id),
+            "FAKE_OWNER_HEAD": owner_head,
+            "FAKE_OWNER_STATUS": owner_status,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "EXACT_TITLE": f"OpenCode Review Dispatch owner/repo#7@{HEAD}",
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    output_lines = output.read_text(encoding="utf-8").splitlines()
+    assert output_lines[0] == f"admitted={str(expected_admitted).lower()}"
+    expected_mutation = expected_admitted and owner_run_id != 42
+    assert any("--method PUT" in call for call in calls.read_text().splitlines()) is expected_mutation
+
+
+def test_atomic_contents_lease_admits_one_concurrent_receiver(tmp_path: Path) -> None:
+    """Two simultaneous cache misses converge on one compare-and-swap owner."""
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
+  printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
+  [[ -f "$LEASE_OWNER" ]] || exit 1
+  owner="$(cat "$LEASE_OWNER")"
+  content="$(jq -cn --argjson owner "$owner" --arg title "$EXACT_TITLE" --arg head "$HEAD_SHA" \
+    '{owner_run_id:$owner,exact_title:$title,head_sha:$head}')"
+  encoded="$(printf '%s' "$content" | base64 | tr -d '\n')"
+  jq -cn --arg encoded "$encoded" --arg sha "$(printf 'd%.0s' {1..40})" \
+    '{sha:$sha,encoding:"base64",content:$encoded}'
+elif [[ "$*" == *"actions/runs/"* ]]; then
+  [[ "$*" =~ actions/runs/([0-9]+) ]] || exit 96
+  owner="${BASH_REMATCH[1]}"
+  jq -cn --argjson owner "$owner" --arg title "$EXACT_TITLE" \
+    '{id:$owner,path:".github/workflows/opencode-review-dispatch.yml",event:"repository_dispatch",display_title:$title,status:"in_progress"}'
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" == *"--method PUT"* ]]; then
+  payload="$(cat)"
+  if mkdir "$LEASE_MUTEX" 2>/dev/null; then
+    printf '%s' "$payload" | jq -r '.content' | base64 --decode | jq -r '.owner_run_id' >"$LEASE_OWNER"
+    jq -cn --arg sha "$(printf 'e%.0s' {1..40})" '{content:{sha:$sha}}'
+  else
+    sleep 0.05
+    exit 1
+  fi
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    base_env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "GITHUB_SHA": "a" * 40,
+        "TARGET_REPOSITORY": "owner/repo",
+        "PR_NUMBER": "7",
+        "HEAD_SHA": HEAD,
+        "SUPPLIED_BASE_REF": "main",
+        "SUPPLIED_BASE_SHA": "b" * 40,
+        "SUPPLIED_HEAD_REF": "feature",
+        "SUPPLIED_HEAD_SHA": HEAD,
+        "EXACT_TITLE": f"OpenCode Review Dispatch owner/repo#7@{HEAD}",
+        "GH_TOKEN": "token",
+        "TARGET_READ_TOKEN": "target-token",
+        "LEASE_MUTEX": str(tmp_path / "lease-mutex"),
+        "LEASE_OWNER": str(tmp_path / "lease-owner"),
+    }
+    processes: list[tuple[subprocess.Popen[str], Path]] = []
+    for run_id in (41, 42):
+        output = tmp_path / f"output-{run_id}"
+        process = subprocess.Popen(  # noqa: S603
+            [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+            env={
+                **base_env,
+                "GITHUB_RUN_ID": str(run_id),
+                "GITHUB_OUTPUT": str(output),
+            },
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        processes.append((process, output))
+    admissions: list[str] = []
+    for process, output in processes:
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, f"{stdout}\n{stderr}"
+        admissions.append(output.read_text(encoding="utf-8").splitlines()[0])
+    assert sorted(admissions) == ["admitted=false", "admitted=true"]
+
+
+def test_atomic_lease_branch_initialization_accepts_a_concurrent_creator(
+    tmp_path: Path,
+) -> None:
+    """A ref-create conflict must re-read the exact central lease branch."""
+    fake_gh = tmp_path / "gh"
+    ref_reads = tmp_path / "ref-reads"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
+  reads=0
+  [[ ! -f "$REF_READS" ]] || reads="$(cat "$REF_READS")"
+  reads=$((reads + 1))
+  printf '%s' "$reads" >"$REF_READS"
+  [[ "$reads" -gt 1 ]] || exit 1
+  printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"git/refs"* && "$*" == *"--method POST"* ]]; then
+  cat >/dev/null
+  exit 1
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
+  exit 1
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" == *"--method PUT"* ]]; then
+  cat >/dev/null
+  jq -cn --arg sha "$(printf 'f%.0s' {1..40})" '{content:{sha:$sha}}'
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "REF_READS": str(ref_reads),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=true"]
+    assert ref_reads.read_text(encoding="utf-8") == "2"
 
 
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
@@ -101,6 +506,22 @@ def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, ob
         "state": state,
         "commit_id": commit_id,
         "body": body,
+    }
+
+
+def active_dispatch(
+    *, status: str, head_sha: str = HEAD, run_id: int = 42
+) -> dict[str, object]:
+    """Build one complete central OpenCode workflow-run identity."""
+    return {
+        "id": run_id,
+        "name": "OpenCode Review Dispatch",
+        "display_title": f"OpenCode Review Dispatch owner/repo#7@{head_sha}",
+        "path": ".github/workflows/opencode-review-dispatch.yml",
+        "event": "repository_dispatch",
+        "status": status,
+        "head_sha": "c" * 40,
+        "pull_requests": [],
     }
 
 
@@ -669,19 +1090,67 @@ def test_fail_closed_step_checks_once_for_a_non_draft_pr(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("reviews", "dispatches"),
     (
-        ([{"id": 7, **review(state="APPROVED", body="## Verdict\nApprove")}], 0),
-        ([{"id": 8, **review(state="CHANGES_REQUESTED", body="## Verdict\nRequest changes")}], 0),
-        ([], 1),
-        ([{"id": 9, **review(state="APPROVED", commit_id="b" * 40, body="## Verdict\nApprove")}], 1),
-        ([{"id": 10, **review(state="APPROVED", body="## Pull request overview\n\ndeterministic fallback approval")}], 1),
+        "reviews",
+        "active_runs",
+        "later_active_runs",
+        "revalidated_head",
+        "lookup_failure",
+        "expected_returncode",
+        "dispatches",
+    ),
+    (
+        ([{"id": 7, **review(state="APPROVED", body="## Verdict\nApprove")}], [], None, HEAD, False, 0, 0),
+        ([{"id": 8, **review(state="CHANGES_REQUESTED", body="## Verdict\nRequest changes")}], [], None, HEAD, False, 0, 0),
+        ([], [], None, HEAD, False, 0, 1),
+        ([], [], None, "e" * 40, False, 0, 0),
+        ([], [active_dispatch(status="queued")], None, HEAD, False, 0, 0),
+        ([], [active_dispatch(status="in_progress")], None, HEAD, False, 0, 0),
+        ([], [active_dispatch(status="requested")], None, HEAD, False, 0, 0),
+        ([], [active_dispatch(status="waiting")], None, HEAD, False, 0, 0),
+        ([], [active_dispatch(status="pending")], None, HEAD, False, 0, 0),
+        (
+            [],
+            [
+                active_dispatch(status="queued"),
+                active_dispatch(status="queued", head_sha="d" * 40, run_id=48),
+            ],
+            None,
+            HEAD,
+            False,
+            0,
+            0,
+        ),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40)], None, HEAD, False, 0, 1),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=45)], None, HEAD, False, 1, 0),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=46)], None, HEAD, False, 1, 0),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=47)], None, HEAD, False, 0, 1),
+        ([], [], [active_dispatch(status="pending")], HEAD, False, 0, 0),
+        (
+            [],
+            [{"id": 44, "path": ".github/workflows/opencode-review-dispatch.yml", "event": "repository_dispatch", "status": "queued"}],
+            None,
+            HEAD,
+            False,
+            1,
+            0,
+        ),
+        ([], [], None, HEAD, True, 1, 0),
+        ([{"id": 9, **review(state="APPROVED", commit_id="b" * 40, body="## Verdict\nApprove")}], [], None, HEAD, False, 0, 1),
+        ([{"id": 10, **review(state="APPROVED", body="## Pull request overview\n\ndeterministic fallback approval")}], [], None, HEAD, False, 0, 1),
     ),
 )
 def test_scheduler_wake_reuses_trusted_receipt_predicate(
-    tmp_path: Path, reviews: list[dict[str, object]], dispatches: int
+    tmp_path: Path,
+    reviews: list[dict[str, object]],
+    active_runs: list[dict[str, object]],
+    later_active_runs: list[dict[str, object]] | None,
+    revalidated_head: str,
+    lookup_failure: bool,
+    expected_returncode: int,
+    dispatches: int,
 ) -> None:
-    """Only missing, stale, or fallback-only evidence wakes the scheduler."""
+    """Only missing, stale, inactive evidence wakes one exact-head execution."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     calls = tmp_path / "dispatches"
@@ -690,11 +1159,52 @@ def test_scheduler_wake_reuses_trusted_receipt_predicate(
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
-  printf '%s' "$LIVE_PR_JSON"
+  count=0
+  [[ ! -f "$LIVE_PR_CALLS" ]] || count="$(cat "$LIVE_PR_CALLS")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$LIVE_PR_CALLS"
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s' "$LIVE_PR_JSON"
+  else
+    printf '%s' "$REVALIDATED_LIVE_PR_JSON"
+  fi
 elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
+elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
+  if [[ "$FAKE_ACTIVE_LOOKUP_FAILURE" == "true" ]]; then
+    exit 19
+  fi
+  count=0
+  [[ ! -f "$ACTIVE_RUN_CALLS" ]] || count="$(cat "$ACTIVE_RUN_CALLS")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$ACTIVE_RUN_CALLS"
+  runs_request="${!#}"
+  active_status="${runs_request#*status=}"
+  active_status="${active_status%%&*}"
+  if [[ "$count" -le 5 ]]; then
+    active_source="$FAKE_ACTIVE_RUNS"
+  else
+    active_source="$FAKE_LATER_ACTIVE_RUNS"
+  fi
+  active_selection="$(jq -c --arg status "$active_status" '[.[] | select(.status == $status)]' <<<"$active_source")"
+  printf '{"workflow_runs":%s}' "$active_selection"
+elif [[ "$*" == *"repos/ContextualWisdomLab/.github/actions/runs/"*"/cancel"* ]]; then
+  [[ "$*" =~ actions/runs/([0-9]+) ]] || exit 90
+  run_id="${BASH_REMATCH[1]}"
+  printf '%s\n' "$run_id" >>"$CANCEL_CALLS"
+  [[ "$run_id" != "45" ]] || exit 19
+elif [[ "$*" == *"repos/ContextualWisdomLab/.github/actions/runs/"* ]]; then
+  [[ "$*" =~ actions/runs/([0-9]+) ]] || exit 91
+  run_id="${BASH_REMATCH[1]}"
+  if [[ "$run_id" == "46" ]]; then
+    printf 'mystery'
+  elif [[ "$run_id" == "47" ]]; then
+    printf 'queued'
+  else
+    printf 'completed'
+  fi
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
   cat >/dev/null
   printf 'dispatch\n' >>"$DISPATCH_CALLS"
@@ -716,6 +1226,13 @@ fi
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "REAL_RECEIPT_HELPER": str(RECEIPT_HELPER.resolve()),
         "FAKE_REVIEWS": json.dumps(reviews),
+        "FAKE_ACTIVE_RUNS": json.dumps(active_runs),
+        "FAKE_LATER_ACTIVE_RUNS": json.dumps(
+            active_runs if later_active_runs is None else later_active_runs
+        ),
+        "FAKE_ACTIVE_LOOKUP_FAILURE": str(lookup_failure).lower(),
+        "ACTIVE_RUN_CALLS": str(tmp_path / "active-run-calls"),
+        "CANCEL_CALLS": str(tmp_path / "cancel-calls"),
         "DISPATCH_CALLS": str(calls),
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
         "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example",
@@ -734,13 +1251,36 @@ fi
         "LIVE_PR_JSON": json.dumps(
             {"draft": False, "head": {"sha": HEAD}, "state": "open"}
         ),
+        "REVALIDATED_LIVE_PR_JSON": json.dumps(
+            {"draft": False, "head": {"sha": revalidated_head}, "state": "open"}
+        ),
+        "LIVE_PR_CALLS": str(tmp_path / "live-pr-calls"),
     }
     result = subprocess.run(
         ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == expected_returncode, result.stderr
     actual = calls.read_text(encoding="utf-8").count("dispatch") if calls.exists() else 0
     assert actual == dispatches
+    cancel_calls = tmp_path / "cancel-calls"
+    actual_cancel_ids = (
+        sorted(set(cancel_calls.read_text(encoding="utf-8").splitlines()))
+        if cancel_calls.exists()
+        else []
+    )
+    expected_cancel_ids = sorted(
+        {
+            str(run["id"])
+            for run in [*active_runs, *(later_active_runs or [])]
+            if isinstance(run.get("display_title"), str)
+            and str(run["display_title"]).startswith(
+                "OpenCode Review Dispatch owner/repo#7@"
+            )
+            and str(run["display_title"]).lower()
+            != f"OpenCode Review Dispatch owner/repo#7@{HEAD}".lower()
+        }
+    )
+    assert actual_cancel_ids == expected_cancel_ids
 
 
 def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> None:
@@ -754,13 +1294,13 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     assert "rerun-failed-jobs" in dispatched
     assert "id: formal_review_receipt" in dispatched
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
-    assert "github.event.client_payload.required_run_id != ''" in dispatched
-    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in dispatched
-    assert "select(.id == $run_id)" in dispatched
-    assert 'select(.event == "pull_request_target")' in dispatched
-    assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
-    assert "select(.head_sha == $head)" in dispatched
-    wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
+    assert "actions/runs?event=pull_request_target" in dispatched
+    assert '.event == "pull_request_target"' in dispatched
+    assert '.path == ".github/workflows/opencode-review.yml"' in dispatched
+    assert "(.head.sha | ascii_downcase) == ($head | ascii_downcase)" in dispatched
+    wake_step = dispatched.split(
+        "Wake every failed exact-head Required OpenCode workflow", 1
+    )[1].split("\n\n      - name:", 1)[0]
     target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
     target_permissions = target_job.split("    env:\n", 1)[0]
     assert "actions: write" in target_permissions
@@ -771,32 +1311,38 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     assert "steps.opencode_app_token.outputs.token" not in wake_step
     assert "WAKE_TOKEN_SOURCE" in wake_step
     assert '"$WAKE_TOKEN_SOURCE" = "unavailable"' in wake_step
-    assert "--paginate" not in wake_step
-    # Identity is the immutable target-repository run id plus event/path/head;
-    # do not depend on context-specific title or workflow_url rendering.
+    assert "--paginate" in wake_step
+    # Inventory identity is event/path/head/PR; do not depend on context-specific
+    # title or workflow_url rendering.
+    assert ".number == $pr" in wake_step
     assert "display_title ==" not in wake_step
     assert ".name | startswith(" not in wake_step
     assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
 
 
-def wake_selector(run: dict[str, object], *, head: str = HEAD, run_id: int = 42) -> str:
-    """Execute the wake step's run-validation jq program in isolation."""
+def wake_selector(run: dict[str, object], *, head: str = HEAD) -> str:
+    """Execute the wake inventory's fail-closed jq program in isolation."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production wake selector")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
-    marker = """jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '"""
+    marker = """jq -c -s --arg head "$PR_HEAD_SHA" --argjson pr "$PR_NUMBER" '"""
     start = dispatched.index(marker) + len(marker)
-    end = dispatched.index("\n            ')", start)
+    end = dispatched.index("\n            ' <<<\"$run_pages\")", start)
     result = subprocess.run(
-        [jq, "-r", "--arg", "head", head, "--argjson", "run_id", str(run_id), dispatched[start:end]],
-        input=json.dumps(run),
+        [jq, "-c", "-s", "--arg", "head", head, "--argjson", "pr", "7", dispatched[start:end]],
+        input=json.dumps({"workflow_runs": [run]}),
         text=True,
         capture_output=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
+    if result.returncode != 0:
+        return ""
+    inventory = json.loads(result.stdout)
+    if not inventory:
+        return ""
+    selected = inventory[0]
+    return f"{selected['id']}\t{selected['status']}\t{selected['conclusion']}"
 
 
 def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github/workflows/opencode-review.yml") -> dict[str, object]:
@@ -810,7 +1356,9 @@ def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github
     """
     return {
         "id": run_id,
-        "head_sha": head_sha,
+        # pull_request_target executes the trusted default-branch workflow, so
+        # run-level head_sha is not the pull request head.
+        "head_sha": "c" * 40,
         "event": "pull_request_target",
         "name": "Required OpenCode Review",
         "display_title": "Fix an unrelated example bug",
@@ -821,11 +1369,12 @@ def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github
         ),
         "status": "completed",
         "conclusion": "failure",
+        "pull_requests": [{"number": 7, "head": {"sha": head_sha}}],
     }
 
 
 def test_wake_selector_matches_the_referenced_run_without_name_or_display_title() -> None:
-    """The exact-id, exact-head run is matched using only id/event/path/head_sha."""
+    """An exact-head run is matched using only id/event/path/head_sha."""
     assert wake_selector(required_run()) == "42\tcompleted\tfailure"
 
 
@@ -847,7 +1396,9 @@ def test_wake_selector_rejects_a_referenced_run_for_a_different_workflow() -> No
 def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
     """Execute the production wake script end-to-end against a fake GitHub API."""
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
-    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    step = dispatched.split(
+        "      - name: Wake every failed exact-head Required OpenCode workflow\n", 1
+    )[1]
     run_block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
     script = textwrap.dedent(run_block)
     calls = tmp_path / "calls"
@@ -856,8 +1407,15 @@ def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path)
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == "api repos/ContextualWisdomLab/example/pulls/7" ]]; then
+	  printf '%s' '{{"state":"open","draft":false,"created_at":"2026-09-30T00:00:00Z","head":{{"sha":"{HEAD}"}}}}'
+  exit 0
+fi
 if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
-if [[ "$*" == *"actions/runs/42"* ]]; then printf '%s\\n' '{json.dumps(required_run())}'; exit 0; fi
+if [[ "$*" == *"actions/runs?event=pull_request_target"* ]]; then
+	  printf '%s\\n' '{{"total_count":1,"workflow_runs":[{json.dumps(required_run())}]}}'
+  exit 0
+fi
 exit 1
 """,
         encoding="utf-8",
@@ -870,9 +1428,9 @@ exit 1
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "FAKE_CALLS": str(calls),
             "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
             "GH_TOKEN": "actions-write-token",
             "PR_HEAD_SHA": HEAD,
-            "REQUIRED_RUN_ID": "42",
             "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         },
         capture_output=True,
@@ -882,14 +1440,16 @@ exit 1
     assert result.returncode == 0, result.stderr
     recorded = calls.read_text(encoding="utf-8")
     assert "actions/runs/42/rerun-failed-jobs" in recorded
-    assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded
-    assert "--paginate" not in recorded
+    assert "actions/runs?event=pull_request_target" in recorded
+    assert "--paginate" in recorded
 
 
 def test_sibling_formal_receipt_fails_closed_without_actions_token() -> None:
     """A sibling wake without either Actions-capable PAT fails before GitHub I/O."""
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
-    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    step = dispatched.split(
+        "      - name: Wake every failed exact-head Required OpenCode workflow\n", 1
+    )[1]
     script = textwrap.dedent(
         step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
     )
@@ -900,7 +1460,6 @@ def test_sibling_formal_receipt_fails_closed_without_actions_token() -> None:
             "GH_TOKEN": "",
             "GH_REPOSITORY": "ContextualWisdomLab/example",
             "PR_HEAD_SHA": HEAD,
-            "REQUIRED_RUN_ID": "42",
             "WAKE_TOKEN_SOURCE": "unavailable",
         },
         capture_output=True,

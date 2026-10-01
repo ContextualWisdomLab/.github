@@ -1,3 +1,27 @@
+### OpenCode preserves exact-head queue position
+
+- Remove the central receiver's lossy native concurrency group after live
+  evidence showed a later same-head wake cancelling the queued authoritative
+  run. The required wake now inventories all five active states twice, retires
+  only identity-validated older-head runs after live authority checks, and
+  continues current-head admission when GitHub has accepted but not completed
+  an asynchronous cancellation. The receiver atomically compare-and-swaps one
+  repository/PR lease file on a dedicated central branch before source
+  materialization, coverage, or model execution, closing the cross-producer
+  check-then-POST race without lossy native concurrency. A dedicated minimal
+  admission job owns the central `contents: write` grant, rejects unauthorized
+  or malformed envelopes before OIDC exchange, and revalidates the complete
+  live state/draft/base/head identity immediately before each compare-and-swap;
+  metadata and source jobs remain read-only. Self-reruns retain their lease and
+  different-head takeovers validate the recorded owner. After formal receipt,
+  the publisher inventories repository-wide runs, binds the intended PR head
+  through `pull_requests[]` rather than the trusted-base run-level SHA,
+  recursively partitions the PR-lifetime `created` range below GitHub's
+  1,000-result filtered-search ceiling, rejects `total_count`/collection
+  mismatches, revalidates live authority before each POST, and reruns every
+  matching failed Required OpenCode job. A losing duplicate therefore needs
+  neither a callback payload nor a polling runner.
+
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT
