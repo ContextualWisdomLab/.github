@@ -1894,6 +1894,259 @@ def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatc
     assert calls == []
 
 
+def test_central_dispatch_cleanup_cancels_stale_and_closed_but_preserves_current(monkeypatch):
+    """Known central dispatches are retired only after fresh run and PR authority."""
+    old_head = "a" * 40
+    live_head = "b" * 40
+    closed_head = "c" * 40
+    runs = [
+        {
+            "id": 101,
+            "status": "queued",
+            "event": "repository_dispatch",
+            "path": ".github/workflows/opencode-review-dispatch.yml",
+            "display_title": f"OpenCode Review Dispatch owner/repo#7@{old_head}",
+        },
+        {
+            "id": 102,
+            "status": "in_progress",
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "display_title": f"CodeQL Scan Dispatch owner/repo#7@{live_head}/base/required/source",
+        },
+        {
+            "id": 103,
+            "status": "queued",
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "display_title": f"CodeQL Scan Dispatch owner/repo#8@{closed_head}/base/required/source",
+        },
+        {
+            "id": 104,
+            "status": "queued",
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "display_title": "CodeQL Scan Dispatch owner/repo#7@not-a-sha/base/required/source",
+        },
+        {
+            "id": 109,
+            "status": "waiting",
+            "event": "repository_dispatch",
+            "path": ".github/workflows/strix.yml",
+            "display_title": f"Strix Security Scan owner/repo#7@{old_head}",
+        },
+    ]
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    inventory_calls = []
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *_args, **_kwargs: inventory_calls.append((_args, _kwargs)) or runs,
+    )
+    monkeypatch.setattr(
+        sched,
+        "_fresh_active_run_for_cancellation",
+        lambda _repo, run_id: next(run for run in runs if str(run["id"]) == run_id),
+    )
+
+    def fresh_pr(_repo, number):
+        if number == 7:
+            return {"state": "open", "draft": True, "head": {"sha": live_head}}
+        return {"state": "closed", "draft": False, "head": {"sha": closed_head}}
+
+    monkeypatch.setattr(sched, "gh_api_json", lambda path: fresh_pr("owner/repo", int(path.rsplit("/", 1)[1])))
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    cancelled = []
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda repo, run_ids: cancelled.append((repo, list(run_ids))) or {},
+    )
+
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=False
+    ) == ["101", "109"]
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=8), dry_run=False
+    ) == ["103"]
+    assert cancelled == [
+        ("ContextualWisdomLab/.github", ["101"]),
+        ("ContextualWisdomLab/.github", ["109"]),
+        ("ContextualWisdomLab/.github", ["103"]),
+    ]
+    assert all(
+        call_args[1] == ("queued", "in_progress", "waiting", "pending", "requested")
+        for call_args, _kwargs in inventory_calls
+    )
+
+
+def test_central_dispatch_cleanup_fails_closed_when_live_pr_is_unreadable(monkeypatch, capsys):
+    """A transient authority read failure never authorizes central-run cancellation."""
+    old_head = "a" * 40
+    run = {
+        "id": 105,
+        "status": "queued",
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "display_title": f"CodeQL Scan Dispatch owner/repo#7@{old_head}/base/required/source",
+    }
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [run])
+    monkeypatch.setattr(sched, "_fresh_active_run_for_cancellation", lambda *_args: run)
+    monkeypatch.setattr(
+        sched, "gh_api_json", lambda _path: (_ for _ in ()).throw(RuntimeError("outage"))
+    )
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    cancelled = []
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda repo, run_ids: cancelled.append((repo, list(run_ids))) or {},
+    )
+
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=False
+    ) == []
+    assert cancelled == []
+    assert "live central-run revalidation failed closed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "run_data",
+    (
+        {
+            "event": "pull_request_target",
+            "path": ".github/workflows/opencode-review-dispatch.yml",
+            "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}",
+        },
+        {
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "display_title": f"CodeQL Scan Dispatch owner/repo#7@{'a' * 40}",
+        },
+        {
+            "event": "repository_dispatch",
+            "path": ".github/workflows/opencode-review-dispatch.yml",
+            "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}/extra",
+        },
+        {
+            "event": "repository_dispatch",
+            "path": ".github/workflows/unrelated.yml",
+            "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}",
+        },
+    ),
+)
+def test_central_dispatch_target_rejects_untrusted_title_shapes(run_data):
+    """Only exact protected repository_dispatch workflow identities are trusted."""
+    assert sched.central_dispatch_run_target(run_data, "owner/repo") is None
+
+
+@pytest.mark.parametrize(
+    ("run", "live_pr"),
+    (
+        (
+            {
+                "event": "repository_dispatch",
+                "status": "queued",
+                "path": ".github/workflows/unrelated.yml",
+                "display_title": "unrelated",
+            },
+            {"state": "open", "head": {"sha": "b" * 40}},
+        ),
+        (
+            {
+                "event": "repository_dispatch",
+                "status": "queued",
+                "path": ".github/workflows/opencode-review-dispatch.yml",
+                "display_title": f"OpenCode Review Dispatch owner/repo#8@{'a' * 40}",
+            },
+            {"state": "open", "head": {"sha": "b" * 40}},
+        ),
+        (
+            {
+                "event": "repository_dispatch",
+                "status": "queued",
+                "path": ".github/workflows/opencode-review-dispatch.yml",
+                "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}",
+            },
+            [],
+        ),
+        (
+            {
+                "event": "repository_dispatch",
+                "status": "queued",
+                "path": ".github/workflows/opencode-review-dispatch.yml",
+                "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}",
+            },
+            {"state": "unknown", "head": {"sha": "b" * 40}},
+        ),
+    ),
+)
+def test_central_dispatch_revalidation_preserves_conflicting_authority(
+    monkeypatch, capsys, run, live_pr
+):
+    """Malformed, retargeted, and nonauthoritative fresh state all fail closed."""
+    monkeypatch.setattr(sched, "_fresh_active_run_for_cancellation", lambda *_args: run)
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: live_pr)
+
+    assert not sched._central_dispatch_run_still_stale(
+        "owner/repo", "ContextualWisdomLab/.github", "106", 7
+    )
+    assert "live central-run revalidation failed closed" in capsys.readouterr().out
+
+
+def test_central_dispatch_cleanup_dry_run_and_empty_or_filtered_inventory(monkeypatch):
+    """Dry-run performs no lookup; empty and other-PR inventories require no actor."""
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *_args, **_kwargs: calls.append("lookup") or [],
+    )
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=True
+    ) == []
+    assert calls == []
+
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=False
+    ) == []
+    assert calls == ["lookup"]
+
+    other_pr_run = {
+        "id": 107,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/opencode-review-dispatch.yml",
+        "display_title": f"OpenCode Review Dispatch owner/repo#8@{'a' * 40}",
+    }
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [other_pr_run])
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=False
+    ) == []
+
+
+def test_central_dispatch_cleanup_preserves_failed_cancellation(monkeypatch):
+    """A proven stale run is not reported retired when GitHub rejects cancellation."""
+    run = {
+        "id": 108,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/opencode-review-dispatch.yml",
+        "display_title": f"OpenCode Review Dispatch owner/repo#7@{'a' * 40}",
+    }
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [run])
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "_central_dispatch_run_still_stale", lambda *_args: True)
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda _repo, run_ids: {str(run_ids[0]): "rejected"},
+    )
+
+    assert sched.cancel_stale_central_dispatch_runs(
+        "owner/repo", pr=make_pr(number=7), dry_run=False
+    ) == []
+
+
 def test_context_review_and_check_helpers(monkeypatch):
     monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
     assert sched.context_nodes({}) == []
@@ -7902,6 +8155,147 @@ def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews(monkeypat
     )
     assert allowed_without_trigger.action == "skip"
     assert allowed_without_trigger.reason == "draft PR"
+
+
+def test_draft_pr_retires_stale_runs_before_skip(monkeypatch):
+    """Draft admission must not bypass stale direct or central run cleanup."""
+    calls = []
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-token")
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_central_dispatch_runs",
+        lambda repo, *, pr, dry_run: calls.append(("central", repo, pr["number"], dry_run))
+        or [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_runs",
+        lambda repo, pr, *, dry_run: calls.append(("direct", repo, pr["number"], dry_run))
+        or [],
+    )
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda *_args, **_kwargs: []
+    )
+
+    decision = inspect(
+        make_pr(isDraft=True, headRefOid="a" * 40),
+        dry_run=False,
+        trigger_reviews=False,
+    )
+
+    assert decision.action == "skip"
+    assert calls == [
+        ("central", "owner/repo", 1, False),
+        ("direct", "owner/repo", 1, False),
+    ]
+
+
+def test_closed_pr_retires_central_runs_then_stops_admission(monkeypatch):
+    """Closed-event inspection cleans central runs without any merge-queue action."""
+    calls = []
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-token")
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_central_dispatch_runs",
+        lambda repo, *, pr, dry_run: calls.append(("central", repo, pr["number"], dry_run))
+        or [],
+    )
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_runs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("closed PR must not enter direct open-PR cleanup")
+        ),
+    )
+
+    decision = inspect(
+        make_pr(
+            state="CLOSED",
+            headRefOid="a" * 40,
+            files={"totalCount": 1, "nodes": [{"path": "README.md"}]},
+        ),
+        dry_run=False,
+    )
+
+    assert decision.action == "skip"
+    assert decision.reason == "closed PR"
+    assert calls == [("central", "owner/repo", 1, False)]
+
+
+def test_closed_pr_without_actions_authority_stops_without_cleanup(monkeypatch):
+    """A local or underprivileged close event fails closed before all queue work."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("SCHEDULER_ACTIONS_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_central_dispatch_runs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cleanup requires explicit Actions authority")
+        ),
+    )
+
+    decision = inspect(make_pr(state="CLOSED"), dry_run=False)
+
+    assert decision.action == "skip"
+    assert decision.reason == "closed PR"
+
+
+def test_workflow_name_rest_fallback_paginates_and_filters(monkeypatch):
+    """REST workflow identity retains only complete suite/name pairs across pages."""
+    first_page = [
+        {"check_suite_id": 1, "name": "OpenCode Review"},
+        {"check_suite_id": None, "name": "ignored"},
+        {"check_suite_id": 2, "name": " "},
+    ] + [{"check_suite_id": index, "name": f"workflow-{index}"} for index in range(3, 100)]
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        return {
+            "workflow_runs": first_page
+            if "&page=1" in path
+            else [{"check_suite_id": 100, "name": "last"}]
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    names = sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+
+    assert names[1] == "OpenCode Review"
+    assert names[100] == "last"
+    assert 2 not in names
+    assert len(calls) == 2
+
+
+def test_workflow_name_rest_fallback_handles_only_inaccessible_actions(monkeypatch):
+    """Actions read denial degrades to unknown identity; other API faults propagate."""
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("Resource not accessible by integration")),
+    )
+    assert sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40) == {}
+
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("network failure")),
+    )
+    with pytest.raises(RuntimeError, match="network failure"):
+        sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+
+
+def test_auto_merge_wait_reason_reports_blocked_review_policy() -> None:
+    """BLOCKED mergeability identifies an unresolved GitHub review policy."""
+    assert "reviewDecision is REVIEW_REQUIRED" in sched.auto_merge_wait_reason(
+        "BLOCKED", {"reviewDecision": "REVIEW_REQUIRED"}
+    )
+    assert "reviewDecision is" not in sched.auto_merge_wait_reason(
+        "BLOCKED", {"reviewDecision": "APPROVED"}
+    )
 
 
 def test_draft_pr_review_request_marker_continues_dispatch_without_the_cli_flag(monkeypatch):

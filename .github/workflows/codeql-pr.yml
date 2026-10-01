@@ -18,16 +18,17 @@ name: CodeQL PR
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Do not restrict the base ref: the org required-workflow ruleset already
     # scopes this to each repository's actual default branch via
     # ref_name: ["~DEFAULT_BRANCH"], whatever it is named. A hardcoded
     # [main, master, develop] list silently produced zero CodeQL checks for
     # any repository with a different default branch name (confirmed live:
     # a repository defaulting to gh-pages received every other required
-    # check but no CodeQL check at all) and would also block coverage for
-    # stacked PRs targeting a non-default feature branch, matching
-    # security-scan.yml's own "do not restrict the base ref" precedent.
+    # check but no CodeQL check at all). This does not widen ruleset 18156473:
+    # its default-ref scope must inject the required workflow first. A
+    # feature-base stacked PR gets this gate only where the workflow is run
+    # natively, or after retargeting to the repository default branch.
 
 concurrency:
   # NOT scoped by head SHA, unlike opencode-review.yml's group -- and that is
@@ -58,8 +59,11 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
-    if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+    # Ruleset consumers do not receive unchanged-head Ready events, so their
+    # Draft heads materialize security evidence. The native owner saves its
+    # runner, while Draft conversion and close events only retire stale work
+    # through the per-PR concurrency group above.
+    if: github.event.action != 'closed' && github.event.action != 'converted_to_draft' && (github.event.pull_request.draft != true || github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
@@ -493,6 +497,54 @@ jobs:
           if [ "$(printf '%s' "$required_jobs" | jq 'length')" != "$(printf '%s' "$pending_matrix" | jq 'length')" ]; then
             echo "::error::CodeQL coordinator could not bind a job id to every pending language."
             exit 1
+          fi
+
+          # A later attempt of the same required run must preserve exact work
+          # already admitted by the protected central handler. Without this
+          # check, a missing terminal verdict makes every attempt redispatch;
+          # handler concurrency then replaces the durable queued run and sends
+          # the same work to the back of the scarce CodeQL queue.
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${live_head}/${live_base}/${REQUIRED_RUN_ID}/${live_merge}"
+          required_created_at="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}" --jq .created_at)"
+          if ! [[ "$required_created_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::error::Could not validate required run creation time before CodeQL admission lookup."
+            exit 1
+          fi
+          dispatch_runs="$(
+            gh api --method GET --paginate \
+              -f per_page=100 \
+              -f event=repository_dispatch \
+              -f created=">=${required_created_at}" \
+              "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs" |
+              jq -s .
+          )"
+          active_dispatch_id="$(printf '%s' "$dispatch_runs" | jq -r \
+            --arg title "$expected_title" \
+            --arg path ".github/workflows/codeql-scan-dispatch.yml" '
+              [
+                .[] | .workflow_runs[]?
+                | select(.path == $path)
+                | select(.event == "repository_dispatch")
+                | select(.display_title == $title or .name == $title)
+                | select(.status == "queued" or .status == "in_progress"
+                    or .status == "waiting" or .status == "pending"
+                    or .status == "requested")
+                | select(
+                    (.actor.login // "" | ascii_downcase) as $actor
+                    | $actor == "opencode-agent" or $actor == "opencode-agent[bot]"
+                  )
+                | select(
+                    (.triggering_actor.login // "" | ascii_downcase) as $trigger
+                    | $trigger == "opencode-agent" or $trigger == "opencode-agent[bot]"
+                  )
+              ]
+              | first
+              | .id // empty
+            '
+          )"
+          if [[ "$active_dispatch_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "CodeQL admission deferred; preserving exact active dispatch ${active_dispatch_id}."
+            exit 0
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then

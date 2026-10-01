@@ -75,6 +75,21 @@ fixed. `tests/test_code_scanning_required_workflow_contract.py::test_ruleset_aud
 is the permanent regression guard for this. Left as an "Update" rather than rewriting the sections above,
 so the historical record of what this PR's own RED/GREEN commits contained at each point stays intact.
 
+## Update — 2026-09-05: lightweight dispatch producer re-admitted
+
+The 2026-09-03 exclusion applied to the former workflow that embedded
+`github/codeql-action`. ADR-0025 subsequently split that incompatible design:
+the ruleset-facing `codeql-pr.yml` became a lightweight producer/verdict
+consumer, while `codeql-scan-dispatch.yml` became the protected native handler
+that alone runs `github/codeql-action`. The canonical audit tuple and protected
+branch required contexts therefore include `codeql-pr.yml` again without
+reintroducing the platform restriction. The native handler remains excluded
+from the required-workflow ruleset. This amendment supersedes only the earlier
+"must stay excluded" sentence; the historical incident and prohibition on
+embedding CodeQL actions in a required workflow remain valid. Live organization
+ruleset authority still must be re-read before acceptance; open PR source is
+not production authority.
+
 ## References
 
 GitHub. (n.d.). *REST API endpoints for rules*. GitHub Docs. https://docs.github.com/rest/repos/rules

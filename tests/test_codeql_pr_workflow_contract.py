@@ -253,6 +253,29 @@ def _completed_dispatch_run(
     }
 
 
+def _active_dispatch_run(
+    *,
+    title: str,
+    status: str = "queued",
+    actor: str = "opencode-agent[bot]",
+    triggering_actor: str | None = None,
+    event: str = "repository_dispatch",
+    path: str = ".github/workflows/codeql-scan-dispatch.yml",
+    run_id: int = 36804251663,
+) -> dict:
+    """Return one trusted active central CodeQL dispatch workflow-run fixture."""
+    return {
+        "id": run_id,
+        "event": event,
+        "path": path,
+        "status": status,
+        "display_title": title,
+        "name": title,
+        "actor": {"login": actor},
+        "triggering_actor": {"login": triggering_actor or actor},
+    }
+
+
 def _run_verdict_read(
     tmp_path: Path,
     statuses: list[dict],
@@ -833,6 +856,7 @@ def _write_coordinator_fakes(
     pull: dict,
     jobs: dict,
     statuses: list[dict],
+    dispatch_runs: dict,
 ) -> tuple[Path, Path, Path]:
     """Install fake gh/curl binaries and return (bin, post_log, post_body)."""
     fake_bin = tmp_path / "bin"
@@ -868,9 +892,11 @@ def _write_coordinator_fakes(
         "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
         "  */statuses) body=$FAKE_STATUSES_JSON ;;\n"
         "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
+        "  */actions/runs/*) body='{\"created_at\":\"2026-10-01T02:05:00Z\"}' ;;\n"
+        "  */codeql-scan-dispatch.yml/runs) body=$FAKE_DISPATCH_RUNS_JSON ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
-        'if [ -n "${jq_filter}" ]; then printf \'%s\\n\' "$body" | jq -c "$jq_filter"; else printf \'%s\\n\' "$body"; fi\n',
+        'if [ -n "${jq_filter}" ]; then printf \'%s\\n\' "$body" | jq -r "$jq_filter"; else printf \'%s\\n\' "$body"; fi\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -899,6 +925,7 @@ def _run_coordinator(
     pull: dict | None = None,
     jobs: dict | None = None,
     statuses: list[dict] | None = None,
+    dispatch_runs: dict | None = None,
     env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the coordinator dispatch block against fixture-backed APIs."""
@@ -932,7 +959,11 @@ def _run_coordinator(
     }
     statuses = statuses if statuses is not None else []
     fake_bin, post_log, post_body = _write_coordinator_fakes(
-        tmp_path, pull=pull, jobs=jobs, statuses=statuses
+        tmp_path,
+        pull=pull,
+        jobs=jobs,
+        statuses=statuses,
+        dispatch_runs=dispatch_runs or {"workflow_runs": []},
     )
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), COORDINATOR_STEP_NAME
@@ -943,6 +974,9 @@ def _run_coordinator(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_JOBS_JSON": json.dumps(jobs),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps(
+            dispatch_runs or {"workflow_runs": []}
+        ),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_BODY": str(post_body),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -1020,6 +1054,77 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
     assert not post_log.exists()
     assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
     assert "already have authenticated terminal verdicts" in result.stdout
+
+
+def test_codeql_coordinator_preserves_exact_active_dispatch_without_oidc(
+    tmp_path: Path,
+) -> None:
+    """A later attempt must not replace exact work already admitted centrally."""
+    title = _dispatch_scan_title(required_run_id="99")
+    for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+        case_dir = tmp_path / status
+        result, post_log, post_body = _run_coordinator(
+            case_dir,
+            dispatch_runs={
+                "workflow_runs": [_active_dispatch_run(title=title, status=status)]
+            },
+            env_overrides={
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "",
+                "ACTIONS_ID_TOKEN_REQUEST_URL": "",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert not post_log.exists()
+        assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
+        assert not (case_dir / "curl.log").exists()
+        assert "preserving exact active dispatch" in result.stdout
+
+
+def test_codeql_coordinator_does_not_trust_inexact_or_untrusted_active_runs(
+    tmp_path: Path,
+) -> None:
+    """Only the exact trusted active handler may suppress recovery dispatch."""
+    exact_title = _dispatch_scan_title(required_run_id="99")
+    cases = {
+        "wrong-title": _active_dispatch_run(
+            title=_dispatch_scan_title(required_run_id="100")
+        ),
+        "wrong-actor": _active_dispatch_run(
+            title=exact_title,
+            actor="untrusted-bot[bot]",
+        ),
+        "wrong-triggering-actor": _active_dispatch_run(
+            title=exact_title,
+            triggering_actor="untrusted-bot[bot]",
+        ),
+        "wrong-event": _active_dispatch_run(
+            title=exact_title,
+            event="workflow_dispatch",
+        ),
+        "wrong-path": _active_dispatch_run(
+            title=exact_title,
+            path=".github/workflows/untrusted-dispatch.yml",
+        ),
+        "terminal": _active_dispatch_run(
+            title=exact_title,
+            status="completed",
+        ),
+    }
+
+    for case_name, dispatch_run in cases.items():
+        result, post_log, post_body = _run_coordinator(
+            tmp_path / case_name,
+            dispatch_runs={"workflow_runs": [dispatch_run]},
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert post_log.read_text(encoding="utf-8").splitlines() == [
+            "repos/ContextualWisdomLab/.github/dispatches"
+        ]
+        assert json.loads(post_body.read_text(encoding="utf-8"))["event_type"] == (
+            "codeql-scan-v2"
+        )
 
 
 def test_codeql_coordinator_fails_closed_when_a_shard_job_id_is_missing(

@@ -1,11 +1,14 @@
-"""Control-pool review workflows must not occupy a runner for draft pull requests.
+"""Control workflows admit Draft events only for required security evidence.
 
 On 2026-09-29, 325 of 836 queued control-pool runs were for draft PRs; each
-only concluded "draft, no verdict required". Entry jobs now skip drafts at
-the job level, so no runner is assigned. This is safe only because every
-workflow re-runs on `ready_for_review` (same head), where the real gate runs,
-and because merge readiness comes from an opencode-agent review, not from
-these check results.
+only concluded "draft, no verdict required". Review workflows skip ordinary
+Draft events at the job level. The scheduler admits only Draft-transition and
+close events to retire stale central dispatches. CodeQL is different:
+organization ruleset consumers do not
+receive an unchanged-head `ready_for_review` launch, so consumer Draft heads
+must materialize security evidence while the native owner still saves its
+runner. Draft conversion and close events only enter concurrency to retire
+stale work.
 """
 
 from __future__ import annotations
@@ -21,13 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = [
     "opencode-review.yml",
     "strix.yml",
-    "codeql-pr.yml",
     "pr-review-merge-scheduler.yml",
 ]
-DRAFT_GUARD = (
-    "(github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' "
-    "|| github.event.action == 'closed')"
-)
+DRAFT_GUARD = "github.event.pull_request.draft != true"
 
 
 def _load(name: str) -> dict:
@@ -75,6 +74,86 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
         if _is_cancellation_job(job_name, job):
             continue
         assert DRAFT_GUARD in str(job.get("if", "")), f"{name}:{job_name} lacks the draft guard"
+
+
+def test_codeql_materializes_only_consumer_draft_heads() -> None:
+    """Consumer Drafts scan; owner Drafts and retirement events take no runner."""
+    doc = _load("codeql-pr.yml")
+    assert "converted_to_draft" in _pr_types(doc)
+    assert str(doc["jobs"]["detect-languages"].get("if", "")) == (
+        "github.event.action != 'closed' && "
+        "github.event.action != 'converted_to_draft' && "
+        "(github.event.pull_request.draft != true || "
+        "github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')"
+    )
+
+
+QUEUE_RETIREMENT_WORKFLOWS = [
+    "codeql-pr.yml",
+    "pr-review-merge-scheduler.yml",
+    "sast-semgrep.yml",
+    "security-scan.yml",
+    "python-security.yml",
+]
+
+
+@pytest.mark.parametrize("name", QUEUE_RETIREMENT_WORKFLOWS)
+def test_converted_to_draft_retires_queued_run_at_admission(name: str) -> None:
+    """Draft transitions retire work; only the scheduler takes a cleanup runner."""
+    doc = _load(name)
+    assert "converted_to_draft" in _pr_types(doc)
+    for job_name, job in _entry_jobs(doc).items():
+        if _is_cancellation_job(job_name, job):
+            continue
+        condition = str(job.get("if", ""))
+        if name == "pr-review-merge-scheduler.yml":
+            assert "github.event.action == 'converted_to_draft'" in condition
+            assert "github.event.action == 'closed'" in condition
+        elif name != "codeql-pr.yml":
+            assert "github.event.pull_request.draft != true" in condition
+        else:
+            assert "github.event.action != 'converted_to_draft'" in condition
+        if name != "pr-review-merge-scheduler.yml":
+            assert "github.event.action == 'converted_to_draft'" not in condition
+
+
+def test_scheduler_retirement_events_are_cleanup_only() -> None:
+    """Draft/close admission reaches scheduler cleanup, not review or merge work."""
+    scheduler = (REPO_ROOT / "scripts/ci/pr_review_merge_scheduler_core.py").read_text(
+        encoding="utf-8"
+    )
+    closed_start = scheduler.index('if pr_state != "OPEN":')
+    draft_start = scheduler.index(
+        'if pr.get("isDraft") and github_actions_control_available():'
+    )
+    assert scheduler.index("cancel_stale_central_dispatch_runs", closed_start) < scheduler.index(
+        'return Decision(number, "skip", f"{pr_state.lower()} PR")', closed_start
+    )
+    assert scheduler.index("cancel_stale_central_dispatch_runs", draft_start) < scheduler.index(
+        'if pr.get("isDraft"):', draft_start
+    )
+
+
+def test_scheduler_central_cleanup_requires_explicit_actions_authority() -> None:
+    """A consumer token must not masquerade as central Actions authority."""
+    workflow = (REPO_ROOT / ".github/workflows/pr-review-merge-scheduler.yml").read_text(
+        encoding="utf-8"
+    )
+    scheduler = (REPO_ROOT / "scripts/ci/pr_review_merge_scheduler_core.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "SCHEDULER_ACTIONS_TOKEN: ${{ github.repository == "
+        "'ContextualWisdomLab/.github' && github.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}"
+        in workflow
+    )
+    availability = scheduler.split("def github_actions_control_available", 1)[1].split(
+        "\n\ndef ", 1
+    )[0]
+    assert 'os.environ.get("SCHEDULER_ACTIONS_TOKEN")' in availability
+    assert 'os.environ.get("GH_TOKEN")' not in availability
 
 
 def test_opencode_verdict_gate_still_runs_on_ready_for_review() -> None:

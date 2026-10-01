@@ -330,13 +330,22 @@ The protected bootstrap accepts exactly two event types:
   base/head parent binding, base-bound status context, and exact handler
   gate/SARIF/artifact evidence.
 
-Both modes share one repository-and-PR concurrency group and one post-matrix
-`settle-required-run` job. The matrix scan has `actions:read`; only settlement
-has `actions:write`. Settlement revalidates the open PR, repository, base ref
+Both modes share one post-matrix `settle-required-run` job. The handler does
+not use workflow-level payload concurrency: GitHub evaluates it before actor
+and live-PR validation, so a delayed stale payload could evict valid current
+work and then reject itself. Instead, the required-workflow coordinator
+preserves a trusted exact active handler identified by protected path/event,
+full repo/PR/head/base/required-run/source title, trusted app actor, and active
+run state. Stale Draft/closed work is retired by the scheduler only after a
+fresh run-and-PR revalidation. The matrix scan has `actions:read`; only
+settlement has `actions:write`. Validation and settlement use the central
+control pool; only the matrix scan uses the dedicated CodeQL pool. Settlement
+revalidates the open PR, repository, base ref
 and SHA, head ref and SHA, required run, complete required-job map, terminal
 handler jobs, gate steps, and non-expired SARIF artifacts before issuing one
-run-wide rerun request. The common concurrency identity prevents v1 and v2
-from becoming simultaneous writers during cutover.
+run-wide rerun request. Exact active-run identity prevents v1 and v2 from
+manufacturing duplicate writers during cutover without trusting unvalidated
+arrival order.
 
 Live evidence for the amendment is recorded in
 `docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md`. In short,
@@ -345,6 +354,15 @@ legacy wakes raced: Actions started the required run and Python received HTTP
 403. Later same-tuple handler runs were repeatedly cancelled by concurrency,
 including `34684575249`, leaving a clean scan without a converged terminal
 receipt. This is a settlement-timing defect, not a CodeQL finding.
+
+Live evidence on 2026-10-01 added a second amendment. `.github#2531` required
+run `36804208074` created handler run `36804251663`; a later attempt with no
+terminal receipt posted the identical title as `36815888197`, and the shared
+repository/PR concurrency cancelled the durable queued run two seconds later.
+The coordinator's exact-active lookup and removal of pre-validation handler
+cancellation repair that churn while retaining the existing terminal-proof,
+GHAS, SARIF, and bounded settlement requirements. This amendment remains
+Proposed until protected rollout and an unchanged-head consumer canary pass.
 
 Landing sequence is normative:
 

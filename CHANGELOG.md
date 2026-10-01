@@ -19,6 +19,21 @@
   mutation from the final-tree allowlist and smuggle both commits into the next
   publication's ancestry.
 
+### Central coverage owner preserves concurrent repairs and restores the 100% gate
+
+- The `.github#2521` coverage owner now carries the complete valid deltas from
+  `.github#2530` (hash-pinned full-suite parser dependencies) and `.github#2532`
+  (explicit GitHub `HTTPError` response closure) through ordinary two-parent
+  merges. Behavior-level contracts replace dummy/live-CLI coverage for the
+  OpenCode queue and Strix manifest scanners, close release dependency trust
+  boundaries, and prove the runtime-archive prescreener's reachable state space;
+  one redundant unreachable postcondition was removed without weakening any
+  earlier fail-closed validation. Python 3.10 TOML fallback selection is now a
+  directly testable compatibility boundary. On the integrated tree,
+  warnings-as-errors produced 5,228 passed, 5 skipped, and 40 subtests passed;
+  all 18,232 owned production statements and 7,488 branches are covered.
+  Hosted exact-head Checks and qualifying independent review remain required.
+
 ### Agent runtime quality compares the live base graph
 
 - `Agent Review Runtime Quality CI` now derives changed paths and whitespace
@@ -423,6 +438,24 @@
 - Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
 
 # Changelog
+
+### CodeQL preserves exact active dispatches and isolates scarce scan capacity
+
+- The required-workflow coordinator now recognizes a trusted, exact active
+  central handler run before OIDC exchange and does not enqueue an identical
+  replacement on later attempts. The match binds protected path/event,
+  repo/PR/head/base/required-run/source title, trusted actor, and every active
+  GitHub run state; inexact, untrusted, and terminal runs cannot suppress
+  recovery. The protected handler no longer uses repository/PR concurrency
+  before validating payload authority. Its validation and settlement jobs use
+  the central control pool, while only the CodeQL matrix scan consumes the
+  scarce CodeQL pool. This fixes the reproduced `.github#2531` chain in which
+  run `36815888197` replaced queued run `36804251663` for identical work.
+  The owner-union repair tree passes 249 focused contracts and the complete
+  warnings-fatal suite: 5,437 passed, 5 optional skips, and 40 subtests, with
+  all 18,882 production statements and 7,712 branches covered and production
+  Docstring coverage at 100%. Fresh hosted exact-head evidence and independent
+  approval remain required.
 
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 

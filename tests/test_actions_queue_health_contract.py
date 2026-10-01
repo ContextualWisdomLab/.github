@@ -24,9 +24,19 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     collect_permissions = workflow.split("  collect:\n", 1)[1].split(
         "    permissions:\n", 1
     )[1].split("    steps:\n", 1)[0]
-    assert collect_permissions == "      contents: read\n      actions: read\n"
+    assert collect_permissions == (
+        "      contents: read\n"
+        "      actions: read\n"
+        "      id-token: write\n"
+    )
+    assert "Exchange OpenCode app token for cross-repo reads" in workflow
+    assert "id: queue_read_app_token" in workflow
+    assert "OIDC_AUDIENCE: opencode-github-action" in workflow
+    assert "audience=${OIDC_AUDIENCE}" in workflow
+    assert "/exchange_github_app_token" in workflow
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}"
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
+        "|| steps.queue_read_app_token.outputs.token }}"
         in workflow
     )
     assert "GH_TOKEN: ${{ github.token }}" not in workflow

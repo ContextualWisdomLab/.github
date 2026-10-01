@@ -33,11 +33,17 @@ Empty non-draft pull requests are closed by the existing metadata-only
 former standalone required workflow was removed so the same PR no longer
 consumes a second runner for the same metadata decision.
 
-The central `security-scan.yml` and `sast-semgrep.yml` pull-request triggers are
-base-ref agnostic. They therefore also run for stacked pull requests targeting a
-feature branch; the organization ruleset's protected-ref scope remains an
-independent administrative control and is not weakened by this trigger
-coverage.
+The central `security-scan.yml`, `sast-semgrep.yml`, and `codeql-pr.yml`
+pull-request triggers are base-ref agnostic so they do not hard-code a default
+branch name. That trigger shape does not widen ruleset `18156473`: its
+`ref_name.include=["~DEFAULT_BRANCH"]` scope injects these required workflows
+only when the pull request targets the repository default branch. Stacked pull
+requests targeting a feature branch therefore do not materialize these required
+workflows through this ruleset. They receive fresh evidence after the
+prerequisite merges and the dependent pull request is retargeted or synchronized
+onto the default branch. A repository that runs one of these files natively may
+have broader trigger coverage, but that is separate from organization-ruleset
+injection.
 
 Stacked pull requests are audited by organization ruleset
 `CWL Stacked OpenCode required workflow` (`21732164`) in `evaluate` mode. It
@@ -50,6 +56,8 @@ the ref update before a `pull_request_target.synchronize` run can exist for the
 new commit, so it rejects both initial branch creation and later review fixes.
 Exact-head OpenCode evidence remains a merge requirement enforced by the
 normal PR procedure while a target-ref-scoped enforcement design is developed.
+Evaluate-mode observations are audit evidence, not passing required-check or
+merge-authorization evidence.
 
 ## OpenCode required workflow posture
 
@@ -171,14 +179,17 @@ see the historical marker above.
 
 ### Audit tool coverage
 
-`scripts/ci/audit_central_required_workflows.py` defines all nine canonical
-required workflow paths (`codeql-pr.yml` deliberately excluded, per the
-2026-09-03 correction above) and treats the live policy as an exact
-inventory: every required path must appear exactly once with repository id
-`1274066402` and `refs/heads/main`, while any additional well-formed workflow
-path — including a re-added `codeql-pr.yml` — is reported as
-`unexpected workflow present in required set` drift instead of silently
-passing. A malformed workflow entry (not an object, or missing a string
+`scripts/ci/audit_central_required_workflows.py` defines all ten canonical
+required workflow paths and treats the live policy as an exact inventory:
+every required path must appear exactly once with repository id `1274066402`
+and `refs/heads/main`, while any additional well-formed workflow path is
+reported as `unexpected workflow present in required set` drift instead of
+silently passing. The 2026-09-03 nine-path exclusion was historical: it removed
+the incompatible `codeql-pr.yml` that embedded CodeQL actions. ADR-0025 later
+re-admitted the path only after it became a lightweight dispatch producer and
+verdict consumer; native `codeql-scan-dispatch.yml` remains outside the
+required-workflow ruleset and owns the CodeQL actions. A malformed workflow
+entry (not an object, or missing a string
 `path`) is now reported by its index (`central required workflow entry N is
 malformed`) instead of being silently skipped, so a structurally broken
 ruleset payload surfaces as loud audit failures rather than a quietly

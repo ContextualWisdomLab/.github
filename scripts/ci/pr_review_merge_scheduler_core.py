@@ -213,6 +213,7 @@ def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
 PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
+  state
   title
   author { login }
   isDraft
@@ -388,8 +389,16 @@ OPENCODE_WORKFLOW_NAMES = {
     "OpenCode Review Dispatch",
 }
 OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
+CENTRAL_DISPATCH_WORKFLOW_PATHS = {
+    "CodeQL Scan Dispatch": ".github/workflows/codeql-scan-dispatch.yml",
+    "OpenCode Review": ".github/workflows/opencode-review-dispatch.yml",
+    "OpenCode Review Dispatch": ".github/workflows/opencode-review-dispatch.yml",
+    "Required OpenCode Review": ".github/workflows/opencode-review-dispatch.yml",
+    "Strix Security Scan": ".github/workflows/strix.yml",
+}
 REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW = "__unknown_github_actions_workflow__"
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+ACTIVE_WORKFLOW_RUN_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
@@ -3178,6 +3187,13 @@ def require_github_actions_control_actor(action: str) -> None:
         )
 
 
+def github_actions_control_available() -> bool:
+    """Return whether this process has the bounded Actions-control authority."""
+    return os.environ.get("GITHUB_ACTIONS") == "true" and bool(
+        os.environ.get("SCHEDULER_ACTIONS_TOKEN")
+    )
+
+
 def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> None:
     """Ask GitHub Actions to rerun an existing required-workflow job."""
     if dry_run:
@@ -3641,10 +3657,10 @@ def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
 def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
     """Return fresh active workflow-run evidence immediately before cancellation."""
     payload = gh_api_json(f"repos/{run_repo}/actions/runs/{run_id}")
-    if not isinstance(payload, dict) or str(payload.get("status") or "").lower() not in {
-        "queued",
-        "in_progress",
-    }:
+    if (
+        not isinstance(payload, dict)
+        or str(payload.get("status") or "").lower() not in ACTIVE_WORKFLOW_RUN_STATUSES
+    ):
         raise ValueError(f"workflow run {run_repo}#{run_id} is not active")
     return payload
 
@@ -3765,6 +3781,122 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(cancel_one, stale_refs))
     return [run_id for run_id in results if run_id is not None]
+
+
+def central_dispatch_run_target(
+    run_data: dict[str, Any], target_repo: str
+) -> tuple[int, str] | None:
+    """Return the trusted target PR and head encoded by a central dispatch run.
+
+    GitHub executes ``repository_dispatch`` on the receiver's default branch,
+    so ``head_sha`` identifies that branch rather than the target pull request.
+    The protected central workflows instead place the validated target identity
+    in ``run-name``.  Only exact workflow paths and their declared title shapes
+    are accepted here; malformed or unrelated runs remain untouched.
+    """
+    if run_data.get("event") != "repository_dispatch":
+        return None
+    run_path = str(run_data.get("path") or "")
+    display_title = str(run_data.get("display_title") or "")
+    for title, expected_path in CENTRAL_DISPATCH_WORKFLOW_PATHS.items():
+        if run_path != expected_path:
+            continue
+        prefix = f"{title} {target_repo}#"
+        if not display_title.startswith(prefix):
+            continue
+        identity = display_title.removeprefix(prefix)
+        match = re.fullmatch(r"([1-9][0-9]*)@([0-9a-fA-F]{40})(/[^\s]+)?", identity)
+        if match is None:
+            return None
+        suffix = match.group(3)
+        if title == "CodeQL Scan Dispatch":
+            if suffix is None:
+                return None
+        elif suffix is not None:
+            return None
+        return int(match.group(1)), validate_git_sha(match.group(2)).lower()
+    return None
+
+
+def _central_dispatch_run_still_stale(
+    target_repo: str,
+    run_repo: str,
+    run_id: str,
+    expected_number: int,
+) -> bool:
+    """Return whether a central run is stale or targets a now-closed PR.
+
+    Both the run and pull request are re-fetched immediately before the
+    destructive boundary.  Any missing or contradictory authority fails
+    closed and preserves the run.
+    """
+    try:
+        run_data = _fresh_active_run_for_cancellation(run_repo, run_id)
+        identity = central_dispatch_run_target(run_data, target_repo)
+        if identity is None or identity[0] != expected_number:
+            raise ValueError("central dispatch run no longer has the expected trusted identity")
+        number, dispatched_head = identity
+        live_pr = gh_api_json(f"repos/{target_repo}/pulls/{number}")
+        if not isinstance(live_pr, dict):
+            raise TypeError("pull request authority is not an object")
+        state = str(live_pr.get("state") or "").lower()
+        if state == "closed":
+            return True
+        if state != "open":
+            raise ValueError(f"pull request state {state!r} is not authoritative")
+        live_head = validate_git_sha(
+            str(((live_pr.get("head") or {}).get("sha")) or "")
+        ).lower()
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        print(
+            f"::warning::Preserving central dispatch run {run_repo}#{run_id}: "
+            f"live central-run revalidation failed closed ({exc})."
+        )
+        return False
+    return dispatched_head != live_head
+
+
+def cancel_stale_central_dispatch_runs(
+    repo: str,
+    *,
+    pr: dict[str, Any],
+    dry_run: bool,
+) -> list[str]:
+    """Cancel trusted central dispatches for one stale or closed pull request."""
+    if dry_run:
+        return []
+    target_repo = validate_github_repository(repo)
+    selected_number = int(pr["number"])
+    run_repo = repository_dispatch_target(target_repo)
+    candidates: list[tuple[str, int]] = []
+    for run_data in active_workflow_runs(
+        run_repo,
+        ACTIVE_WORKFLOW_RUN_STATUSES,
+        event="repository_dispatch",
+    ):
+        identity = central_dispatch_run_target(run_data, target_repo)
+        run_id = run_data.get("id")
+        if identity is None or not run_id:
+            continue
+        number, _ = identity
+        if number != selected_number:
+            continue
+        candidates.append((str(run_id), number))
+
+    if not candidates:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-central-dispatch-runs")
+
+    cancelled: list[str] = []
+    for run_id, number in candidates:
+        if not _central_dispatch_run_still_stale(
+            target_repo, run_repo, run_id, number
+        ):
+            continue
+        failures = force_cancel_workflow_runs(run_repo, [run_id])
+        if run_id not in failures:
+            cancelled.append(run_id)
+    return cancelled
 
 
 
@@ -4396,6 +4528,22 @@ def inspect_pr(
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
     base_ref = pr.get("baseRefName")
+    pr_state = str(pr.get("state") or "OPEN").upper()
+
+    # Cleanup is independent of Ready/Draft admission.  In particular, a Draft
+    # transition must retire superseded direct and central runs before the
+    # ordinary Draft skip below; otherwise those runs keep scarce runners until
+    # they eventually start and discover that their target head is obsolete.
+    # Local invocations without the scheduler's bounded Actions credential keep
+    # their historical read/merge behavior and never attempt control-plane
+    # cancellation.
+    if pr_state != "OPEN":
+        if github_actions_control_available():
+            cancel_stale_central_dispatch_runs(repo, pr=pr, dry_run=dry_run)
+        return Decision(number, "skip", f"{pr_state.lower()} PR")
+    if pr.get("isDraft") and github_actions_control_available():
+        cancel_stale_central_dispatch_runs(repo, pr=pr, dry_run=dry_run)
+        cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
 
     recovered_startup_runs = (
         recover_current_head_startup_failures(repo, pr, dry_run=False)
