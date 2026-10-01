@@ -165,9 +165,13 @@ def test_maturin_download_is_bounded(monkeypatch):
             return Response()
 
     monkeypatch.setattr(verifier, "MAX_ASSET_BYTES", 3)
-    monkeypatch.setattr(
-        verifier.urllib.request, "build_opener", lambda _handler: Opener()
-    )
+    def build_opener(proxy_handler, redirect_handler):
+        assert isinstance(proxy_handler, urllib.request.ProxyHandler)
+        assert proxy_handler.proxies == {}
+        assert isinstance(redirect_handler, verifier._ExactReleaseRedirect)
+        return Opener()
+
+    monkeypatch.setattr(verifier.urllib.request, "build_opener", build_opener)
     with pytest.raises(ValueError, match="asset exceeds"):
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
 
@@ -322,7 +326,7 @@ def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):
     monkeypatch.setattr(scanner, "_reader", lambda: {"path": "/reader"})
     monkeypatch.setattr(scanner, "_links", links)
     monkeypatch.setattr(
-        urllib.request, "build_opener", lambda _handler: Opener()
+        urllib.request, "build_opener", lambda _proxy, _redirect: Opener()
     )
     monkeypatch.setattr(sys, "argv", ["verify"])
     runpy.run_path(verifier.__file__, run_name="__main__")
