@@ -8,3 +8,7 @@
   acquires the exact-PR lease, revalidate live authority and the formal
   exact-head review receipt again so a completed prior receiver cannot trigger
   duplicate coverage or model execution.
+  Preserve every exact-head merge-scheduler admission with `queue: max`; a
+  dedicated metadata-only cleanup retires only live-head-revalidated
+  predecessor runs and proves each accepted cancellation reaches
+  `completed/cancelled`.

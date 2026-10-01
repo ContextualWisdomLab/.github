@@ -2484,10 +2484,13 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
     assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
-    assert (
-        "github.event_name == 'pull_request_review' || "
-        "github.event_name == 'repository_dispatch'" in workflow
-    )
+    concurrency = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
+    )[0]
+    assert "queue: max" in concurrency
+    assert "cancel-in-progress:" not in concurrency
+    assert "github.event.pull_request.head.sha" in concurrency
+    assert "github.event.client_payload.pr_head_sha" in concurrency
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():

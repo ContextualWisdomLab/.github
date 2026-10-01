@@ -37,7 +37,10 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
 def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
     """Reusable trusted schedulers share control capacity without PR execution."""
     text = workflow_text("pr-review-merge-scheduler.yml")
-    selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
+    scan_job = text.split("\n  scan-pr-queue:\n", 1)[1]
+    selector = next(
+        line for line in scan_job.splitlines() if line.strip().startswith("runs-on:")
+    )
     assert selector.strip() == "runs-on:"
     assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
     assert "fromJSON" not in selector
@@ -251,11 +254,22 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
-    # Anchored, not a substring: this workflow's value is an expression rather
-    # than a constant, so it cannot use the boolean helper, but a commented-out
-    # setting must not satisfy it either.
-    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{", concurrency_contract)
+    assert "queue: max" in concurrency_contract
+    assert "cancel-in-progress:" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" in concurrency_contract
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
+
+    cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
+        "  scan-pr-queue:", 1
+    )[0]
+    assert "actions: write" in cleanup_job
+    assert "actions/checkout" not in cleanup_job
+    assert "github.event.pull_request.number" in cleanup_job
+    assert "github.event.pull_request.head.sha" in cleanup_job
+    assert ".pull_requests[]?" in cleanup_job
+    assert ".head.sha" in cleanup_job
+    assert "force-cancel" in cleanup_job
 
 
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
@@ -1122,9 +1136,23 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+        elif filename == "pr-review-merge-scheduler.yml":
+            assert "cancel-closed-pr-runs:" not in workflow
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
+            assert "github.event.pull_request.number" in concurrency_contract
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+            assert "queue: max" in concurrency_contract
+            assert "cancel-in-progress:" not in concurrency_contract
+            assert "cancel-superseded-pr-runs:" in workflow
+            cleanup_job = workflow.split(
+                "  cancel-superseded-pr-runs:", 1
+            )[1].split("  scan-pr-queue:", 1)[0]
+            assert "actions: write" in cleanup_job
+            assert "actions/checkout" not in cleanup_job
         elif filename in {
             "codeql-pr.yml",
-            "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
             "security-scan.yml",
@@ -1506,6 +1534,136 @@ def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
+
+
+def _run_merge_scheduler_cleanup(
+    tmp_path: Path,
+    pull_states: list[dict[str, object]],
+    run_states: list[dict[str, object]],
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Execute predecessor cleanup against stateful GitHub API fixtures."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute the production cleanup")
+    step = workflow_step(
+        workflow_text("pr-review-merge-scheduler.yml"),
+        "Cancel revalidated predecessor scheduler runs",
+    )
+    run_block = step.split("        run: |\n", 1)[1].split(
+        "\n  scan-pr-queue:", 1
+    )[0]
+    script = textwrap.dedent(run_block)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    pulls = tmp_path / "pulls"
+    runs = tmp_path / "runs"
+    pulls.write_text(
+        "\n".join(json.dumps(state) for state in pull_states) + "\n",
+        encoding="utf-8",
+    )
+    runs.write_text(
+        "\n".join(json.dumps(state) for state in run_states) + "\n",
+        encoding="utf-8",
+    )
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        '''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+next_line() {
+  local source="$1" count_file="${1}.count" count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$count_file"
+  sed -n "${count}p" "$source"
+}
+if [[ "$*" == *"/pulls/7"* ]]; then
+  next_line "$FAKE_PULLS"
+elif [[ "$*" == *"actions/workflows/pr-review-merge-scheduler.yml/runs"* ]]; then
+  printf '%s\n' '[{"workflow_runs":[{"id":100,"status":"queued","pull_requests":[{"number":7,"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}]}]'
+elif [[ "$*" == *"actions/runs/100/force-cancel"* ]]; then
+  exit 0
+elif [[ "$*" == *"actions/runs/100"* ]]; then
+  state="$(next_line "$FAKE_RUNS")"
+  jq -r '[.status // "", .conclusion // ""] | @tsv' <<<"$state"
+else
+  exit 1
+fi
+''',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_CALLS": str(calls),
+            "FAKE_PULLS": str(pulls),
+            "FAKE_RUNS": str(runs),
+            "GH_TOKEN": "synthetic-actions-token",
+            "GITHUB_RUN_ID": "999",
+            "TARGET_REPOSITORY": "owner/repo",
+            "TARGET_PR_NUMBER": "7",
+            "TARGET_PR_HEAD_SHA": "a" * 40,
+            "TARGET_ACTION": "synchronize",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, calls.read_text(encoding="utf-8")
+
+
+def _live_scheduler_pull(*, head_sha: str = "a" * 40) -> dict[str, object]:
+    """Build one live pull-request response for scheduler cleanup evidence."""
+    return {
+        "base": {"repo": {"full_name": "owner/repo"}},
+        "number": 7,
+        "state": "open",
+        "head": {"sha": head_sha},
+    }
+
+
+def test_scheduler_cleanup_revalidates_target_after_run_selection(tmp_path: Path) -> None:
+    """A concurrent head advance after selection prevents cancellation."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull(), _live_scheduler_pull(head_sha="c" * 40)],
+        [{"status": "completed", "conclusion": "cancelled"}],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("/pulls/7") == 2
+    assert "/actions/runs/100/force-cancel" not in calls
+
+
+def test_scheduler_cleanup_fails_when_accepted_cancel_never_finishes(
+    tmp_path: Path,
+) -> None:
+    """An accepted POST is not terminal cancellation evidence."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "in_progress", "conclusion": None}] * 6,
+    )
+    assert result.returncode == 1
+    assert calls.count("actions/runs/100 --jq") == 6
+    assert "did not reach completed/cancelled" in result.stdout
+
+
+def test_scheduler_cleanup_verifies_accepted_cancelled_state(tmp_path: Path) -> None:
+    """Finish only after GitHub reports completed/cancelled."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("actions/runs/100 --jq") == 2
+    assert "Verified cancelled scheduler run 100." in result.stdout
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:

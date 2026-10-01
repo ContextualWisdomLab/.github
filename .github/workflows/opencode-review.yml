@@ -584,22 +584,38 @@ jobs:
               echo "::error::Could not cancel superseded central OpenCode dispatch ${stale_run_id}; refusing to add current-head work behind it."
               exit 1
             fi
-            if ! stale_status="$(GH_TOKEN="$app_token" gh api \
-              "repos/ContextualWisdomLab/.github/actions/runs/${stale_run_id}" --jq '.status')"; then
-              echo "::error::Could not verify superseded central OpenCode dispatch ${stale_run_id} cancellation."
+            cancellation_verified=false
+            for cancellation_attempt in 1 2 3 4 5 6; do
+              if ! stale_state="$(GH_TOKEN="$app_token" gh api \
+                "repos/ContextualWisdomLab/.github/actions/runs/${stale_run_id}" \
+                --jq '[.status // "", .conclusion // ""] | @tsv')"; then
+                echo "::error::Could not verify superseded central OpenCode dispatch ${stale_run_id} cancellation."
+                exit 1
+              fi
+              IFS=$'\t' read -r stale_status stale_conclusion <<<"$stale_state"
+              if [ "$stale_status" = "completed" ] &&
+                [ "$stale_conclusion" = "cancelled" ]; then
+                cancellation_verified=true
+                break
+              fi
+              case "$stale_status" in
+                requested|waiting|pending|queued|in_progress)
+                  ;;
+                completed)
+                  echo "::error::Superseded central OpenCode dispatch ${stale_run_id} completed with non-cancelled conclusion ${stale_conclusion:-<empty>}."
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::Superseded central OpenCode dispatch ${stale_run_id} returned invalid status ${stale_status:-<empty>}."
+                  exit 1
+                  ;;
+              esac
+            done
+            if [ "$cancellation_verified" != "true" ]; then
+              echo "::error::Superseded central OpenCode dispatch ${stale_run_id} did not reach completed/cancelled after accepted cancellation."
               exit 1
             fi
-            case "$stale_status" in
-              requested|waiting|pending|queued|in_progress)
-                echo "Superseded central OpenCode dispatch ${stale_run_id} cancellation is still ${stale_status}; current-head admission continues without waiting."
-                ;;
-              completed) ;;
-              *)
-                echo "::error::Superseded central OpenCode dispatch ${stale_run_id} returned invalid status ${stale_status:-<empty>}."
-                exit 1
-                ;;
-            esac
-            echo "Cancellation accepted for superseded central OpenCode dispatch ${stale_run_id} after live exact-head revalidation."
+            echo "Verified cancelled superseded central OpenCode dispatch ${stale_run_id} after live exact-head revalidation."
           done < <(sort -nu "$stale_dispatches_file")
 
           if [ "$same_head_found" = "true" ]; then

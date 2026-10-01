@@ -4,8 +4,10 @@
   evidence showed a later same-head wake cancelling the queued authoritative
   run. The required wake now inventories all five active states twice, retires
   only identity-validated older-head runs after live authority checks, and
-  continues current-head admission when GitHub has accepted but not completed
-  an asynchronous cancellation. The receiver atomically compare-and-swaps one
+  fails closed until every accepted cancellation is proven
+  `completed/cancelled`. The merge scheduler now preserves all exact-head
+  admissions with `queue: max` and retires predecessor heads only through a
+  metadata-only, live-head-revalidated cleanup job. The receiver atomically compare-and-swaps one
   repository/PR lease file on a dedicated central branch before source
   materialization, coverage, or model execution, closing the cross-producer
   check-then-POST race without lossy native concurrency. A dedicated minimal

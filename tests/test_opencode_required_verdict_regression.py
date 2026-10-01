@@ -1156,7 +1156,10 @@ def test_fail_closed_step_checks_once_for_a_non_draft_pr(tmp_path: Path) -> None
         ([], [active_dispatch(status="queued", head_sha="d" * 40)], None, HEAD, False, 0, 1),
         ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=45)], None, HEAD, False, 1, 0),
         ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=46)], None, HEAD, False, 1, 0),
-        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=47)], None, HEAD, False, 0, 1),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=47)], None, HEAD, False, 1, 0),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=49)], None, HEAD, False, 0, 1),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=50)], None, HEAD, False, 1, 0),
+        ([], [active_dispatch(status="queued", head_sha="d" * 40, run_id=51)], None, "e" * 40, False, 0, 0),
         ([], [], [active_dispatch(status="pending")], HEAD, False, 0, 0),
         (
             [],
@@ -1230,12 +1233,21 @@ elif [[ "$*" == *"repos/ContextualWisdomLab/.github/actions/runs/"*"/cancel"* ]]
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/actions/runs/"* ]]; then
   [[ "$*" =~ actions/runs/([0-9]+) ]] || exit 91
   run_id="${BASH_REMATCH[1]}"
+  count_file="$RUN_STATE_CALLS/$run_id"
+  count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$count_file"
   if [[ "$run_id" == "46" ]]; then
-    printf 'mystery'
+    printf 'mystery\t'
   elif [[ "$run_id" == "47" ]]; then
-    printf 'queued'
+    printf 'queued\t'
+  elif [[ "$run_id" == "49" && "$count" -eq 1 ]]; then
+    printf 'in_progress\t'
+  elif [[ "$run_id" == "50" ]]; then
+    printf 'completed\tsuccess'
   else
-    printf 'completed'
+    printf 'completed\tcancelled'
   fi
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
   cat >/dev/null
@@ -1253,6 +1265,11 @@ fi
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    run_state_calls = tmp_path / "run-state-calls"
+    run_state_calls.mkdir()
     env = {
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
@@ -1266,6 +1283,7 @@ fi
         "ACTIVE_RUN_CALLS": str(tmp_path / "active-run-calls"),
         "CANCEL_CALLS": str(tmp_path / "cancel-calls"),
         "DISPATCH_CALLS": str(calls),
+        "RUN_STATE_CALLS": str(run_state_calls),
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
         "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example",
         "OIDC_AUDIENCE": "opencode-github-action",
@@ -1300,17 +1318,21 @@ fi
         if cancel_calls.exists()
         else []
     )
-    expected_cancel_ids = sorted(
-        {
-            str(run["id"])
-            for run in [*active_runs, *(later_active_runs or [])]
-            if isinstance(run.get("display_title"), str)
-            and str(run["display_title"]).startswith(
-                "OpenCode Review Dispatch owner/repo#7@"
-            )
-            and str(run["display_title"]).lower()
-            != f"OpenCode Review Dispatch owner/repo#7@{HEAD}".lower()
-        }
+    expected_cancel_ids = (
+        []
+        if revalidated_head != HEAD
+        else sorted(
+            {
+                str(run["id"])
+                for run in [*active_runs, *(later_active_runs or [])]
+                if isinstance(run.get("display_title"), str)
+                and str(run["display_title"]).startswith(
+                    "OpenCode Review Dispatch owner/repo#7@"
+                )
+                and str(run["display_title"]).lower()
+                != f"OpenCode Review Dispatch owner/repo#7@{HEAD}".lower()
+            }
+        )
     )
     assert actual_cancel_ids == expected_cancel_ids
 

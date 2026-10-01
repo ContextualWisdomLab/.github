@@ -31,8 +31,8 @@ Before posting a new dispatch, the trusted required-check path now:
    state transition during the inventory remains observable;
 5. validates each returned run's identity fields and matches its protected
    exact `repository#PR@head` title plus workflow path and trigger;
-6. records an exact-head execution without returning until canonical
-   older-head executions have been retired; and
+6. records an exact-head execution only after every accepted older-head
+   cancellation reaches terminal `completed/cancelled`; and
 7. re-fetches the PR immediately before dispatch, retiring the request if
    state, draft status, or head authority changed.
 
@@ -42,10 +42,18 @@ when `cancel-in-progress` is false, so native concurrency cannot preserve every
 distinct callback payload. Producers deduplicate exact-head work from trusted
 inventory. Before a current-head POST, the required workflow revalidates live
 repository/PR/head authority and cancels only canonical older-head central
-runs. A refused cancellation, failed status lookup, or invalid status fails
-closed. GitHub may still report an accepted cancellation as active; that
-asynchronous state no longer abandons the current-head dispatch or holds a
-runner. A final live-authority read guards the POST.
+runs. A refused cancellation, failed status lookup, invalid state, terminal
+non-cancelled conclusion, or accepted cancellation that remains active after
+the bounded poll fails closed without a new dispatch. A final live-authority
+read guards the POST.
+
+The merge scheduler separately binds native concurrency to the exact PR head
+and uses GitHub's bounded `queue: max` FIFO instead of lossy single-pending
+replacement. `synchronize` and `closed` events run a metadata-only cleanup job
+with `actions: write`; it inventories every active status, revalidates the live
+PR/head immediately before each mutation, cancels only predecessor-head work
+(or all final-head work on close), and accepts completion only after GitHub
+reports `completed/cancelled`.
 
 Producer observation and POST are not atomic, so the receiver first authorizes
 the exact actor/sender pair, repository allowlist membership, and complete
@@ -102,7 +110,10 @@ no-active-run dispatch, existing formal receipts, and a head movement between
 initial validation and the mutation boundary. Queue-contract tests prohibit
 lossy native receiver concurrency; execution fixtures prove exact older-head
 cancellation, deduplication, asynchronous cancellation continuation, and
-fail-closure when a cancellation is refused or returns an invalid status.
+fail-closure when a cancellation is refused, remains active, returns an invalid
+state, or terminates with a non-cancelled conclusion. Scheduler cleanup
+fixtures also prove concurrent-head-movement preservation and bounded terminal
+cancellation verification.
 Receiver fixtures execute absent, active-owner, terminal-owner, self-rerun,
 different-head takeover, and branch-initialization-race lease paths.
 A two-process fixture starts simultaneous cache misses against an atomic fake
@@ -117,12 +128,12 @@ independent byte-for-byte reviewer pin was regenerated from the repaired
 receiver as exact Git blob
 `5c87c74863ef6872c1ef7136d5b330071920c09e`.
 
-Local focused verification on the stacked successor base
-`5a91ce9f9c3e773aa1172f1055fd791ccde8fdaa`:
+Local exact-tree verification on the stacked successor base
+`813f16fad7528b035d6ae4386cd176c9a67413c1`:
 
 - required-workflow, nonblocking capacity, queue, receiver, and integrity-pin
   contracts after independent-review repair: `248 passed, 1 skipped`;
-- complete Python 3.14 warnings-fatal suite: `5339 passed, 5 skipped, 40
+- complete Python 3.14 warnings-fatal suite: `5356 passed, 7 skipped, 40
   subtests passed`, with
   owned production `18729/18729` statements and `7642/7642` branches,
   Docstring `100%`, and zero warnings.
