@@ -2518,6 +2518,18 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects("no json here") == []
 
 
+def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
+    """A malformed outer value cannot turn a nested control into top-level evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    payload = '{"outer":' * 2_000 + json.dumps(nested_control) + " trailing"
+
+    assert norm.iter_json_objects(payload) == []
+
+
 @pytest.mark.parametrize("approve_first", [True, False])
 def test_main_rejects_conflicting_current_run_controls_without_rewriting(
     tmp_path, capsys, approve_first
