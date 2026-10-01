@@ -587,11 +587,12 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 		record_failure "opencode required workflow bootstrap condition detection must survive a job block larger than the pipe buffer"
 	fi
 	rm -f "$large_bootstrap_fixture"
-	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.target_repository' "opencode review scopes concurrency by the live validated target repository"
-	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.pr_number || github.run_id' "opencode review scopes concurrency by the live validated PR with a non-PR fallback"
+	assert_file_contains "$workflow_file" 'admit-exact-head-dispatch:' "opencode review admits one exact-head receiver before expensive work"
+	assert_file_contains "$workflow_file" 'admitted: ${{ steps.single_flight.outputs.admitted }}' "opencode review exports its atomic exact-head lease decision"
+	assert_file_contains "$workflow_file" "needs.admit-exact-head-dispatch.outputs.admitted == 'true'" "opencode review gates expensive work on the exact-head lease"
+	assert_file_contains "$workflow_file" 'opencode-dispatch-leases' "opencode review uses a durable exact-head lease instead of lossy native concurrency"
+	assert_file_contains "$workflow_file" "Wake every failed exact-head Required OpenCode workflow" "opencode review preserves distinct same-head admissions for deterministic receipt recovery"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" 'opencode-review-${{' "opencode review uses the workflow-repository-PR group prefix"
-	assert_file_contains "$workflow_file" 'cancel-in-progress: true' "opencode review cancels stale in-progress review attempts when a newer PR event arrives"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "opencode pull_request coverage execution materializes the exact base/head merge tree"
 	assert_file_contains "$workflow_file" "stale OpenCode run: event head=" "opencode review side effects are skipped for stale heads"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name" "opencode never treats a same-repository pull_request_target head as authorization to execute PR-controlled code"
@@ -614,7 +615,18 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" "actions: read" "opencode review workflow can read failed Actions logs without Actions write scope"
 	assert_file_contains "$workflow_file" "checks: read" "opencode review workflow can read failed check-run annotations for line-specific findings"
 	assert_file_contains "$workflow_file" "contents: read" "opencode review workflow uses read-only repository contents permission"
-	assert_file_not_contains "$workflow_file" "contents: write" "opencode review workflow does not need repository contents write scope"
+	local admission_job validation_job
+	admission_job="$(awk '/^  admit-exact-head-dispatch:$/ { emit=1 } emit && /^  [A-Za-z0-9_-]+:$/ && $0 !~ /^  admit-exact-head-dispatch:$/ { exit } emit { print }' "$workflow_file")"
+	validation_job="$(awk '/^  validate-pr-metadata:$/ { emit=1 } emit && /^  [A-Za-z0-9_-]+:$/ && $0 !~ /^  validate-pr-metadata:$/ { exit } emit { print }' "$workflow_file")"
+	if ! grep -Fq -- "contents: write" <<<"$admission_job"; then
+		record_failure "opencode review scopes repository contents write permission to the atomic lease job"
+	fi
+	if grep -Fq -- "contents: write" <<<"$validation_job"; then
+		record_failure "opencode review metadata validation must not receive repository contents write permission"
+	fi
+	if ! grep -Fq -- "contents: read" <<<"$validation_job"; then
+		record_failure "opencode review metadata validation keeps read-only repository contents permission"
+	fi
 	assert_file_contains "$workflow_file" "pull-requests: write" "opencode review workflow may use github-actions[bot] for same-repository review-thread, update-branch, auto-merge, and merge follow-up"
 	assert_file_contains "$workflow_file" "issues: write" "opencode review workflow can publish or update overview comments through the job token"
 	assert_file_contains "$workflow_file" "statuses: write" "opencode review workflow can read status contexts and publish the repository_dispatch status evidence it owns"
@@ -1593,7 +1605,10 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates repository-local recovery from PR runs"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
-	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
+	assert_file_contains "$workflow_file" "queue: max" "scheduler preserves distinct same-head admissions up to the documented pending limit"
+	assert_file_not_contains "$workflow_file" "cancel-in-progress:" "scheduler avoids native pending-run replacement"
+	assert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "scheduler retires only revalidated predecessor-head runs"
+	assert_file_contains "$workflow_file" "Cancel revalidated predecessor scheduler runs" "scheduler keeps predecessor cleanup metadata-only and explicit"
 	assert_file_not_contains "$workflow_file" 'github.event.workflow_run' "scheduler does not poll required-check completion through follow-up workflow runs"
 	assert_file_contains "$workflow_file" "github.event.client_payload.trigger_reviews != false" "scheduler enables review dispatch by default for default-branch dispatch events"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' || github.event_name == 'push'" "scheduler can dispatch a bounded OpenCode review from native or recovery events"

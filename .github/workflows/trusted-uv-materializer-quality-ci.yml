@@ -155,7 +155,7 @@ jobs:
           python -m coverage report
 
       - name: Enforce complete production docstrings
-        run: python -m interrogate --fail-under 100 scripts/ci/materialize_base_python_requirements.py
+        run: python -m interrogate --fail-under 100 scripts/ci
 
       - name: Compile production and quality contracts
         run: |

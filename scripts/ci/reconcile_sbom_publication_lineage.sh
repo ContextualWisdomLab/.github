@@ -21,6 +21,33 @@ fi
 git cat-file -e "${previous_head}^{commit}"
 git cat-file -e "${generated_inventory_head}^{commit}"
 
+unexpected_worktree_status="$(
+  git status --porcelain=v1 --untracked-files=all -- \
+    . \
+    ':(exclude)docs/sbom/inventory.json' \
+    ':(exclude)docs/sbom/inventory.md'
+)"
+if [ -n "$unexpected_worktree_status" ]; then
+  echo "working tree contains non-inventory change:" >&2
+  echo "$unexpected_worktree_status" >&2
+  exit 1
+fi
+
+generated_inventory_parent="$(git rev-parse "${generated_inventory_head}^")"
+mapfile -d '' -t generated_change_paths < <(
+  git diff --name-only -z "$generated_inventory_parent" "$generated_inventory_head"
+)
+
+for generated_change_path in "${generated_change_paths[@]}"; do
+  case "$generated_change_path" in
+    docs/sbom/inventory.json|docs/sbom/inventory.md) ;;
+    *)
+      echo "generated inventory head contains non-inventory change: $generated_change_path" >&2
+      exit 1
+      ;;
+  esac
+done
+
 if git merge-base --is-ancestor "$previous_head" HEAD; then
   exit 0
 fi

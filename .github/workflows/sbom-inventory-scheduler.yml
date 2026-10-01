@@ -180,7 +180,20 @@ jobs:
           GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- docs/sbom; then
+          unexpected_workspace_status="$(
+            git status --porcelain=v1 --untracked-files=all -- \
+              . \
+              ':(exclude)docs/sbom/inventory.json' \
+              ':(exclude)docs/sbom/inventory.md'
+          )"
+          if [ -n "$unexpected_workspace_status" ]; then
+            echo "SBOM generator changed a non-inventory owner path:" >&2
+            echo "$unexpected_workspace_status" >&2
+            exit 1
+          fi
+          if git diff --quiet -- \
+            docs/sbom/inventory.json \
+            docs/sbom/inventory.md; then
             echo "No SBOM inventory changes; nothing to publish."
             exit 0
           fi
@@ -188,9 +201,14 @@ jobs:
           branch="automation/sbom-inventory"
           git config user.name "cwl-sbom-inventory[bot]"
           git config user.email "cwl-sbom-inventory@users.noreply.github.com"
-          git add docs/sbom
+          git add -- \
+            docs/sbom/inventory.json \
+            docs/sbom/inventory.md
           git commit -m "chore: refresh org SBOM inventory"
           generated_inventory_head="$(git rev-parse HEAD)"
+          scripts/ci/reconcile_sbom_publication_lineage.sh \
+            "$generated_inventory_head" \
+            "$generated_inventory_head"
 
           # persist-credentials remains false; configure Git's credential helper
           # from the already masked GH_TOKEN without putting the token in a URL.

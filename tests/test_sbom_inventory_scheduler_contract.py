@@ -190,6 +190,94 @@ def test_sbom_inventory_publication_merges_generated_only_lineage(tmp_path: Path
     assert len(_git(repository_path, "show", "-s", "--format=%P", "HEAD").stdout.split()) == 2
 
 
+def test_sbom_inventory_publication_rejects_generated_non_inventory_paths(
+    tmp_path: Path,
+) -> None:
+    """A generated commit must not acquire authority over neighboring owner files."""
+    repository_path = tmp_path / "generated-owner-path-repository"
+    repository_path.mkdir()
+    _git(repository_path, "init", "-b", "main")
+    _git(repository_path, "config", "user.name", "SBOM Fixture")
+    _git(repository_path, "config", "user.email", "sbom-fixture@example.invalid")
+    _commit_file(repository_path, "application.txt", "base\n", "base")
+    _commit_file(repository_path, "docs/sbom/inventory.md", "base inventory\n", "base inventory")
+    _commit_file(repository_path, "docs/sbom/inventory.json", "{}\n", "base inventory json")
+
+    _git(repository_path, "switch", "-c", "publication")
+    previous_head = _commit_file(
+        repository_path,
+        "docs/sbom/inventory.md",
+        "previous inventory\n",
+        "previous inventory",
+    )
+
+    _git(repository_path, "switch", "main")
+    _commit_file(repository_path, "application.txt", "protected main update\n", "advance main")
+    (repository_path / "docs/sbom/inventory.md").write_text(
+        "fresh inventory\n",
+        encoding="utf-8",
+    )
+    (repository_path / "docs/sbom/reviewer-notes.md").write_text(
+        "must remain product-owned\n",
+        encoding="utf-8",
+    )
+    _git(
+        repository_path,
+        "add",
+        "docs/sbom/inventory.md",
+        "docs/sbom/reviewer-notes.md",
+    )
+    _git(repository_path, "commit", "-m", "generate inventory with owner path")
+    generated_head = _git(repository_path, "rev-parse", "HEAD").stdout.strip()
+
+    result = subprocess.run(
+        [str(LINEAGE_RECONCILER.resolve()), previous_head, generated_head],
+        cwd=repository_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "generated inventory head contains non-inventory change" in result.stderr
+    assert _git(repository_path, "rev-parse", "HEAD").stdout.strip() == generated_head
+    assert not (repository_path / ".git" / "MERGE_HEAD").exists()
+
+
+def test_sbom_inventory_publication_rejects_non_inventory_workspace_side_effects(
+    tmp_path: Path,
+) -> None:
+    """An uncommitted generator side effect outside the inventory fails closed."""
+    repository_path = tmp_path / "generated-workspace-side-effect-repository"
+    repository_path.mkdir()
+    _git(repository_path, "init", "-b", "main")
+    _git(repository_path, "config", "user.name", "SBOM Fixture")
+    _git(repository_path, "config", "user.email", "sbom-fixture@example.invalid")
+    _commit_file(repository_path, "owner.txt", "protected\n", "base owner")
+    _commit_file(repository_path, "docs/sbom/inventory.md", "base inventory\n", "base inventory")
+    _commit_file(repository_path, "docs/sbom/inventory.json", "{}\n", "base inventory json")
+    generated_head = _commit_file(
+        repository_path,
+        "docs/sbom/inventory.md",
+        "fresh inventory\n",
+        "generate inventory",
+    )
+    (repository_path / "owner.txt").write_text("generator side effect\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(LINEAGE_RECONCILER.resolve()), generated_head, generated_head],
+        cwd=repository_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "working tree contains non-inventory change" in result.stderr
+    assert _git(repository_path, "rev-parse", "HEAD").stdout.strip() == generated_head
+    assert not (repository_path / ".git" / "MERGE_HEAD").exists()
+
+
 def test_sbom_inventory_publication_fails_closed_on_non_inventory_conflict(
     tmp_path: Path,
 ) -> None:
