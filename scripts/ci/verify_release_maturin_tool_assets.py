@@ -9,8 +9,9 @@ import io
 import json
 import sys
 import tarfile
+import urllib.error
+import urllib.request
 import zipfile
-from http.client import HTTPSConnection
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -42,45 +43,24 @@ GITHUB_RELEASE_CDN_HOST = "release-assets.githubusercontent.com"
 GITHUB_RELEASE_PATH = "/PyO3/maturin/releases/download/v1.15.0/"
 
 
-def _https_response(host: str, target: str):
-    """Open one credential-free HTTPS GET and return its owned response."""
-    connection = HTTPSConnection(host, timeout=60)
-    try:
-        connection.request(
-            "GET", target, headers={"User-Agent": "cwl-release-gate"}
-        )
-        return connection, connection.getresponse()
-    except BaseException:
-        connection.close()
-        raise
+class _ExactReleaseRedirect(urllib.request.HTTPRedirectHandler):
+    """Admit one credential-free redirect to the exact GitHub release CDN."""
 
-
-def _close_response(connection, response) -> None:
-    """Close a response and its connection on every terminal path."""
-    try:
-        response.close()
-    finally:
-        connection.close()
-
-
-def _download(filename: str) -> bytes:
-    """Download one admitted release asset through the fixed GitHub CDN hop."""
-    if filename not in ASSET_FILENAMES:
-        raise ValueError("maturin asset name is unexpected")
-
-    connection, response = _https_response(
-        GITHUB_RELEASE_HOST, f"{GITHUB_RELEASE_PATH}{filename}"
-    )
-    if response.status in {301, 302, 303, 307, 308}:
+    def http_error_302(self, request, response, code, message, headers):
+        """Validate and follow one exact release redirect, closing its response."""
         try:
-            location = response.getheader("Location") or ""
+            location = headers.get("Location", "")
             try:
                 redirect = urlsplit(location)
                 redirect_port = redirect.port
             except ValueError as error:
                 raise ValueError("maturin release redirect is not trusted") from error
+            source = urlsplit(request.full_url)
             if (
-                redirect.scheme != "https"
+                getattr(request, "_cwl_release_redirected", False)
+                or source.scheme != "https"
+                or source.hostname != GITHUB_RELEASE_HOST
+                or redirect.scheme != "https"
                 or redirect.hostname != GITHUB_RELEASE_CDN_HOST
                 or redirect_port not in {None, 443}
                 or redirect.username is not None
@@ -89,19 +69,50 @@ def _download(filename: str) -> bytes:
                 or redirect.fragment
             ):
                 raise ValueError("maturin release redirect is not trusted")
-            target = redirect.path
-            if redirect.query:
-                target = f"{target}?{redirect.query}"
+            redirected = urllib.request.Request(
+                location,
+                headers={"User-Agent": "cwl-release-gate"},
+                method="GET",
+            )
+            redirected._cwl_release_redirected = True
         finally:
-            _close_response(connection, response)
-        connection, response = _https_response(GITHUB_RELEASE_CDN_HOST, target)
+            response.close()
+        return self.parent.open(redirected, timeout=request.timeout)
 
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
+
+
+def _download(filename: str) -> bytes:
+    """Download one admitted release asset through the fixed GitHub CDN hop."""
+    if filename not in ASSET_FILENAMES:
+        raise ValueError("maturin asset name is unexpected")
+    request = urllib.request.Request(
+        f"https://{GITHUB_RELEASE_HOST}{GITHUB_RELEASE_PATH}{filename}",
+        headers={"User-Agent": "cwl-release-gate"},
+        method="GET",
+    )
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _ExactReleaseRedirect()
+    )
+    response = None
     try:
+        response = opener.open(request, timeout=60)
         if response.status != 200:
             raise ValueError(f"maturin release download returned HTTP {response.status}")
         raw = response.read(MAX_ASSET_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        try:
+            raise ValueError(
+                f"maturin release download returned HTTP {error.code}"
+            ) from error
+        finally:
+            error.close()
     finally:
-        _close_response(connection, response)
+        if response is not None:
+            response.close()
     if len(raw) > MAX_ASSET_BYTES:
         raise ValueError("maturin release asset exceeds inspection limit")
     return raw

@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 bounded Maturin release downloader SAST closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The canonical Maturin asset verifier replaced a suppressed dynamic `urlopen` call with direct `HTTPSConnection`, but Semgrep's low-confidence certificate-validation audit still rejects every use of that low-level API | `.github#2531@e33d97d022e1c1a26b35d51f9fa4b695fe969547`; SAST run `36802256836`; job `110178968784`; rule `python.lang.security.audit.httpsconnection-detected.httpsconnection-detected` | At source-repair head `eede925e71e0f1526560a305f5219a13c6631227`, replace the low-level connection with a standard-library opener whose redirect handler admits one credential-free HTTPS hop only from the fixed GitHub release path to the exact release-assets host; preserve bounded reads and terminal response closure; prohibit scanner suppressions | **Proposed / RED scanner-contract reproduction and 31 tests plus 4 subtests GREEN locally; source-repair exact-head Security, Python Security, SAST, and runtime-quality GREEN; terminal CodeQL and independent approval required** |
+
 ## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
 
 | Gap | Exact evidence | Action | Status |
