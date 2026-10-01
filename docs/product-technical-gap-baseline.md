@@ -3721,23 +3721,27 @@ consumer canary and does not copy or override the owner workflow.
 **Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
 #448, and #100 produced no new central CodeQL run. Ruleset consumers receive
 opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
-entry job nevertheless skipped every Draft event and claimed Ready would
-re-run the same head. At the same time, native-owner `converted_to_draft`
-events must enter per-PR concurrency to retire stale work without starting a
-replacement scan. A single blanket Draft predicate encoded incompatible
-halves of that lifecycle.
+entry job nevertheless skipped Draft event snapshots and claimed Ready would
+re-run the same head. At the owner, `converted_to_draft` must also enter the
+stable per-PR concurrency group to retire stale Ready work without starting a
+replacement scan. A blanket Draft predicate cannot satisfy both obligations.
 
-**Action / evidence.** The owner now distinguishes event and repository:
-consumer Draft heads materialize CodeQL evidence, native-owner Draft heads
-remain runner-free, and `converted_to_draft`/`closed` only retire stale work.
-Authenticated status, exact head/base/source/run identity, GHAS, SARIF, and
-terminal-verdict requirements are unchanged. The RED-first matrix produced
-two intended failures; the focused Draft-control plus queue suite passes 86
-tests, and the warnings-fatal repository suite passes 5,261 tests, five
-optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noema unchanged-head Ready
-materialization Gap remains open at the central review owner. Full exact-tree
-and hosted evidence remain required and are not inferred from either
-predecessor PR.
+**Action / evidence.** The integrated contract preserves both valid owner
+deltas. CodeQL runs on Draft consumer heads for `opened`, `synchronize`, and
+`reopened`, while native `ContextualWisdomLab/.github` Draft heads remain
+runner-free. `converted_to_draft` enters the stable per-PR concurrency group
+to retire an older Ready run but skips before runner admission; closed events
+remain excluded. Review workflows stay Draft-gated because Ready is their
+admission boundary. The RED-first contract rejects both missing consumer
+materialization and missing Draft-conversion retirement; GREEN requires the
+explicit repository/event matrix. Authenticated status, exact
+head/base/source/run identity, GHAS, SARIF, and terminal-verdict requirements
+are unchanged. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Protected
+integration, fresh hosted exact-head evidence, and qualifying independent
+approval remain mandatory. The refreshed two-parent integration tree passes
+the 86-test focused lifecycle/queue suite and the warnings-fatal repository
+suite with 5,273 passes and five optional skips.
 
 ## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
 

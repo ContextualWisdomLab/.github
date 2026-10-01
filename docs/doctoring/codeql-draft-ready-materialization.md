@@ -55,10 +55,10 @@ actual event-delivery defect rather than repair it.
 The RED contract produced two failures against the blanket Draft guard: it
 rejected missing consumer materialization and missing conversion-event
 retirement. GREEN requires the complete repository/event matrix and keeps the
-per-PR concurrency key unchanged. The focused Draft-control and queue suite
-passes 86 tests; the warnings-fatal repository suite passes 5,261 tests, five
-optional-platform skips, and 40 subtests. Hosted exact-head Checks remain
-mandatory before protected integration.
+per-PR concurrency key unchanged. On the refreshed two-parent integration
+tree, the focused Draft-control and queue suite passes 86 tests and the
+warnings-fatal repository suite passes 5,273 tests with five optional skips.
+Hosted exact-head Checks remain mandatory before protected integration.
 
 Post-merge evidence is a new or synchronized Draft consumer head that reaches
 terminal CodeQL dispatch evidence without a Ready transition, plus a native

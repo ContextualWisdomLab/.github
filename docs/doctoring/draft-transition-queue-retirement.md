@@ -47,10 +47,11 @@ all affected workflows because the event was absent. The later single-writer
 reconciliation first produced two focused failures against CodeQL's blanket
 Draft guard, then passed the combined Draft materialization and retirement
 matrix. An affected-workflow audit also found and corrected one stale SAST
-test oracle that still required the old closed-only job guard. The resulting
-workflow-consumer suite reports 672 passes, and the warnings-fatal repository
-suite reports 5,259 passes, five optional-platform skips, and 40 subtests.
-Hosted exact-head checks remain required before protected merge.
+test oracle that still required the old closed-only job guard. On the refreshed
+two-parent integration tree, the focused Draft-control and queue suite reports
+86 passes and the warnings-fatal repository suite reports 5,273 passes with
+five optional skips. Hosted exact-head checks remain required before protected
+merge.
 
 ## Follow-up
 
