@@ -3820,3 +3820,33 @@ fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
 the exact hosted command now covers all 18,252 production statements and 7,498
 branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
 Fresh exact-head hosted revalidation is required.
+
+## 2026-10-01 CodeQL Draft event materialization
+
+**Status:** Proposed owner repair; protected integration, hosted exact-head
+evidence, and qualifying independent approval remain mandatory.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns the central CodeQL
+required-workflow and dispatch contract. `ContextualWisdomLab/Orgmetra` is a
+consumer canary and does not copy or override the owner workflow.
+
+**Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
+#448, and #100 produced no new central CodeQL run. Ruleset consumers receive
+opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
+entry job nevertheless skipped every Draft event and claimed Ready would
+re-run the same head. At the same time, native-owner `converted_to_draft`
+events must enter per-PR concurrency to retire stale work without starting a
+replacement scan. A single blanket Draft predicate encoded incompatible
+halves of that lifecycle.
+
+**Action / evidence.** The owner now distinguishes event and repository:
+consumer Draft heads materialize CodeQL evidence, native-owner Draft heads
+remain runner-free, and `converted_to_draft`/`closed` only retire stale work.
+Authenticated status, exact head/base/source/run identity, GHAS, SARIF, and
+terminal-verdict requirements are unchanged. The RED-first matrix produced
+two intended failures; the focused Draft-control plus queue suite passes 86
+tests, and the warnings-fatal repository suite passes 5,261 tests, five
+optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Full exact-tree
+and hosted evidence remain required and are not inferred from either
+predecessor PR.

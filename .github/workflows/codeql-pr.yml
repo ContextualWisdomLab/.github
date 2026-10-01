@@ -58,8 +58,11 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
-    if: github.event.action != 'closed' && github.event.pull_request.draft != true
+    # Ruleset consumers do not receive unchanged-head Ready events, so their
+    # Draft heads materialize security evidence. The native owner saves its
+    # runner, while Draft conversion and close events only retire stale work
+    # through the per-PR concurrency group above.
+    if: github.event.action != 'closed' && github.event.action != 'converted_to_draft' && (github.event.pull_request.draft != true || github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
