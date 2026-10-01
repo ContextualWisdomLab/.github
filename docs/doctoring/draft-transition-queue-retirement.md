@@ -15,6 +15,16 @@ subscribed to `ready_for_review` but not `converted_to_draft`. Consequently,
 a Draft transition could stop future product admission but could not create the
 same-concurrency replacement run that retires the already queued Ready event.
 
+A second live sample on 2026-10-01 exposed a distinct central-dispatch gap.
+The `.github` receiver held 457 queued and two in-progress
+`repository_dispatch` runs. Of the newest 100 queued runs, 38 targeted a
+superseded PR head and five targeted an already closed PR; 20 of those stale
+runs were CodeQL and 18 were OpenCode. Workflow concurrency only coalesces a
+new run in the same group. A Draft transition or PR closure that creates no new
+central dispatch therefore leaves the old run queued. The scheduler made this
+worse by returning `draft PR` before stale-run cleanup, and closed PRs never
+entered its open-PR loop at all.
+
 ## Decision
 
 Each affected workflow subscribes to `converted_to_draft`. Ordinary entry jobs
@@ -31,12 +41,32 @@ failure threshold, and Ready-head behavior remain unchanged. No workflow run is
 rerun manually, no required result is synthesized, and no failed result is
 converted to success.
 
+The scheduler now performs a bounded central-dispatch retirement sweep for the
+known protected CodeQL, OpenCode, and Strix workflow paths. It accepts only the
+exact repository/PR/head identity encoded in those workflows' `run-name`, then
+re-fetches the active run and target PR immediately before cancellation. It
+covers all five GitHub active states (`queued`, `in_progress`, `waiting`,
+`pending`, and `requested`) so a state transition cannot escape retirement. It
+cancels only a run whose target PR is closed or whose encoded head differs from
+the freshly fetched live head. Current-head and malformed runs are preserved;
+authority-read failures fail closed. A consumer event performs central
+retirement only when an explicit organization Actions token is configured;
+its repository-scoped token is never treated as central authority. Draft PRs
+run this cleanup before the
+ordinary Draft skip. The scheduler's existing `pull_request_target` receiver
+admits only `converted_to_draft` and `closed` transition events to its bounded
+control job; a closed PR is cleaned and returned before any review, branch,
+auto-merge, or merge path can run. Ordinary Draft events still assign no
+runner.
+
 ## Alternatives
 
 - Leaving the queue intact was rejected because Draft is an explicit admission
   withdrawal and stale queued work consumes the organization job ceiling.
-- Cancelling runs from the repair client was rejected because it duplicates the
-  canonical workflow owner and depends on a privileged external sweeper.
+- An unbounded external cancellation client was rejected. The selected repair
+  remains in the canonical `.github` scheduler owner, recognizes only protected
+  central workflow identities, and revalidates exact run and PR authority at
+  the destructive boundary.
 - Adding a new cancellation job was rejected because workflow-level concurrency
   already performs the exact same-head retirement before runner admission.
 
@@ -52,8 +82,19 @@ workflow-consumer suite reports 672 passes, and the warnings-fatal repository
 suite reports 5,259 passes, five optional-platform skips, and 40 subtests.
 Hosted exact-head checks remain required before protected merge.
 
+The later central-dispatch RED suite reproduced three failures: Draft returned
+before cleanup, no CodeQL central cleanup API existed, and closed-PR runs had no
+fresh-authority path. The implementation passes all 458 focused scheduler and
+admission tests with warnings treated as errors, including stale/current/closed,
+malformed identity, authority outage, five-state transitions, Draft ordering, and transition-event
+cleanup-only coverage. This is local evidence only; hosted exact-head checks and
+independent review remain required.
+
 ## Follow-up
 
-After ordinary protected merge, observe the next Draft transition and confirm
-that the older CodeQL PR, SAST Semgrep, Security Scan, and Python Security runs
-leave the queue without assigning a hosted or control runner.
+After ordinary protected merge, observe the next Draft transition and PR
+closure. Confirm that older direct runs retire through workflow concurrency and
+that stale/closed CodeQL, OpenCode, and Strix central dispatches are cancelled
+without touching current-head runs or assigning a CodeQL, OpenCode, or Strix
+worker merely to reject stale identity. The bounded scheduler control job is
+expected only for the Draft/close transition that performs the retirement.

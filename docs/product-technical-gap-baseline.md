@@ -3850,3 +3850,43 @@ optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noem
 materialization Gap remains open at the central review owner. Full exact-tree
 and hosted evidence remain required and are not inferred from either
 predecessor PR.
+
+## 2026-10-01 Central dispatch stale-run retirement
+
+**Status:** Proposed owner repair; local GREEN, protected integration and
+hosted exact-head evidence pending.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns central CodeQL,
+OpenCode, Strix, and PR scheduler admission. Product repositories supply PR
+identity and consume released workflow behavior; they do not cancel the
+owner's receiver runs or copy its scheduler.
+
+**Gap / RCA.** A live `.github` Actions snapshot contained 457 queued and two
+in-progress `repository_dispatch` runs. In the newest 100 queued runs, 38
+targeted superseded heads and five targeted closed PRs (CodeQL: 20 superseded,
+three closed; OpenCode: 18 superseded, two closed). Workflow-level
+`cancel-in-progress` could not retire them because Draft/close produced no new
+central dispatch in the same group. The scheduler also returned on Draft before
+calling stale-run cleanup, while closed PRs were absent from its open-PR scan.
+Representative obsolete runs included `.github#2548` OpenCode `36842116744`
+and CodeQL `36842027523`, both targeting `a9b20a…` after the live head moved to
+`2583cc…`; closed examples included AppGuardrail #1365 CodeQL `36818449683`.
+
+**Action / evidence.** The owner now parses only exact protected CodeQL,
+OpenCode, and Strix dispatch workflow paths and their repository/PR/head
+run-name contracts. Before force-cancel it re-fetches the active run and PR;
+the inventory and destructive-boundary validation both recognize all five
+GitHub active states (`queued`, `in_progress`, `waiting`, `pending`, and
+`requested`) so state transitions cannot evade cleanup. Then
+only closed targets or head mismatches authorize cancellation. Current-head,
+malformed, unrelated, and unreadable-authority cases fail closed. Consumer
+repository tokens are not accepted as central Actions authority; cross-repo
+cleanup requires an explicit organization token and otherwise fails closed.
+Draft cleanup precedes Draft skip. Only `converted_to_draft` and `closed` transition events
+are newly admitted to the bounded scheduler control job; closed cleanup returns
+before review, branch, auto-merge, or merge behavior, and ordinary Draft events
+still assign no runner. The RED-first tests reproduced all three missing paths;
+all 458 focused scheduler and admission tests pass with warnings fatal. Required
+checks, review admission, scanner verdicts, concurrency keys, and merge policy
+are unchanged. Fresh hosted exact-head checks and independent review remain
+mandatory.
