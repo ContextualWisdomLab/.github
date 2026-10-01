@@ -48,7 +48,7 @@ of `scripts/ci` instead of only the materializer module.
 - Hosted RED: 5,314 passed, 5 skipped, 40 subtests; 18,775 statements with 5
   missing, 7,652 branches with 2 partial; total 99%.
 - Local integrated GREEN: 18 lifecycle/prescreen tests; complete warnings-fatal
-  suite 5,363 passed, 5 skipped, 40 subtests; 18,767/18,767 statements and
+  suite 5,364 passed, 5 skipped, 40 subtests; 18,767/18,767 statements and
   7,648/7,648 branches; verifier 107/107 statements and 34/34 branches;
   production docstrings 1,456/1,456; `git diff --check` clean.
 - Required before acceptance: complete exact-head hosted suite, security and
