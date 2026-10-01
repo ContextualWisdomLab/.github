@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 bounded Maturin release downloader SAST closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The canonical Maturin asset verifier replaced a suppressed dynamic `urlopen` call with direct `HTTPSConnection`, but Semgrep's low-confidence certificate-validation audit still rejects every use of that low-level API | `.github#2531@e33d97d022e1c1a26b35d51f9fa4b695fe969547`; SAST run `36802256836`; job `110178968784`; rule `python.lang.security.audit.httpsconnection-detected.httpsconnection-detected` | At source-repair head `eede925e71e0f1526560a305f5219a13c6631227`, replace the low-level connection with a standard-library opener whose redirect handler admits one credential-free HTTPS hop only from the fixed GitHub release path to the exact release-assets host; preserve bounded reads and terminal response closure; prohibit scanner suppressions | **Proposed / RED scanner-contract reproduction and 31 tests plus 4 subtests GREEN locally; source-repair exact-head Security, Python Security, SAST, and runtime-quality GREEN; terminal CodeQL and independent approval required** |
+
 ## 2026-10-01 gap baseline source integrity
 
 | Gap | Exact evidence | Action | Status |
@@ -16,7 +22,7 @@
 
 | Gap | Exact evidence | Action | Status |
 |---|---|---|---|
-| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`; Python Security run `36799069276`; pip-audit job `110169140365` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require new exact-head hosted security evidence | **Proposed / local lock audit GREEN; hosted exact-head Checks and independent approval required** |
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | Failing predecessor `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`, Python Security run `36799069276`, job `110169140365`; repaired exact head `fe879f7b7f48f729f757e03851bf61149470ccb5`, Python Security run `36800615364`, Security Scan run `36800615435`, SAST run `36800615456`, and runtime-quality run `36800615444` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require authenticated CodeQL verdict evidence plus independent approval | **Proposed / dependency, security, SAST, and runtime-quality Checks GREEN; CodeQL run `36800615319` fail-closed pending authenticated verdicts; independent approval required** |
 
 ## 2026-10-01 trusted review archive transient transport
 
