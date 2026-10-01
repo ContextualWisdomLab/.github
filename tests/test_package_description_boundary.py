@@ -286,6 +286,44 @@ def test_workflow_checks_out_the_gate_at_its_own_commit() -> None:
     assert central[0]["with"]["persist-credentials"] is False
 
 
+def test_untrusted_build_cannot_mutate_the_inspection_runtime() -> None:
+    """Caller build code and the trusted inspector must use different jobs.
+
+    A PEP 517 backend is arbitrary caller-controlled code.  If it runs after
+    the central checkout in the same writable job, it can replace the gate or
+    poison Python startup before inspection.  The only value crossing this
+    boundary may be the built distribution artifact.
+    """
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"build-distribution", "package-description-boundary"}
+
+    build_steps = jobs["build-distribution"]["steps"]
+    inspect_job = jobs["package-description-boundary"]
+    inspect_steps = inspect_job["steps"]
+    assert inspect_job["needs"] == "build-distribution"
+    assert inspect_job["if"] == "${{ always() }}"
+    assert "needs.build-distribution.result" in str(inspect_steps[0]["env"])
+    assert '"$PRODUCER_RESULT" != "success"' in inspect_steps[0]["run"]
+
+    build_text = "\n".join(step.get("run", "") for step in build_steps)
+    inspect_text = "\n".join(step.get("run", "") for step in inspect_steps)
+    assert "uv build" in build_text
+    assert ".central-gate" not in build_text
+    assert "uv build" not in inspect_text
+    assert "python -I .central-gate/scripts/ci/package_description_boundary.py" in inspect_text
+
+    downloads = [
+        step
+        for step in inspect_steps
+        if str(step.get("uses", "")).startswith("actions/download-artifact@")
+    ]
+    assert len(downloads) == 1
+    assert downloads[0]["with"]["path"] == "package-description-input"
+    assert not downloads[0]["with"]["path"].startswith(".")
+    assert 'source_args=(--dist "package-description-input/dist")' in inspect_text
+
+
 def test_workflow_fails_closed_on_called_workflow_identity() -> None:
     """A caller SHA must never be accepted as the central gate revision."""
     text = _WORKFLOW.read_text(encoding="utf-8")
@@ -353,10 +391,23 @@ def test_workflow_falls_back_to_readme_before_a_first_release() -> None:
 
 def test_workflow_caller_checkout_does_not_persist_credentials() -> None:
     """Untrusted build code must not inherit the caller checkout credential."""
-    steps = _workflow()["jobs"]["package-description-boundary"]["steps"]
-    checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")]
-    assert len(checkouts) == 2
-    assert checkouts[0].get("with", {}).get("persist-credentials") is False
+    jobs = _workflow()["jobs"]
+    build_checkouts = [
+        step
+        for step in jobs["build-distribution"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    inspect_checkouts = [
+        step
+        for step in jobs["package-description-boundary"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert len(build_checkouts) == 1
+    assert build_checkouts[0]["with"]["path"] == ".caller-source"
+    assert build_checkouts[0]["with"]["persist-credentials"] is False
+    assert len(inspect_checkouts) == 1
+    assert inspect_checkouts[0]["with"]["path"] == ".central-gate"
+    assert inspect_checkouts[0]["with"]["persist-credentials"] is False
 
 
 def test_workflow_never_falls_back_to_readme_after_distribution_build() -> None:
@@ -365,9 +416,10 @@ def test_workflow_never_falls_back_to_readme_after_distribution_build() -> None:
     check = next(step for step in steps if "package_description_boundary.py" in step.get("run", ""))
     run = check["run"]
     assert 'if [ "$BUILD" = "none" ]; then' in run
-    assert 'source_args=(--readme "$README_PATH")' in run
-    assert 'source_args=(--dist "$DIST_PATH")' in run
-    assert '[ -d "$DIST_PATH" ]' not in run
+    assert 'source_args=(--readme "package-description-input/README.md")' in run
+    assert 'source_args=(--dist "package-description-input/dist")' in run
+    assert "README_PATH" not in run
+    assert "DIST_PATH" not in run
 
 
 def test_sdist_rejects_ambiguous_root_pkg_info(tmp_path: Path) -> None:

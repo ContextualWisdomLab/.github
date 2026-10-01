@@ -10,8 +10,9 @@ import json
 import sys
 import tarfile
 import zipfile
+from http.client import HTTPSConnection
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 try:
     from scripts.ci.release_dependency_gate import classify_platform_link
@@ -29,12 +30,78 @@ ASSET_KEYS = {
 }
 MAX_ASSET_BYTES = 16 * 1024 * 1024
 MAX_BINARY_BYTES = 32 * 1024 * 1024
+ASSET_FILENAMES = frozenset({
+    "maturin-aarch64-unknown-linux-musl.tar.gz",
+    "maturin-x86_64-unknown-linux-musl.tar.gz",
+    "maturin-aarch64-apple-darwin.tar.gz",
+    "maturin-x86_64-apple-darwin.tar.gz",
+    "maturin-x86_64-pc-windows-msvc.zip",
+})
+GITHUB_RELEASE_HOST = "github.com"
+GITHUB_RELEASE_CDN_HOST = "release-assets.githubusercontent.com"
+GITHUB_RELEASE_PATH = "/PyO3/maturin/releases/download/v1.15.0/"
+
+
+def _https_response(host: str, target: str):
+    """Open one credential-free HTTPS GET and return its owned response."""
+    connection = HTTPSConnection(host, timeout=60)
+    try:
+        connection.request(
+            "GET", target, headers={"User-Agent": "cwl-release-gate"}
+        )
+        return connection, connection.getresponse()
+    except BaseException:
+        connection.close()
+        raise
+
+
+def _close_response(connection, response) -> None:
+    """Close a response and its connection on every terminal path."""
+    try:
+        response.close()
+    finally:
+        connection.close()
 
 
 def _download(filename: str) -> bytes:
-    url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
-    with urlopen(Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60) as response:
+    """Download one admitted release asset through the fixed GitHub CDN hop."""
+    if filename not in ASSET_FILENAMES:
+        raise ValueError("maturin asset name is unexpected")
+
+    connection, response = _https_response(
+        GITHUB_RELEASE_HOST, f"{GITHUB_RELEASE_PATH}{filename}"
+    )
+    if response.status in {301, 302, 303, 307, 308}:
+        try:
+            location = response.getheader("Location") or ""
+            try:
+                redirect = urlsplit(location)
+                redirect_port = redirect.port
+            except ValueError as error:
+                raise ValueError("maturin release redirect is not trusted") from error
+            if (
+                redirect.scheme != "https"
+                or redirect.hostname != GITHUB_RELEASE_CDN_HOST
+                or redirect_port not in {None, 443}
+                or redirect.username is not None
+                or redirect.password is not None
+                or not redirect.path.startswith("/")
+                or redirect.fragment
+            ):
+                raise ValueError("maturin release redirect is not trusted")
+            target = redirect.path
+            if redirect.query:
+                target = f"{target}?{redirect.query}"
+        finally:
+            _close_response(connection, response)
+        connection, response = _https_response(GITHUB_RELEASE_CDN_HOST, target)
+
+    try:
+        if response.status != 200:
+            raise ValueError(f"maturin release download returned HTTP {response.status}")
         raw = response.read(MAX_ASSET_BYTES + 1)
+    finally:
+        _close_response(connection, response)
     if len(raw) > MAX_ASSET_BYTES:
         raise ValueError("maturin release asset exceeds inspection limit")
     return raw
@@ -68,13 +135,7 @@ def verify_assets(evidence: dict, reader: str, fetch=_download) -> None:
         raise ValueError("maturin asset evidence is incomplete")
     for key, asset in sorted(evidence["assets"].items()):
         filename = asset["asset_filename"]
-        if filename not in {
-            "maturin-aarch64-unknown-linux-musl.tar.gz",
-            "maturin-x86_64-unknown-linux-musl.tar.gz",
-            "maturin-aarch64-apple-darwin.tar.gz",
-            "maturin-x86_64-apple-darwin.tar.gz",
-            "maturin-x86_64-pc-windows-msvc.zip",
-        }:
+        if filename not in ASSET_FILENAMES:
             raise ValueError(f"{key}: maturin asset name is unexpected")
         raw = fetch(filename)
         if len(raw) > MAX_ASSET_BYTES or hashlib.sha256(raw).hexdigest() != asset["asset_sha256"]:

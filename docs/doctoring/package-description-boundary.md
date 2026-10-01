@@ -149,9 +149,15 @@ caller-SHA fallback.
 The build frontend is the exact-action-pinned `astral-sh/setup-uv` with an exact
 uv version; the inherited workflow performs no unhashed runtime `pip install`.
 The caller checkout sets `persist-credentials: false` before any project build
-backend runs. When `build` requests an sdist or wheel, a missing or empty dist
-path is an error from the central gate; only the explicit `build: none` mode may
-inspect a README, so a failed artifact boundary cannot silently downgrade itself.
+backend runs. A PEP 517 backend is nevertheless arbitrary caller code, so it
+runs in a producer job that never checks out the central gate. That job uploads
+only a fixed `package-description-input` artifact. A fresh consumer job checks
+out the gate at the called workflow SHA, downloads the artifact into a fixed
+path, and invokes the inspector with Python isolated mode (`-I`); it runs no
+caller build backend, setup-uv step, or caller-controlled interpreter. When
+`build` requests an sdist or wheel, a missing or empty staged artifact is an
+upload error; only the explicit `build: none` mode stages the selected README,
+so a failed artifact boundary cannot silently downgrade itself.
 PyPA's source-distribution and wheel specifications identify the root
 `{name}-{version}/PKG-INFO` and `{distribution}-{version}.dist-info/METADATA`
 as the authoritative metadata locations. The gate requires exactly one such

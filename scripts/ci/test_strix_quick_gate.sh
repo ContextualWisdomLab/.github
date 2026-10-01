@@ -23,6 +23,7 @@ materialize_trusted_gate_fixture() {
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$fixture_script_dir/strix_model_utils.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$fixture_script_dir/strix_evidence_binding.py"
 	cp "$REPO_ROOT/scripts/ci/strix_report_scope.py" "$fixture_script_dir/strix_report_scope.py"
+	cp "$REPO_ROOT/scripts/ci/strix_unverified_dependency.py" "$fixture_script_dir/strix_unverified_dependency.py"
 	chmod +x "$fixture_script_dir/strix_quick_gate.sh"
 }
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
@@ -349,6 +350,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" 'child_env["NPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables npm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables pnpm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["YARN_ENABLE_SCRIPTS"] = "false"' "strix gate child process disables yarn lifecycle scripts"
+	assert_file_contains "$GATE_SCRIPT" 'child_env["STRIX_TELEMETRY"] = "0"' "strix gate child process disables Strix PostHog telemetry so blocked egress cannot inject failure-signal tracebacks"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"' "strix gate child env narrowly filters the known third-party Pydantic serializer warning"
 	# contextual-orchestrator#925 (merged) fixed the gateway's rejection of
 	# stream_options.include_usage=true alongside tools -- the actual root
@@ -526,7 +528,8 @@ assert_strix_llm_file_read_is_literal_data() {
 }
 
 assert_strix_child_target_uses_constant_argument() {
-	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'REPORT_SCOPE_INSTRUCTION = (' "strix gate asks the scanner to name reviewed files so strix_report_scope.py can attest PR scope on a clean scan"
 	assert_file_contains "$GATE_SCRIPT" 'cwd=str(scan_working_dir)' "strix gate runs the child process outside the scan target"
 	assert_file_contains "$GATE_SCRIPT" 'make_pull_request_scope_dir()' "strix gate creates PR scopes under its private runtime directory"
 	assert_file_contains "$GATE_SCRIPT" 'scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"' "strix gate keeps PR scopes inside the private runtime directory"
@@ -3311,6 +3314,9 @@ run_gate_case() {
 	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
 	local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"
 	materialize_trusted_gate_fixture "$trusted_script_dir"
+	if [ "$scenario" = "pr-unverified-dependency-present" ]; then
+		printf '{"packages": {"node_modules/lodash": {"version": "4.17.20"}}}\n' >"$repo_root_dir/package-lock.json"
+	fi
 	if [ "$scenario" = "pr-changed-scope-includes-ci-dependency" ]; then
 		# Consumer source under scan; execution still uses the separate trusted runtime.
 		cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
@@ -3358,7 +3364,7 @@ set -euo pipefail
 printf '%s\n' "${STRIX_LLM:-}" >> "${FAKE_STRIX_CALL_LOG:?}"
 printf '%s\n' "${LLM_API_BASE:-<unset>}" >> "${FAKE_STRIX_API_BASE_LOG:?}"
 if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
-	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s\n' \
+	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;STRIX_TELEMETRY=%s;UNRELATED_SECRET=%s\n' \
 		"${LLM_TIMEOUT:-<unset>}" \
 		"${STRIX_MEMORY_COMPRESSOR_TIMEOUT:-<unset>}" \
 		"${STRIX_REASONING_EFFORT:-<unset>}" \
@@ -3368,6 +3374,7 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${NPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${PNPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${YARN_ENABLE_SCRIPTS:-<unset>}" \
+		"${STRIX_TELEMETRY:-<unset>}" \
 		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
@@ -4962,6 +4969,35 @@ FINDINGS
 			;;
 		esac
 		;;
+	pr-unverified-dependency-lodash | pr-unverified-dependency-present | pr-unverified-dependency-manifest-changed)
+		# Verbatim vuln-0001.md from the strix-reports artifact of fast-mlsirm#2246 run 36580588738: a free model reported a CVE in a
+		# package the Rust/Python repository does not depend on.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-unverified-dependency/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-unverified-dependency/vulnerabilities/vuln-0001.md" <<'EOS'
+# CVE-2024-1234 in lodash 4.17.20 (prototype pollution)
+
+**ID:** vuln-0001
+**Severity:** MEDIUM
+**Found:** 2026-09-29 14:22:11 UTC
+**Target:** lodash 4.17.20
+**Package:** lodash
+**Ecosystem:** npm
+**Installed Version:** 4.17.20
+**Fixed Version:** 4.17.21
+**Introduced By:** express@4.18.1
+**Dependency Chain:** express@4.18.1 > lodash@4.17.20
+**CVE:** CVE-2024-1234
+**CWE:** CWE-78
+**CVSS:** 5.6
+**Fix Effort:** Low
+EOS
+		printf '%s\n' \
+			'│  Title: CVE-2024-1234 in lodash 4.17.20 (prototype pollution)                │' \
+			'│  Severity: MEDIUM                                                            │' \
+			'│  Target: lodash 4.17.20                                                      │'
+		echo "Penetration test failed: MEDIUM finding in lodash 4.17.20"
+		exit 1
+		;;
 	pr-baseline-critical-unchanged)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -6035,7 +6071,7 @@ PY
 	if [ "$scenario" = "runtime-env-forwarding" ]; then
 		assert_file_contains \
 			"$runtime_env_log" \
-			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;UNRELATED_SECRET=<unset>" \
+			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;STRIX_TELEMETRY=0;UNRELATED_SECRET=<unset>" \
 			"scenario=$scenario runtime env forwarding"
 	fi
 	if [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
@@ -6174,10 +6210,32 @@ run_github_models_http410_case() {
 		"1"
 }
 
+run_unverified_dependency_case() {
+	local scenario="$1" expected_exit expected_message
+	if [ "$scenario" = "pr-unverified-dependency-lodash" ]; then
+		expected_exit="0"
+		expected_message="::warning::Strix finding names package(s) express, lodash absent from every dependency manifest and lockfile; recording it as unverified instead of failing closed."
+	else
+		expected_exit="1"
+		expected_message="Unable to map Strix findings to changed files; failing closed for pull request."
+	fi
+	local changed_files="sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+	if [ "$scenario" = "pr-unverified-dependency-manifest-changed" ]; then
+		# A PR that changes a manifest may add the package; keep failing closed.
+		changed_files="$changed_files"$'\n'"package.json"
+	fi
+	run_gate_case "$scenario" "openai/gpt-4o-mini" "" "$expected_exit" "$expected_message" "1" \
+		"openai/gpt-4o-mini" "https://example.invalid" "vertex_ai" "__DEFAULT__" "" "0" "MEDIUM" "0" \
+		"" "" "1200" "0" "pull_request" "$changed_files"
+}
+
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
 		return 0
+		;;
+	pr-unverified-dependency-lodash | pr-unverified-dependency-present | pr-unverified-dependency-manifest-changed)
+		run_unverified_dependency_case "$STRIX_TEST_CASE_FILTER"
 		;;
 	success)
 		run_gate_case "success" \
@@ -12334,6 +12392,10 @@ run_gate_case "pr-critical-changed" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_unverified_dependency_case pr-unverified-dependency-lodash
+run_unverified_dependency_case pr-unverified-dependency-present
+run_unverified_dependency_case pr-unverified-dependency-manifest-changed
 
 run_gate_case "pr-changed-file-nonintersecting-line" \
 	"openai/gpt-4o-mini" \
