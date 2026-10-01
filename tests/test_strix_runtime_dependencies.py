@@ -65,6 +65,19 @@ def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
     assert _locked_requirement_versions(requirements_lock, "pyjwt") == ["2.15.0"]
 
 
+def test_strix_litellm_security_pin_is_an_explicit_lock_input() -> None:
+    """Keep LiteLLM outside the CVE-2026-84377 credential leak range."""
+    requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
+        encoding="utf-8"
+    )
+    requirements_lock = (
+        REPOSITORY_ROOT / "requirements-strix-ci-hashes.txt"
+    ).read_text(encoding="utf-8")
+
+    assert _locked_requirement_versions(requirements, "litellm") == ["1.94.3"]
+    assert _locked_requirement_versions(requirements_lock, "litellm") == ["1.94.3"]
+
+
 def test_shared_urllib3_security_pin_is_an_explicit_lock_input() -> None:
     """Keep both audited dependency closures above the urllib3 CVE fixes."""
     requirement_paths = (
