@@ -3810,3 +3810,34 @@ before `"` or `}`, and an array start only before a JSON value starter.
 Existing malformed object/array nested-control cases remain fail-closed.
 Direct focused cases 8/8, Python compilation, and `git diff --check` are GREEN;
 pytest is unavailable locally, so the full hosted suite remains required.
+
+
+## 2026-10-01 balanced invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output normalization and exact-run evidence admission.
+OpenCode model output is untrusted. A nested control inside any balanced outer
+container—including a syntactically invalid one—must never acquire top-level
+identity.
+
+**Gap / RCA.** The candidate-start allowlist skipped balanced wrappers whose
+first token was invalid JSON. Inputs such as `[undefined, {control}]`,
+`[unquoted_token, {control}]`, and `{unquoted_key: {control}}` therefore
+promoted the nested exact-run control. The earlier `NaN`/`Infinity` repair
+covered Python JSON extensions but not the general invalid-token boundary.
+
+**RED → GREEN / action.** RED
+`b5a0507b8ee4ec70cc5fca751f34df98719f219b` reproduces all three promotions.
+GREEN `443c29aa6f56735f7fcf0ee6a550b6bad5f7e2f8` treats an invalid starter as a
+malformed outer container when its token reaches a structural separator before
+another opener; the proven unclosed prose-delimiter recovery remains intact.
+Focused parser verification is 118/118 GREEN. Full repository verification
+reached 5,318 passed, 7 skipped, and 40 subtests; its sole failure was the
+published-commit ancestry test because the isolated `git archive` intentionally
+has no `.git` directory. Warnings-fatal compilation and diff whitespace checks
+are GREEN. Exact Git tree `dccb57a152c21600305c0eabac06cb29de2e0cf7`
+preserves source mode `100755`.
