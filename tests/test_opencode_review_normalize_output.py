@@ -2568,6 +2568,30 @@ def test_iter_json_objects_does_not_promote_control_from_non_finite_array(
     assert values[0][1] == nested_control
 
 
+@pytest.mark.parametrize(
+    "malformed_outer",
+    [
+        "[undefined, <control>]",
+        "[unquoted_token, <control>]",
+        "{unquoted_key: <control>}",
+    ],
+)
+def test_iter_json_objects_does_not_promote_control_from_invalid_outer_token(
+    malformed_outer,
+):
+    """A balanced invalid outer token cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "review prose " + malformed_outer.replace(
+        "<control>", json.dumps(nested_control)
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
 @pytest.mark.parametrize("approve_first", [True, False])
 def test_main_rejects_conflicting_current_run_controls_without_rewriting(
     tmp_path, capsys, approve_first
