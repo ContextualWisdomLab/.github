@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`; Python Security run `36799069276`; pip-audit job `110169140365` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require new exact-head hosted security evidence | **Proposed / local lock audit GREEN; hosted exact-head Checks and independent approval required** |
+
 ## 2026-10-01 PyJWT recursion denial-of-service closure
 
 | Gap | Exact evidence | Action | Status |
