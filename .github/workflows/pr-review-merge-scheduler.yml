@@ -161,13 +161,35 @@ jobs:
           inventory_dir="$(mktemp -d)"
           trap 'rm -rf "$inventory_dir"' EXIT
           : >"$inventory_dir/active-arrays.jsonl"
-          for active_status in requested waiting pending queued in_progress; do
-            gh api --paginate --slurp \
-              "repos/${TARGET_REPOSITORY}/actions/workflows/pr-review-merge-scheduler.yml/runs?event=pull_request_target&status=${active_status}&per_page=100" \
-              >"$inventory_dir/${active_status}.json"
-            jq -c '[.[] | .workflow_runs[]?]' \
-              "$inventory_dir/${active_status}.json" \
-              >>"$inventory_dir/active-arrays.jsonl"
+          for inventory_pass in 1 2; do
+            for active_status in requested waiting pending queued in_progress; do
+              inventory_path="$inventory_dir/${inventory_pass}-${active_status}.json"
+              gh api --paginate --slurp \
+                "repos/${TARGET_REPOSITORY}/actions/workflows/pr-review-merge-scheduler.yml/runs?event=pull_request_target&status=${active_status}&per_page=100" \
+                >"$inventory_path"
+              if ! inventory_counts="$(jq -er '
+                if type == "array" and length > 0
+                  and all(.[]; (.total_count | type) == "number")
+                  and all(.[]; (.workflow_runs | type) == "array")
+                then
+                  [([.[] | .workflow_runs[]] | length), (map(.total_count) | max)]
+                  | @tsv
+                else
+                  error("invalid workflow-run inventory")
+                end
+              ' "$inventory_path")"; then
+                echo "::error::Scheduler workflow-run inventory was invalid."
+                exit 1
+              fi
+              IFS=$'\t' read -r collected_count expected_count <<<"$inventory_counts"
+              if [ "$collected_count" -ne "$expected_count" ]; then
+                echo "::error::Scheduler workflow-run inventory was incomplete for ${active_status}: expected=${expected_count} collected=${collected_count}."
+                exit 1
+              fi
+              jq -c '[.[] | .workflow_runs[]]' \
+                "$inventory_path" \
+                >>"$inventory_dir/active-arrays.jsonl"
+            done
           done
           workflow_runs="$(jq -sc 'add // [] | unique_by(.id)' "$inventory_dir/active-arrays.jsonl")"
           mapfile -t superseded_run_ids < <(

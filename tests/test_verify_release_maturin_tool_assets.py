@@ -201,11 +201,14 @@ def test_maturin_download_closes_unsuccessful_responses_and_http_errors(monkeypa
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
     assert closed == ["response"]
 
+    class ErrorBody(io.BytesIO):
+        def close(self):
+            closed.append("http-error")
+            super().close()
+
+    error_body = ErrorBody()
     transport_error = urllib.error.HTTPError(
-        "https://github.com/asset", 502, "Bad Gateway", {}, io.BytesIO()
-    )
-    monkeypatch.setattr(
-        transport_error, "close", lambda: closed.append("http-error")
+        "https://github.com/asset", 502, "Bad Gateway", {}, error_body
     )
 
     class ErrorOpener:
@@ -221,6 +224,7 @@ def test_maturin_download_closes_unsuccessful_responses_and_http_errors(monkeypa
     with pytest.raises(ValueError, match="HTTP 502"):
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
     assert closed == ["response", "http-error"]
+    assert error_body.closed
 
 
 def test_maturin_download_rejects_unlisted_name_before_network(monkeypatch):

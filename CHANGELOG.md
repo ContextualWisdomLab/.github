@@ -29,7 +29,8 @@
 - Refactor the bounded Maturin asset downloader so successful and rejected
   responses share one unconditional close path while `HTTPError` keeps its own
   explicit close path. A new regression exercises a non-200 response and an
-  opener-raised HTTP error. This removes an impossible optional-response branch
+  opener-raised HTTP error through a close-observing body without replacing the
+  error's real `close()` method. This removes an impossible optional-response branch
   without changing hosts, redirects, byte limits, hashes, or fail-closed error
   mapping; the focused suite is 17 passed with 100% statement and branch
   coverage. The trusted full-suite workflow now also tracks the verifier source

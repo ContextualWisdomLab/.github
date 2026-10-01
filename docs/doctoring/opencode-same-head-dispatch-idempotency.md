@@ -44,8 +44,11 @@ inventory. Before a current-head POST, the required workflow revalidates live
 repository/PR/head authority and cancels only canonical older-head central
 runs. A refused cancellation, failed status lookup, invalid state, terminal
 non-cancelled conclusion, or accepted cancellation that remains active after
-the bounded poll fails closed without a new dispatch. A final live-authority
-read guards the POST.
+the bounded status reads fails closed without a new dispatch. Those reads do
+not sleep inside the required job: the nonblocking capacity contract releases
+the runner and lets a later trusted scheduler admission retry instead of
+holding scarce capacity while GitHub converges. A final live-authority read
+guards the POST.
 
 The merge scheduler separately binds native concurrency to the exact PR head
 and uses GitHub's bounded `queue: max` FIFO instead of lossy single-pending
@@ -53,7 +56,10 @@ replacement. `synchronize` and `closed` events run a metadata-only cleanup job
 with `actions: write`; it inventories every active status, revalidates the live
 PR/head immediately before each mutation, cancels only predecessor-head work
 (or all final-head work on close), and accepts completion only after GitHub
-reports `completed/cancelled`.
+reports `completed/cancelled`. Two complete status passes prevent a state
+transition from escaping between filtered queries; every response reconciles
+the collected row count with `total_count` and fails closed if GitHub's
+filtered-search ceiling truncates the inventory.
 
 Producer observation and POST are not atomic, so the receiver first authorizes
 the exact actor/sender pair, repository allowlist membership, and complete
@@ -112,7 +118,8 @@ lossy native receiver concurrency; execution fixtures prove exact older-head
 cancellation, deduplication, asynchronous cancellation continuation, and
 fail-closure when a cancellation is refused, remains active, returns an invalid
 state, or terminates with a non-cancelled conclusion. Scheduler cleanup
-fixtures also prove concurrent-head-movement preservation and bounded terminal
+fixtures also prove concurrent-head-movement preservation, transition-safe
+two-pass discovery, inventory-completeness rejection, and bounded terminal
 cancellation verification.
 Receiver fixtures execute absent, active-owner, terminal-owner, self-rerun,
 different-head takeover, and branch-initialization-race lease paths.
@@ -129,13 +136,13 @@ receiver as exact Git blob
 `5c87c74863ef6872c1ef7136d5b330071920c09e`.
 
 Local exact-tree verification on the stacked successor base
-`813f16fad7528b035d6ae4386cd176c9a67413c1`:
+`86ddef63ed306d4c7d56d051d9a72570e7d358a5`:
 
 - required-workflow, nonblocking capacity, queue, receiver, and integrity-pin
-  contracts after independent-review repair: `248 passed, 1 skipped`;
-- complete Python 3.14 warnings-fatal suite: `5356 passed, 7 skipped, 40
+  contracts after independent-review repair: `233 passed`;
+- complete Python 3.14 warnings-fatal suite: `5362 passed, 5 skipped, 40
   subtests passed`, with
-  owned production `18729/18729` statements and `7642/7642` branches,
+  owned production `18767/18767` statements and `7648/7648` branches,
   Docstring `100%`, and zero warnings.
 
 Protected merge still requires hosted exact-head security and quality Checks,

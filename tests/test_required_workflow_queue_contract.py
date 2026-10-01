@@ -1540,6 +1540,7 @@ def _run_merge_scheduler_cleanup(
     tmp_path: Path,
     pull_states: list[dict[str, object]],
     run_states: list[dict[str, object]],
+    inventory_responses: list[dict[str, object]] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     """Execute predecessor cleanup against stateful GitHub API fixtures."""
     if shutil.which("jq") is None:
@@ -1557,12 +1558,34 @@ def _run_merge_scheduler_cleanup(
     calls = tmp_path / "calls"
     pulls = tmp_path / "pulls"
     runs = tmp_path / "runs"
+    inventories = tmp_path / "inventories"
     pulls.write_text(
         "\n".join(json.dumps(state) for state in pull_states) + "\n",
         encoding="utf-8",
     )
     runs.write_text(
         "\n".join(json.dumps(state) for state in run_states) + "\n",
+        encoding="utf-8",
+    )
+    if inventory_responses is None:
+        default_inventory = {
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "id": 100,
+                    "status": "queued",
+                    "pull_requests": [
+                        {
+                            "number": 7,
+                            "head": {"sha": "b" * 40},
+                        }
+                    ],
+                }
+            ],
+        }
+        inventory_responses = [default_inventory] * 10
+    inventories.write_text(
+        "\n".join(json.dumps(response) for response in inventory_responses) + "\n",
         encoding="utf-8",
     )
     fake_gh = fake_bin / "gh"
@@ -1580,7 +1603,7 @@ next_line() {
 if [[ "$*" == *"/pulls/7"* ]]; then
   next_line "$FAKE_PULLS"
 elif [[ "$*" == *"actions/workflows/pr-review-merge-scheduler.yml/runs"* ]]; then
-  printf '%s\n' '[{"workflow_runs":[{"id":100,"status":"queued","pull_requests":[{"number":7,"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}]}]'
+  printf '[%s]\n' "$(next_line "$FAKE_INVENTORIES")"
 elif [[ "$*" == *"actions/runs/100/force-cancel"* ]]; then
   exit 0
 elif [[ "$*" == *"actions/runs/100"* ]]; then
@@ -1601,6 +1624,7 @@ fi
             "FAKE_CALLS": str(calls),
             "FAKE_PULLS": str(pulls),
             "FAKE_RUNS": str(runs),
+            "FAKE_INVENTORIES": str(inventories),
             "GH_TOKEN": "synthetic-actions-token",
             "GITHUB_RUN_ID": "999",
             "TARGET_REPOSITORY": "owner/repo",
@@ -1664,6 +1688,51 @@ def test_scheduler_cleanup_verifies_accepted_cancelled_state(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     assert calls.count("actions/runs/100 --jq") == 2
     assert "Verified cancelled scheduler run 100." in result.stdout
+
+
+def test_scheduler_cleanup_second_inventory_pass_catches_state_transition(
+    tmp_path: Path,
+) -> None:
+    """A run moving between filtered states remains visible on the second pass."""
+    empty_inventory = {"total_count": 0, "workflow_runs": []}
+    transitioned_inventory = {
+        "total_count": 1,
+        "workflow_runs": [
+            {
+                "id": 100,
+                "status": "in_progress",
+                "pull_requests": [
+                    {"number": 7, "head": {"sha": "b" * 40}}
+                ],
+            }
+        ],
+    }
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [empty_inventory] * 5
+        + [empty_inventory] * 4
+        + [transitioned_inventory],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("actions/workflows/pr-review-merge-scheduler.yml/runs") == 10
+    assert "/actions/runs/100/force-cancel" in calls
+
+
+def test_scheduler_cleanup_fails_closed_on_truncated_inventory(
+    tmp_path: Path,
+) -> None:
+    """Never treat GitHub's filtered-search ceiling as a complete snapshot."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()],
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [{"total_count": 1001, "workflow_runs": []}],
+    )
+    assert result.returncode == 1
+    assert "inventory was incomplete" in result.stdout
+    assert "/force-cancel" not in calls
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
