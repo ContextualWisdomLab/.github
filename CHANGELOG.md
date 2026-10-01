@@ -8,7 +8,9 @@
   mapping; the focused suite is 17 passed with 100% statement and branch
   coverage. The trusted full-suite workflow now also tracks the verifier source
   and its focused test, so a future lifecycle change cannot omit the repository
-  coverage gate that detected this regression.
+  coverage gate that detected this regression. The pull-request trigger admits
+  stacked canonical-owner bases as well as `main`; the protected-branch push
+  trigger remains restricted to `main`.
 
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 

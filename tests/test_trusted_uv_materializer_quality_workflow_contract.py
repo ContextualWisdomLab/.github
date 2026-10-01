@@ -46,6 +46,16 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         assert workflow.count(required_path) == 2
 
 
+def test_quality_workflow_admits_stacked_pull_requests() -> None:
+    """A non-default canonical owner base must not suppress exact-head evidence."""
+
+    pull_request_trigger = _workflow_text().split("  pull_request:\n", 1)[1].split(
+        "  push:\n", 1
+    )[0]
+
+    assert "branches:" not in pull_request_trigger
+
+
 def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
     """Quality evidence executes from the exact PR head with least privilege."""
 

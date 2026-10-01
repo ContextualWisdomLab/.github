@@ -2,7 +2,6 @@ name: Trusted uv Materializer Quality CI
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
       - "scripts/ci/materialize_base_python_requirements.py"
