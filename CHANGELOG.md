@@ -1,3 +1,14 @@
+### SBOM inventory publication preserves owner repairs
+
+- Replaced the inventory publisher's ancestry-only `ours` merge with an
+  executable lineage reconciler. A refresh now admits a prior publication
+  branch only when its branch-owned delta is limited to the generated JSON and
+  Markdown inventories; every non-inventory delta or conflict stops before
+  publication. Real Git fixture contracts prove repair-loss refusal and the
+  safe generated-only two-parent path. This repairs the control-plane cause of
+  `.github#1678@7598436e`, where the scheduled publisher silently restored
+  vulnerable lock pins despite keeping their repaired commits as ancestors.
+
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected

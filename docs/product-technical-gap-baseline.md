@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 SBOM publication lineage incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SBOM-PUBLICATION-TREE-01 | **Source repair proposed; protected integration and post-merge publication proof pending** | Scheduler run `36836856075`, job `110286232014`, published `.github#1678@7598436eb9126db7bdff00fcf31f6fda15d0f58f` with an ancestry-only `ours` merge. The prior owner repairs remained ancestors while 23 non-inventory paths disappeared from the tree. OSV `110286490852`, dependency-review `110286490849`, Trivy `110286490623`, and pip-audit `110286478880` then failed on restored vulnerable pins. | Canonical owner is `.github/workflows/sbom-inventory-scheduler.yml`. Reject a prior publication head before mutation whenever its branch-owned delta contains anything outside the two generated inventory paths; only a generated-only predecessor may enter ordinary two-parent reconciliation, with the current inventory authoritative and every other conflict fail-closed. RED/GREEN real-Git contracts, exact-head hosted Checks, ordinary protected merge, then a forward repair of #1678 and fresh scheduled publication tree comparison are required. |
+
 ## 2026-10-01 Maturin response-lifecycle coverage closure
 
 | Gap | Exact evidence | Action | Status |

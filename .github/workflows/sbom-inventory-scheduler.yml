@@ -190,24 +190,22 @@ jobs:
           git config user.email "cwl-sbom-inventory@users.noreply.github.com"
           git add docs/sbom
           git commit -m "chore: refresh org SBOM inventory"
+          generated_inventory_head="$(git rev-parse HEAD)"
 
           # persist-credentials remains false; configure Git's credential helper
           # from the already masked GH_TOKEN without putting the token in a URL.
           gh auth setup-git
 
-          # Preserve the existing publication head as ancestry without trusting
-          # its generated tree. A concurrent writer makes the final normal push
-          # fail closed instead of rewriting remote history.
+          # Refuse to overwrite any prior non-inventory change. Only a
+          # generated-only predecessor may merge, with this run's two
+          # inventory files authoritative. A concurrent writer still makes the
+          # final normal push fail instead of rewriting remote history.
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
             git fetch --no-tags origin "refs/heads/$branch"
             previous_head="$(git rev-parse FETCH_HEAD)"
-            if ! git merge-base --is-ancestor "$previous_head" HEAD; then
-              git merge \
-                --strategy=ours \
-                --no-edit \
-                -m "chore: preserve SBOM inventory publication lineage" \
-                "$previous_head"
-            fi
+            scripts/ci/reconcile_sbom_publication_lineage.sh \
+              "$previous_head" \
+              "$generated_inventory_head"
           fi
 
           git push origin "HEAD:refs/heads/$branch"
