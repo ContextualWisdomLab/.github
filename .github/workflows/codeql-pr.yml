@@ -18,7 +18,7 @@ name: CodeQL PR
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Do not restrict the base ref: the org required-workflow ruleset already
     # scopes this to each repository's actual default branch via
     # ref_name: ["~DEFAULT_BRANCH"], whatever it is named. A hardcoded
@@ -58,8 +58,10 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
-    if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+    # Organization-required workflow runs do not re-enter on ready_for_review,
+    # so sibling repositories must scan Draft heads. Native .github runs can
+    # skip Draft admission because their ready_for_review event is delivered.
+    if: github.event.action != 'closed' && (github.event.pull_request.draft == false || github.repository != 'ContextualWisdomLab/.github')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:

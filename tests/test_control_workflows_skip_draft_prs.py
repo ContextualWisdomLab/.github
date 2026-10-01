@@ -1,10 +1,12 @@
-"""Control-pool review workflows must not occupy a runner for draft pull requests.
+"""Control-pool review workflows preserve their event-specific Draft boundary.
 
 On 2026-09-29, 325 of 836 queued control-pool runs were for draft PRs; each
 only concluded "draft, no verdict required". Entry jobs now skip drafts at
 the job level, so no runner is assigned. This is safe only because every
-workflow re-runs on `ready_for_review` (same head), where the real gate runs,
-and because merge readiness comes from an opencode-agent review, not from
+native workflow re-runs on `ready_for_review` (same head), where the real gate
+runs. Organization-required workflow injection is different: GitHub does not
+re-enter it on `ready_for_review`, so those consumers must keep scanning Draft
+heads. Merge readiness still comes from an opencode-agent review, not from
 these check results.
 """
 
@@ -27,6 +29,10 @@ WORKFLOWS = [
 DRAFT_GUARD = (
     "(github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' "
     "|| github.event.action == 'closed')"
+)
+RULESET_REQUIRED_DRAFT_GUARD = (
+    "github.event.pull_request.draft == false || "
+    "github.repository != 'ContextualWisdomLab/.github'"
 )
 
 
@@ -74,7 +80,13 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
     for job_name, job in _entry_jobs(doc).items():
         if _is_cancellation_job(job_name, job):
             continue
-        assert DRAFT_GUARD in str(job.get("if", "")), f"{name}:{job_name} lacks the draft guard"
+        guard = str(job.get("if", ""))
+        if name == "codeql-pr.yml":
+            assert RULESET_REQUIRED_DRAFT_GUARD in guard, (
+                f"{name}:{job_name} could starve ruleset consumers after Draft"
+            )
+        else:
+            assert DRAFT_GUARD in guard, f"{name}:{job_name} lacks the draft guard"
 
 
 def test_opencode_verdict_gate_still_runs_on_ready_for_review() -> None:
