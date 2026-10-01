@@ -244,6 +244,61 @@ def test_sbom_inventory_publication_rejects_generated_non_inventory_paths(
     assert not (repository_path / ".git" / "MERGE_HEAD").exists()
 
 
+def test_sbom_inventory_publication_rejects_reverted_owner_history(
+    tmp_path: Path,
+) -> None:
+    """A clean final tree must not smuggle owner commits into publication ancestry."""
+    repository_path = tmp_path / "reverted-owner-history-repository"
+    repository_path.mkdir()
+    _git(repository_path, "init", "-b", "main")
+    _git(repository_path, "config", "user.name", "SBOM Fixture")
+    _git(repository_path, "config", "user.email", "sbom-fixture@example.invalid")
+    _commit_file(repository_path, "owner.txt", "protected\n", "base owner")
+    _commit_file(repository_path, "docs/sbom/inventory.md", "base inventory\n", "base inventory")
+    _commit_file(repository_path, "docs/sbom/inventory.json", "{}\n", "base inventory json")
+
+    _git(repository_path, "switch", "-c", "publication")
+    owner_commit = _commit_file(repository_path, "owner.txt", "smuggled\n", "smuggle owner change")
+    _git(repository_path, "revert", "--no-edit", owner_commit)
+    previous_head = _commit_file(
+        repository_path,
+        "docs/sbom/inventory.md",
+        "previous inventory\n",
+        "previous inventory",
+    )
+
+    _git(repository_path, "switch", "main")
+    _commit_file(repository_path, "application.txt", "protected main update\n", "advance main")
+    generated_head = _commit_file(
+        repository_path,
+        "docs/sbom/inventory.md",
+        "fresh inventory\n",
+        "generate inventory",
+    )
+
+    result = subprocess.run(
+        [str(LINEAGE_RECONCILER.resolve()), previous_head, generated_head],
+        cwd=repository_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "prior publication history contains non-inventory change" in result.stderr
+    assert _git(repository_path, "rev-parse", "HEAD").stdout.strip() == generated_head
+    ancestry = _git(
+        repository_path,
+        "merge-base",
+        "--is-ancestor",
+        owner_commit,
+        "HEAD",
+        check=False,
+    )
+    assert ancestry.returncode != 0
+    assert not (repository_path / ".git" / "MERGE_HEAD").exists()
+
+
 def test_sbom_inventory_publication_rejects_non_inventory_workspace_side_effects(
     tmp_path: Path,
 ) -> None:

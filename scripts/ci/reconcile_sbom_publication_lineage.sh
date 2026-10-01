@@ -67,6 +67,33 @@ for prior_change_path in "${prior_change_paths[@]}"; do
   esac
 done
 
+# A final-tree diff is insufficient here: an untrusted publication branch can
+# change an owner file and revert it before its head, leaving no final delta
+# while still making both commits ancestors of the next publication. Inspect
+# each reachable commit against its first parent so merge-resolution changes
+# and hidden change/revert pairs cannot cross the inventory-only boundary.
+mapfile -t prior_history_commits < <(
+  git rev-list "${lineage_base}..${previous_head}"
+)
+
+for prior_history_commit in "${prior_history_commits[@]}"; do
+  prior_history_parent="$(git rev-parse "${prior_history_commit}^1")"
+  mapfile -d '' -t prior_history_change_paths < <(
+    git diff --name-only -z "$prior_history_parent" "$prior_history_commit"
+  )
+  for prior_history_change_path in "${prior_history_change_paths[@]}"; do
+    case "$prior_history_change_path" in
+      docs/sbom/inventory.json|docs/sbom/inventory.md) ;;
+      *)
+        echo \
+          "prior publication history contains non-inventory change: $prior_history_change_path" \
+          >&2
+        exit 1
+        ;;
+    esac
+  done
+done
+
 merge_completed=true
 if ! git merge \
   --no-commit \

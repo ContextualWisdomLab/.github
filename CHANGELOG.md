@@ -14,6 +14,10 @@
   uncommitted owner-path changes fail before ancestry reconciliation,
   including the first publication path where no remote automation branch
   exists yet.
+- Inspect every commit reachable only from the prior publication head against
+  its first parent. A change-then-revert pair can no longer hide an owner-file
+  mutation from the final-tree allowlist and smuggle both commits into the next
+  publication's ancestry.
 
 ### Agent runtime quality compares the live base graph
 
