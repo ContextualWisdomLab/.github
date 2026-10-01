@@ -12,6 +12,12 @@
 |---|---|---|---|
 | The generated Noema document-reader lock selected `fast-uri` 3.1.7 and `ip-address` 10.7.0 after CVE-2026-86472, CVE-2026-101911, and CVE-2026-101912 were published | Security Scan run `36773087489`; Trivy job `110084194330`; exact predecessor `.github#2530@a99784219305d1b6e14cf76f0acea30c5ee45e21` | At the central `.github` owner, regenerate only the two transitive entries to `fast-uri` 3.1.8 and the first patched `ip-address` 10.7.1 release, scan every hoisted or nested lock entry in a regression contract, reproduce with `npm ci`, and require a zero-vulnerability npm audit | **Proposed / local RED→GREEN and audit complete; exact-head hosted security and independent approval required** |
 
+## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`; Python Security run `36799069276`; pip-audit job `110169140365` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require new exact-head hosted security evidence | **Proposed / local lock audit GREEN; hosted exact-head Checks and independent approval required** |
+
 ## 2026-10-01 trusted review archive transient transport
 
 | Gap | Exact evidence | Action | Status |
