@@ -31,13 +31,6 @@ on:
   repository_dispatch:
     types: [codeql-scan, codeql-scan-v2]
 
-concurrency:
-  group: >-
-    codeql-scan-dispatch-${{
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number || github.run_id }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -45,7 +38,7 @@ jobs:
   validate-dispatch:
     name: validate-dispatch
     runs-on:
-      group: CWL central CodeQL
+      group: CWL central control
       labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:
@@ -866,7 +859,7 @@ jobs:
       && needs.scan.result != 'cancelled'
       && needs.scan.result != 'skipped'
     runs-on:
-      group: CWL central CodeQL
+      group: CWL central control
       labels: [self-hosted, linux, x64]
     timeout-minutes: 8
     permissions:

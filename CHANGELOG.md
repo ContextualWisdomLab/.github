@@ -296,6 +296,21 @@
 
 # Changelog
 
+### CodeQL preserves exact active dispatches and isolates scarce scan capacity
+
+- The required-workflow coordinator now recognizes a trusted, exact active
+  central handler run before OIDC exchange and does not enqueue an identical
+  replacement on later attempts. The match binds protected path/event,
+  repo/PR/head/base/required-run/source title, trusted actor, and every active
+  GitHub run state; inexact, untrusted, and terminal runs cannot suppress
+  recovery. The protected handler no longer uses repository/PR concurrency
+  before validating payload authority. Its validation and settlement jobs use
+  the central control pool, while only the CodeQL matrix scan consumes the
+  scarce CodeQL pool. This fixes the reproduced `.github#2531` chain in which
+  run `36815888197` replaced queued run `36804251663` for identical work.
+  Focused CodeQL and queue contracts pass 184 tests; fresh hosted exact-head
+  evidence and independent approval remain required.
+
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
 All notable changes to the organization automation repository are documented in

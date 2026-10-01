@@ -22,7 +22,6 @@ def workflow_text(name: str) -> str:
 def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
-        ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
         ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
@@ -30,6 +29,34 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
         text = workflow_text(name)
         assert text.count(f"    runs-on:\n      group: {group}\n      labels: [self-hosted, linux, x64]") == jobs
         assert "runs-on: ubuntu-24.04" not in text
+
+    codeql = workflow_text("codeql-scan-dispatch.yml")
+    codeql_group = "    runs-on:\n      group: CWL central CodeQL\n      labels: [self-hosted, linux, x64]"
+    control_group = "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]"
+    validate_block = codeql.split("  validate-dispatch:\n", 1)[1].split(
+        "\n  scan:\n", 1
+    )[0]
+    scan_block = codeql.split("  scan:\n", 1)[1].split(
+        "\n  settle-required-run:\n", 1
+    )[0]
+    settlement_block = codeql.split("  settle-required-run:\n", 1)[1]
+    assert codeql.count(codeql_group) == 1
+    assert codeql.count(control_group) == 2
+    assert control_group in validate_block
+    assert codeql_group in scan_block
+    assert control_group in settlement_block
+    assert "runs-on: ubuntu-24.04" not in codeql
+
+
+def test_codeql_dispatch_does_not_cancel_from_unvalidated_arrival_order() -> None:
+    """A delayed stale payload must not evict current exact-head CodeQL work."""
+    workflow = workflow_text("codeql-scan-dispatch.yml")
+    header = workflow.split("\npermissions:\n", 1)[0]
+
+    # Native workflow concurrency is evaluated before actor and live-PR
+    # validation. Any shared payload-derived group therefore lets arrival order
+    # cancel work that has not yet been proven stale.
+    assert not re.search(r"(?m)^concurrency:", header)
 
 
 def test_reusable_scheduler_keeps_consumer_runner_access() -> None:

@@ -67,11 +67,22 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
             self.assertIn("|| '\"ubuntu-24.04\"'", selector)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
-        """Require validation, scan, and attempt wake jobs in the dedicated group."""
+        """Keep only heavy scans on CodeQL capacity and metadata on control."""
         workflow = CODEQL_SCAN_DISPATCH.read_text(encoding="utf-8")
+        validate_block = workflow.split("  validate-dispatch:\n", 1)[1].split(
+            "\n  scan:\n", 1
+        )[0]
+        scan_block = workflow.split("  scan:\n", 1)[1].split(
+            "\n  settle-required-run:\n", 1
+        )[0]
+        settlement_block = workflow.split("  settle-required-run:\n", 1)[1]
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("group: CWL central CodeQL"), 3)
+        self.assertEqual(workflow.count("group: CWL central CodeQL"), 1)
+        self.assertEqual(workflow.count("group: CWL central control"), 2)
         self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 3)
+        self.assertIn("group: CWL central control", validate_block)
+        self.assertIn("group: CWL central CodeQL", scan_block)
+        self.assertIn("group: CWL central control", settlement_block)
 
     def test_python_security_uses_explicit_supported_image(self) -> None:
         """Require all three Python Security jobs to pin Ubuntu 24.04."""

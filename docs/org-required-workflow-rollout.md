@@ -179,14 +179,17 @@ see the historical marker above.
 
 ### Audit tool coverage
 
-`scripts/ci/audit_central_required_workflows.py` defines all nine canonical
-required workflow paths (`codeql-pr.yml` deliberately excluded, per the
-2026-09-03 correction above) and treats the live policy as an exact
-inventory: every required path must appear exactly once with repository id
-`1274066402` and `refs/heads/main`, while any additional well-formed workflow
-path — including a re-added `codeql-pr.yml` — is reported as
-`unexpected workflow present in required set` drift instead of silently
-passing. A malformed workflow entry (not an object, or missing a string
+`scripts/ci/audit_central_required_workflows.py` defines all ten canonical
+required workflow paths and treats the live policy as an exact inventory:
+every required path must appear exactly once with repository id `1274066402`
+and `refs/heads/main`, while any additional well-formed workflow path is
+reported as `unexpected workflow present in required set` drift instead of
+silently passing. The 2026-09-03 nine-path exclusion was historical: it removed
+the incompatible `codeql-pr.yml` that embedded CodeQL actions. ADR-0025 later
+re-admitted the path only after it became a lightweight dispatch producer and
+verdict consumer; native `codeql-scan-dispatch.yml` remains outside the
+required-workflow ruleset and owns the CodeQL actions. A malformed workflow
+entry (not an object, or missing a string
 `path`) is now reported by its index (`central required workflow entry N is
 malformed`) instead of being silently skipped, so a structurally broken
 ruleset payload surfaces as loud audit failures rather than a quietly

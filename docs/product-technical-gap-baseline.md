@@ -2,8 +2,8 @@
 
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
+2026-08-26 스냅샷의 보호 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
+2026-08-26 스냅샷 기준 현재 열린 PR 수: **107** (아래 표에 당시 전체 목록 포함)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -11,7 +11,10 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@f79c8f2e…`에서 이 모순을 잡는 계약 테스트가 RED였고, scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Ruleset scope와 native trigger scope를 분리한 ordinary commit을 #2537 exact head에 게시한 뒤 후속 `.github#2548`에 비강제 ordinary merge로 계보를 전달한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
+| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@f79c8f2e…`는 역사적 RED이고, 재수집한 repair base는 `.github#2537@3d2656ba…`다. scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Ruleset scope와 native trigger scope를 분리한 ordinary commit을 #2537 exact head에 게시한 뒤 후속 `.github#2548`에 비강제 ordinary merge로 계보를 전달한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
+| CONTROL-CODEQL-ACTIVE-DISPATCH-IDEMPOTENCY-01 | **Proposed — live RED reproduced; focused owner contracts GREEN; hosted acceptance pending** | `.github#2531@7900ba4c…`의 required run `36804208074` attempt 1은 exact central run `36804251663`을 만들었지만 terminal receipt가 아직 없었다. attempt 2 coordinator가 동일 title의 run `36815888197`을 다시 생성했고, 앞선 durable queued run은 2초 뒤 취소됐다. owner repair는 protected path/event, full repo/PR/head/base/required-run/source title, trusted actor와 다섯 active state를 모두 일치시킨 run이 있으면 OIDC/token/POST 전에 재사용한다. wrong title/actor와 terminal run은 recovery를 막지 않는다. | Canonical owner는 `.github/workflows/codeql-pr.yml` coordinator다. Consumer는 중복 억제를 복사하지 않는다. Fresh hosted exact-head Checks와 독립 승인 전까지 #2537은 Draft/Proposed다. |
+| CONTROL-CODEQL-PREVALIDATION-CANCELLATION-01 | **Proposed — contract RED→GREEN; protected rollout pending** | `codeql-scan-dispatch.yml`의 repository/PR workflow concurrency는 actor·head·base·required-run·source validation보다 먼저 평가됐다. 따라서 늦게 도착한 stale payload가 current handler를 취소한 뒤 자기 자신은 validation에서 거절될 수 있었다. repair tree는 이 pre-validation cancellation을 제거하고 trusted metadata validation/settlement를 `CWL central control`에, 실제 matrix scan만 `CWL central CodeQL`에 둔다. focused CodeQL/queue suite는 184 passed다. | Canonical owner는 protected central handler다. Scheduler의 freshly revalidated Draft/closed retirement와 coordinator exact-active dedupe가 lifecycle을 소유하며, runner capacity나 scanner evidence를 우회하지 않는다. |
+| CONTROL-CENTRAL-DISPATCH-RETIREMENT-01 | **Proposed — local GREEN; protected rollout pending** | `.github#2537@3d2656ba…`의 scheduler repair는 protected CodeQL/OpenCode/Strix run-name을 파싱하고 destructive boundary에서 run과 PR을 다시 읽어 closed 또는 stale-head run만 취소한다. Current-head, malformed, unrelated, unreadable authority는 보존한다. | Canonical owner는 `.github` merge scheduler다. 이 stale retirement는 retry나 plan-level capacity restoration이 아니며, hosted evidence와 independent review가 필요하다. |
 
 ### 2026-10-01 OpenCode approval-order delta
 
@@ -3896,3 +3899,37 @@ all 458 focused scheduler and admission tests pass with warnings fatal. Required
 checks, review admission, scanner verdicts, concurrency keys, and merge policy
 are unchanged. Fresh hosted exact-head checks and independent review remain
 mandatory.
+
+## 2026-10-01 CodeQL exact-active admission and pre-validation cancellation
+
+**Status:** Proposed owner repair; focused local GREEN, protected integration,
+hosted exact-head evidence, and qualifying independent approval pending.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns both the lightweight
+required-workflow producer and the protected native CodeQL handler. Product
+repositories consume the released contract and neither inspect central queues
+nor manufacture admission receipts.
+
+**Gap / RCA.** Consumer `.github#2531@7900ba4c…` required run `36804208074`
+created exact central run `36804251663`. It remained queued without a terminal
+receipt. Attempt 2 therefore dispatched the identical title as run
+`36815888197`; repository/PR workflow concurrency cancelled the first run two
+seconds later and moved the same durable work to the back of the queue. A fresh
+census found 406 queued `repository_dispatch` runs, 291 owned by the CodeQL
+handler. The handler's shared concurrency key also acted before protected
+actor and live PR identity validation, so arrival order—not validated
+authority—could select the surviving run.
+
+**Action / evidence.** The coordinator now paginates handler runs no earlier
+than the exact required run, then suppresses a new POST only for a trusted
+`opencode-agent` run matching the protected workflow path, event, full
+repo/PR/head/base/required-run/source title, and one of `queued`,
+`in_progress`, `waiting`, `pending`, or `requested`. The check happens before
+OIDC exchange. Inexact, untrusted, or terminal runs still permit recovery,
+preserving the earlier attempt-2 startup-failure repair. The handler removes
+unvalidated workflow-level cancellation; metadata validation and settlement
+use the control pool while only the matrix scan uses the CodeQL pool. RED-first
+contracts now pass with the surrounding CodeQL and queue suite (184 passed).
+No terminal receipt, SARIF/GHAS proof, attempt ceiling, review gate, or merge
+policy was weakened. This reduces self-inflicted churn; it does not claim to
+increase the organization plan ceiling or accept queued/skipped evidence.
