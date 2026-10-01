@@ -103,6 +103,9 @@ def _download(filename: str) -> bytes:
             if response.status != 200:
                 raise ValueError(f"maturin release download returned HTTP {response.status}")
             raw = response.read(MAX_ASSET_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise
         finally:
             response.close()
     except urllib.error.HTTPError as error:

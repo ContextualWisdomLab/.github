@@ -21,7 +21,7 @@ Air 담당 5개 파일과 선행 #2531의 원격 branch는 변경하지 않았�
 
 최초 offline 전체 실행은 5,258 passed와 1 failed였다. 전역 offline 설정이 최초 로컬 Git fetch도 차단한 fixture 실패이며 성공으로 재기록하지 않았다.
 
-Base와 이 수리의 최종 측정은 5,274 passed, 4 skipped, 40 subtests passed였다. Statement 18,256개·branch 7,500개에서 누락 및 partial 0, coverage 100%, docstring 100%를 확인했다. 이 결과는 PR #2261의 최종 combined HEAD나 hosted acceptance를 증명하지 않는다. 결합 후 전체 게이트를 다시 실행하고 정확한 현재 HEAD의 필수 검사와 비작성자 formal approval을 확인해야 한다.
+Base와 첫 수리 `4743e7f8c`의 측정은 5,274 passed, 4 skipped, 40 subtests passed였다. Statement 18,256개·branch 7,500개에서 누락 및 partial 0, coverage 100%, docstring 100%를 확인했다. 이 결과는 PR #2261의 최종 combined HEAD나 hosted acceptance를 증명하지 않는다. 결합 후 전체 게이트를 다시 실행하고 정확한 현재 HEAD의 필수 검사와 비작성자 formal approval을 확인해야 한다.
 
 실행 명령:
 
@@ -33,3 +33,9 @@ python3 -m interrogate
 ```
 
 독립 검토·현재 HEAD의 hosted 검사·선행 PR의 보호 main 통합·정식 head-guarded 병합이 완료되기 전에는 릴리즈 수용이나 merge authorization으로 취급하지 않는다.
+
+## 2026-10-02 후속 오류 정리 검증
+
+정적 검토에서 Maturin의 `read()`가 별도 HTTP 오류 stream을 만든 뒤 정상 response의 `close()`도 `OSError`를 내는 조합이 제기됐다. Production 발생을 확인한 것은 아니지만, 해당 조합의 합성 테스트는 실제로 stream이 열려 있음을 확인하며 실패했다. HTTP 오류 stream을 먼저 정리한 뒤 response 정리를 수행하도록 순서를 보강했다. 최종 cleanup 오류는 숨기지 않으며 원 HTTP 오류를 exception context에 보존한다.
+
+새 회귀를 포함한 Maturin 테스트 24개, 해당 모듈의 statement·branch coverage 및 docstring 100%를 확인했다. 변경된 combined HEAD의 전체 재측정과 hosted 검증은 별도 진행한다.
