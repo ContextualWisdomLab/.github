@@ -6,6 +6,12 @@
 |---|---|---|---|
 | The central review sidecar discarded discovered `input_modalities` at its report and policy boundaries, so persisted review agents lacked the released gateway's `input:<modality>` admission tags | `.github#2538` verified restack `409069d855e50c30002d83701d036fa3bc593050`; exact merged tree `7b3b1348cfb5fbd66b075738ce2972438c2fe195`; RED history 11 failures; 316 focused warning-fatal tests, 148 GitHub Actions-environment tests, and 5,323 complete-suite tests GREEN | Preserve scalar/list/tuple modality evidence through report normalization and catalog construction; normalize nonempty strings and duplicates, fail closed on malformed evidence, retain image-capable routes, and do not change price, ZDR, credentials, priority, provider fallback, model identity, or timeout policy | **Proposed / ordinary two-parent restack published; fresh exact-head hosted Checks and qualifying independent approval required; provider HTTP 400 causality remains unproven** |
 
+## 2026-10-01 Maturin response-lifecycle coverage closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#1653@5cd141ec2c33b631d164af936cd1c9de70e4c9a4` passed all 5,314 tests but failed the complete branch gate because the canonical Maturin downloader left five error-path statements and two branches unexecuted; the owner workflow omitted both verifier paths and stacked PR bases | Trusted uv Materializer run `36811202519`, job `110206427182`; `verify_release_maturin_tool_assets.py` 95%, missing lines 104 and 106-112 plus branch 114→116; no owner run at #2530 predecessor `8cf2ea5f73976d47b2267fb52ac28284323404b7` because its base was #2531 rather than `main` | Repair canonical successor `.github#2530`: exercise non-200 and opener-raised `HTTPError` closure, replace the impossible nullable-response finalizer with one unconditional response-owned close scope, add source/test and stacked-PR trigger contracts to the complete gate while retaining protected-main push scope, preserve all network and fail-closed boundaries, then ordinary-merge the accepted owner head into #1653 | **Proposed / hosted RED reproduced; focused verifier coverage GREEN locally; path and stacked-admission contracts RED→GREEN; exact-head hosted full-suite, security, CodeQL, and independent approval required** |
+
 ## 2026-10-01 bounded Maturin release downloader SAST closure
 
 | Gap | Exact evidence | Action | Status |
