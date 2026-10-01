@@ -101,18 +101,19 @@ jobs:
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
+    # Ordinary Draft events get no runner. converted_to_draft and closed use the
+    # control runner only to retire stale central dispatches; inspect_pr returns
+    # before review, branch, auto-merge, or merge admission.
     if: >-
       (
-        (
-          github.event_name != 'pull_request_target' ||
-          github.event.action != 'closed'
-        ) &&
-        (
-          github.event_name != 'repository_dispatch' ||
-          github.event.client_payload.org_sweep != true
-        )
-      ) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+        github.event_name != 'repository_dispatch' ||
+        github.event.client_payload.org_sweep != true
+      ) && (
+        github.event_name != 'pull_request_target' ||
+        github.event.action == 'closed' ||
+        github.event.action == 'converted_to_draft' ||
+        github.event.pull_request.draft != true
+      )
     # The group admits only trusted central main workflows, including reusable
     # callers. Keep admission/dispatch off pools occupied by model execution.
     runs-on:
@@ -495,7 +496,10 @@ jobs:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}
           TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}
-          SCHEDULER_ACTIONS_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.target_repository != github.repository && (secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token) || github.token }}
+          # Same-repository github.token has Actions authority only in the
+          # central receiver. A consumer event needs an explicit organization
+          # token; blank means central cancellation fails closed.
+          SCHEDULER_ACTIONS_TOKEN: ${{ github.repository == 'ContextualWisdomLab/.github' && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
           # Same-repository dispatch credential: when this scheduler runs inside
           # ContextualWisdomLab/.github (the repository the required workflows are
           # dispatched on), the runner token can dispatch them without any

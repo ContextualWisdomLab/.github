@@ -21,8 +21,11 @@ name: SAST Semgrep
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
-    # Scan every PR base ref, including feature branches used by stacked PRs.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
+    # Keep the native trigger base-ref agnostic. This does not widen ruleset
+    # 18156473, which injects this required workflow only for pull requests
+    # targeting the repository default branch. A feature-base stacked PR gets
+    # this gate only where the workflow is run natively, or after retargeting.
   push:
     branches: [main, master, develop]
   schedule:
@@ -49,7 +52,7 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
-    if: github.event.action != 'closed'
+    if: github.event.action != 'closed' && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 stacked required-workflow scope delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@f79c8f2e…`에서 이 모순을 잡는 계약 테스트가 RED였고, scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Ruleset scope와 native trigger scope를 분리한 ordinary commit을 #2537 exact head에 게시한 뒤 후속 `.github#2548`에 비강제 ordinary merge로 계보를 전달한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
+
 ### 2026-10-01 OpenCode approval-order delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
@@ -3820,3 +3826,73 @@ fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
 the exact hosted command now covers all 18,252 production statements and 7,498
 branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
 Fresh exact-head hosted revalidation is required.
+
+## 2026-10-01 CodeQL Draft event materialization
+
+**Status:** Proposed owner repair; protected integration, hosted exact-head
+evidence, and qualifying independent approval remain mandatory.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns the central CodeQL
+required-workflow and dispatch contract. `ContextualWisdomLab/Orgmetra` is a
+consumer canary and does not copy or override the owner workflow.
+
+**Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
+#448, and #100 produced no new central CodeQL run. Ruleset consumers receive
+opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
+entry job nevertheless skipped every Draft event and claimed Ready would
+re-run the same head. At the same time, native-owner `converted_to_draft`
+events must enter per-PR concurrency to retire stale work without starting a
+replacement scan. A single blanket Draft predicate encoded incompatible
+halves of that lifecycle.
+
+**Action / evidence.** The owner now distinguishes event and repository:
+consumer Draft heads materialize CodeQL evidence, native-owner Draft heads
+remain runner-free, and `converted_to_draft`/`closed` only retire stale work.
+Authenticated status, exact head/base/source/run identity, GHAS, SARIF, and
+terminal-verdict requirements are unchanged. The RED-first matrix produced
+two intended failures; the focused Draft-control plus queue suite passes 86
+tests, and the warnings-fatal repository suite passes 5,261 tests, five
+optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Full exact-tree
+and hosted evidence remain required and are not inferred from either
+predecessor PR.
+
+## 2026-10-01 Central dispatch stale-run retirement
+
+**Status:** Proposed owner repair; local GREEN, protected integration and
+hosted exact-head evidence pending.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns central CodeQL,
+OpenCode, Strix, and PR scheduler admission. Product repositories supply PR
+identity and consume released workflow behavior; they do not cancel the
+owner's receiver runs or copy its scheduler.
+
+**Gap / RCA.** A live `.github` Actions snapshot contained 457 queued and two
+in-progress `repository_dispatch` runs. In the newest 100 queued runs, 38
+targeted superseded heads and five targeted closed PRs (CodeQL: 20 superseded,
+three closed; OpenCode: 18 superseded, two closed). Workflow-level
+`cancel-in-progress` could not retire them because Draft/close produced no new
+central dispatch in the same group. The scheduler also returned on Draft before
+calling stale-run cleanup, while closed PRs were absent from its open-PR scan.
+Representative obsolete runs included `.github#2548` OpenCode `36842116744`
+and CodeQL `36842027523`, both targeting `a9b20a…` after the live head moved to
+`2583cc…`; closed examples included AppGuardrail #1365 CodeQL `36818449683`.
+
+**Action / evidence.** The owner now parses only exact protected CodeQL,
+OpenCode, and Strix dispatch workflow paths and their repository/PR/head
+run-name contracts. Before force-cancel it re-fetches the active run and PR;
+the inventory and destructive-boundary validation both recognize all five
+GitHub active states (`queued`, `in_progress`, `waiting`, `pending`, and
+`requested`) so state transitions cannot evade cleanup. Then
+only closed targets or head mismatches authorize cancellation. Current-head,
+malformed, unrelated, and unreadable-authority cases fail closed. Consumer
+repository tokens are not accepted as central Actions authority; cross-repo
+cleanup requires an explicit organization token and otherwise fails closed.
+Draft cleanup precedes Draft skip. Only `converted_to_draft` and `closed` transition events
+are newly admitted to the bounded scheduler control job; closed cleanup returns
+before review, branch, auto-merge, or merge behavior, and ordinary Draft events
+still assign no runner. The RED-first tests reproduced all three missing paths;
+all 458 focused scheduler and admission tests pass with warnings fatal. Required
+checks, review admission, scanner verdicts, concurrency keys, and merge policy
+are unchanged. Fresh hosted exact-head checks and independent review remain
+mandatory.

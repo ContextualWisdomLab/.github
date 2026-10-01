@@ -18,16 +18,17 @@ name: CodeQL PR
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Do not restrict the base ref: the org required-workflow ruleset already
     # scopes this to each repository's actual default branch via
     # ref_name: ["~DEFAULT_BRANCH"], whatever it is named. A hardcoded
     # [main, master, develop] list silently produced zero CodeQL checks for
     # any repository with a different default branch name (confirmed live:
     # a repository defaulting to gh-pages received every other required
-    # check but no CodeQL check at all) and would also block coverage for
-    # stacked PRs targeting a non-default feature branch, matching
-    # security-scan.yml's own "do not restrict the base ref" precedent.
+    # check but no CodeQL check at all). This does not widen ruleset 18156473:
+    # its default-ref scope must inject the required workflow first. A
+    # feature-base stacked PR gets this gate only where the workflow is run
+    # natively, or after retargeting to the repository default branch.
 
 concurrency:
   # NOT scoped by head SHA, unlike opencode-review.yml's group -- and that is
@@ -58,8 +59,11 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    # Draft PRs get no runner; ready_for_review re-runs this on the same head.
-    if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+    # Ruleset consumers do not receive unchanged-head Ready events, so their
+    # Draft heads materialize security evidence. The native owner saves its
+    # runner, while Draft conversion and close events only retire stale work
+    # through the per-PR concurrency group above.
+    if: github.event.action != 'closed' && github.event.action != 'converted_to_draft' && (github.event.pull_request.draft != true || github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
