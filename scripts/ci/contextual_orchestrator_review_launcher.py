@@ -177,7 +177,7 @@ def _erase_linux_initial_environment(names: frozenset[bytes]) -> None:
     environment is unexpectedly unterminated.
     """
     if not Path("/proc/self/environ").exists():
-        return
+        raise RuntimeError("cannot verify Linux initial environment without /proc/self/environ")
 
     import ctypes
 

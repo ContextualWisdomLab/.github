@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
