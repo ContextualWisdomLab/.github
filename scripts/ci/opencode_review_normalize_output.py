@@ -1471,16 +1471,20 @@ def iter_json_objects(text: str) -> list[Any]:
             if next_index == len(text):
                 continue
             next_character = text[next_index]
-            if character == "{" and next_character not in {'"', "}"}:
-                continue
-            if character == "[" and not (
+            valid_object_start = character == "{" and next_character in {'"', "}"}
+            valid_array_start = character == "[" and (
                 next_character in '\"{[-0123456789]'
                 or any(
                     text.startswith(literal, next_index)
-                    for literal in ("true", "false", "null")
+                    for literal in ("true", "false", "null", "NaN", "Infinity")
                 )
-            ):
-                continue
+            )
+            if not valid_object_start and not valid_array_start:
+                token_end = next_index
+                while token_end < len(text) and text[token_end] not in ",:]}{[":
+                    token_end += 1
+                if token_end == len(text) or text[token_end] in "{[":
+                    continue
             start_index = index
             container_stack.append("}" if character == "{" else "]")
             continue

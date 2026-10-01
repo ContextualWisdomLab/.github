@@ -1,4 +1,0 @@
-💡 What: `scripts/ci/opencode_review_normalize_output.py`의 `label_section` 함수에서 `str.find()`를 반복 호출하여 문자열의 가장 마지막 라벨 위치를 찾던 방식을 `str.rfind()`를 사용하도록 최적화했습니다.
-🎯 Why: 긴 텍스트에서 라벨의 마지막 위치를 찾기 위해 텍스트 전체를 처음부터 순차적으로 탐색(O(N) 오버헤드)하는 것은 비효율적입니다.
-📊 Impact: 텍스트의 끝에서부터 역방향으로 탐색하므로 불필요한 스캐닝 오버헤드가 제거되며, 대용량 로그/리뷰 텍스트 파싱 시 속도가 향상됩니다.
-🔬 Measurement: `pytest tests/test_opencode_review_normalize_output.py` 테스트 스위트를 통해 검증 가능합니다.
