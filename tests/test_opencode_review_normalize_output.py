@@ -2549,6 +2549,25 @@ def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
     assert norm.iter_json_objects(malformed_array) == []
 
 
+@pytest.mark.parametrize("non_finite_value", ["NaN", "Infinity"])
+def test_iter_json_objects_does_not_promote_control_from_non_finite_array(
+    non_finite_value,
+):
+    """Python JSON extensions cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"review prose [{non_finite_value}, {json.dumps(nested_control)}]"
+
+    values = norm.iter_json_objects(text)
+
+    assert len(values) == 1
+    assert isinstance(values[0], list)
+    assert values[0][1] == nested_control
+
+
 @pytest.mark.parametrize("approve_first", [True, False])
 def test_main_rejects_conflicting_current_run_controls_without_rewriting(
     tmp_path, capsys, approve_first

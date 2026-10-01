@@ -1477,7 +1477,7 @@ def iter_json_objects(text: str) -> list[Any]:
                 next_character in '\"{[-0123456789]'
                 or any(
                     text.startswith(literal, next_index)
-                    for literal in ("true", "false", "null")
+                    for literal in ("true", "false", "null", "NaN", "Infinity")
                 )
             ):
                 continue
