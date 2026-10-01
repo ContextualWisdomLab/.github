@@ -1,14 +1,3 @@
-### OpenCode invalid-token wrappers remain fail-closed
-
-- Treat a balanced object or array whose first token is invalid JSON as one
-  outer evidence container instead of skipping its opener and promoting a
-  nested exact-run control. RED commit
-  `b5a0507b8ee4ec70cc5fca751f34df98719f219b` binds `undefined`, arbitrary
-  unquoted array tokens, and unquoted object keys; GREEN commit
-  `443c29aa6f56735f7fcf0ee6a550b6bad5f7e2f8` preserves the proven prose
-  delimiter recovery while keeping balanced malformed wrappers fail-closed.
-  The production normalizer remains executable (`100755`).
-
 ### OpenCode mixed-output framing preserves later controls
 
 - Ignore prose `{` or `[` delimiters whose next non-whitespace token cannot
