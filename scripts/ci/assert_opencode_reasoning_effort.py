@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ def is_known_reasoning_capable(model_name: str) -> bool:
     )
 
 
+_JSONC_COMMENT_PATTERN = re.compile(
+    r'("(?:\\.|[^\\"])*")|(//[^\r\n]*|/\*.*?\*/)', re.DOTALL
+)
+
 def strip_jsonc_comments(text: str) -> str:
     """Return ``text`` with ``//`` and ``/* */`` comments removed outside strings.
 
@@ -31,45 +36,11 @@ def strip_jsonc_comments(text: str) -> str:
     unchanged. Newlines inside removed content are kept so any remaining
     ``json.JSONDecodeError`` still reports an accurate line number.
     """
-    result: list[str] = []
-    in_string = False
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if in_string:
-            result.append(char)
-            if char == "\\" and index + 1 < length:
-                result.append(text[index + 1])
-                index += 2
-                continue
-            if char == '"':
-                in_string = False
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-            result.append(char)
-            index += 1
-            continue
-        if char == "/" and index + 1 < length and text[index + 1] == "/":
-            index += 2
-            while index < length and text[index] not in "\r\n":
-                index += 1
-            continue
-        if char == "/" and index + 1 < length and text[index + 1] == "*":
-            index += 2
-            while index + 1 < length and not (
-                text[index] == "*" and text[index + 1] == "/"
-            ):
-                if text[index] in "\r\n":
-                    result.append(text[index])
-                index += 1
-            index += 2
-            continue
-        result.append(char)
-        index += 1
-    return "".join(result)
+    def _replacer(match: re.Match[str]) -> str:
+        """Preserve string literals or replace comments with empty newlines."""
+        return match.group(1) or ("\n" * match.group(2).count("\n"))
+
+    return _JSONC_COMMENT_PATTERN.sub(_replacer, text)
 
 
 def load_config(path: Path) -> dict[str, Any]:
