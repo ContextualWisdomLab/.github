@@ -153,6 +153,8 @@ def _run_opencode(
             "run",
             "reply with ok",
             "--pure",
+            "--format",
+            "json",
             "--model",
             "contextual-orchestrator/orchestrator/free",
         ],
@@ -202,3 +204,9 @@ def test_bare_origin_reproduces_the_route_not_found_outage(gateway_stub, tmp_pat
     assert requested_paths[0] != GATEWAY_SERVED_ROUTE
     combined = f"{stdout}\n{stderr}".casefold()
     assert GATEWAY_ROUTE_NOT_FOUND_MESSAGE in combined
+    events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+    assert any(
+        event.get("type") == "error"
+        and GATEWAY_ROUTE_NOT_FOUND_MESSAGE in json.dumps(event).casefold()
+        for event in events
+    )

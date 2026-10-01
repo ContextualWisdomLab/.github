@@ -39,3 +39,5 @@ python3 -m interrogate
 정적 검토에서 Maturin의 `read()`가 별도 HTTP 오류 stream을 만든 뒤 정상 response의 `close()`도 `OSError`를 내는 조합이 제기됐다. Production 발생을 확인한 것은 아니지만, 해당 조합의 합성 테스트는 실제로 stream이 열려 있음을 확인하며 실패했다. HTTP 오류 stream을 먼저 정리한 뒤 response 정리를 수행하도록 순서를 보강했다. 최종 cleanup 오류는 숨기지 않으며 원 HTTP 오류를 exception context에 보존한다.
 
 새 회귀를 포함한 Maturin 테스트 24개, 해당 모듈의 statement·branch coverage 및 docstring 100%를 확인했다. 변경된 combined HEAD의 전체 재측정과 hosted 검증은 별도 진행한다.
+
+이후 전체 실행은 5,312 passed와 1 failed였다. 실패는 기존 OpenCode CLI integration의 bare-origin 회귀에서 요청 경로가 `/chat/completions`로 기록됐지만 formatted 출력에 `not found`가 없었던 경우다. 설치된 CLI 1.18.33이 지원하는 `--format json`으로 결과를 수집하고 실제 `error` event 안의 같은 메시지를 확인하도록 보강했다. Gateway의 served-route·잘못된 경로·오류 메시지 assertion을 제거하지 않았으며 테스트용 timeout도 늘리지 않았다. 두 integration 테스트가 두 차례 통과했다(27.71초, structured error assertion 추가 후 30.49초). 이는 loopback stub을 대상으로 한 CLI 증거이며 실제 모델 추론이나 hosted approval은 아니다.
