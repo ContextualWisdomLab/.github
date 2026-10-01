@@ -22,6 +22,7 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+from collections.abc import MutableMapping
 import copy
 import dataclasses
 import json
@@ -50,6 +51,17 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
+# Provider credentials are one-shot bootstrap transport into the process-local
+# KV. Keep the list exact: broad prefix deletion could erase unrelated runtime
+# configuration, while omission would leave a credential recoverable through a
+# permitted consumer shell.
+REVIEW_PROVIDER_BOOTSTRAP_ENV_NAMES = (
+    "BYTEZ_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+)
 # Lazy fill (ADR-0029): the catalog is a *candidate* list, probed in its
 # tier-then-round-robin order until REVIEW_PREFLIGHT_TARGET_READY routes are
 # ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
@@ -153,6 +165,49 @@ class ReviewPreflightError(RuntimeError):
         """Store the sanitized route report alongside the bounded error message."""
         super().__init__(message)
         self.report = report
+
+
+def _erase_linux_initial_environment(names: frozenset[bytes]) -> None:
+    """Zero selected values in Linux's original process environment block.
+
+    unsetenv(3) removes names from future child environments but Linux
+    /proc/<pid>/environ reads the original environment memory range. The
+    long-lived review gateway therefore clears the value bytes in place before
+    removing the names from os.environ. A bounded scan fails closed if the C
+    environment is unexpectedly unterminated.
+    """
+    if not Path("/proc/self/environ").exists():
+        return
+
+    import ctypes
+
+    libc = ctypes.CDLL(None)
+    try:
+        environment = ctypes.POINTER(ctypes.c_void_p).in_dll(libc, "environ")
+    except ValueError as exc:
+        raise RuntimeError("cannot locate the Linux process environment") from exc
+
+    for index in range(4096):
+        address = environment[index]
+        if not address:
+            return
+        entry = ctypes.string_at(address)
+        name, separator, value = entry.partition(b"=")
+        if separator and name in names:
+            ctypes.memset(address + len(name) + 1, 0, len(value))
+    raise RuntimeError("Linux process environment exceeded 4096 entries")
+
+
+def _scrub_provider_bootstrap_environment(
+    environment: MutableMapping[str, str],
+) -> None:
+    """Remove one-shot provider credentials from process and child environments."""
+    if environment is os.environ and sys.platform.startswith("linux"):
+        _erase_linux_initial_environment(
+            frozenset(name.encode("ascii") for name in REVIEW_PROVIDER_BOOTSTRAP_ENV_NAMES)
+        )
+    for name in REVIEW_PROVIDER_BOOTSTRAP_ENV_NAMES:
+        environment.pop(name, None)
 
 
 def _has_text_output(model: object) -> bool:
@@ -1231,6 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _configure_sidecar_logging(configure_logging)
     registered = register_review_credentials(os.environ)
+    _scrub_provider_bootstrap_environment(os.environ)
     auth_token = args.auth_token or get_credential(REVIEW_AUTH_CREDENTIAL_NAME)
     if not auth_token:
         raise SystemExit(

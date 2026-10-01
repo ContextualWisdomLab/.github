@@ -1,3 +1,12 @@
+### Review sidecar erases one-shot provider bootstrap secrets
+
+- After the five provider credentials enter the process-local KV, the launcher now
+  zeroes their Linux initial-environment value bytes and removes the exact names
+  from the live environment before discovery, preflight, or serving. A subprocess
+  regression verifies absence from the long-lived process mapping,
+  `/proc/self/environ`, and a child environment while preserving unrelated values.
+  Refs ContextualWisdomLab/.github#1742 and ContextualWisdomLab/appguardrail#1092.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
