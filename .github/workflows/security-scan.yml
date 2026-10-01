@@ -42,8 +42,10 @@ name: Security Scan
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
-    # Do not restrict the base ref: stacked PRs must receive the same
-    # diff-scoped OSV/dependency and repo-wide Trivy gate as default-branch PRs.
+    # Keep the native trigger base-ref agnostic. This does not widen ruleset
+    # 18156473, which injects this required workflow only for pull requests
+    # targeting the repository default branch. A feature-base stacked PR gets
+    # this gate only where the workflow is run natively, or after retargeting.
 
 concurrency:
   group: >-

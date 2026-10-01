@@ -25,9 +25,10 @@ on:
     # [main, master, develop] list silently produced zero CodeQL checks for
     # any repository with a different default branch name (confirmed live:
     # a repository defaulting to gh-pages received every other required
-    # check but no CodeQL check at all) and would also block coverage for
-    # stacked PRs targeting a non-default feature branch, matching
-    # security-scan.yml's own "do not restrict the base ref" precedent.
+    # check but no CodeQL check at all). This does not widen ruleset 18156473:
+    # its default-ref scope must inject the required workflow first. A
+    # feature-base stacked PR gets this gate only where the workflow is run
+    # natively, or after retargeting to the repository default branch.
 
 concurrency:
   # NOT scoped by head SHA, unlike opencode-review.yml's group -- and that is

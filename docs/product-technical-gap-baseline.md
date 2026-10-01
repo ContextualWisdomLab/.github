@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 stacked required-workflow scope delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@f79c8f2e…`에서 이 모순을 잡는 계약 테스트가 RED였고, scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Ruleset scope와 native trigger scope를 분리한 ordinary commit을 #2537 exact head에 게시한 뒤 후속 `.github#2548`에 비강제 ordinary merge로 계보를 전달한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
+
 ### 2026-10-01 OpenCode approval-order delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
