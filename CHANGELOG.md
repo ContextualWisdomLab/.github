@@ -1,3 +1,13 @@
+### Maturin download failures close every transport response
+
+- Refactor the bounded Maturin asset downloader so successful and rejected
+  responses share one unconditional close path while `HTTPError` keeps its own
+  explicit close path. A new regression exercises a non-200 response and an
+  opener-raised HTTP error. This removes an impossible optional-response branch
+  without changing hosts, redirects, byte limits, hashes, or fail-closed error
+  mapping; the focused suite is 17 passed with 100% statement and branch
+  coverage.
+
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT

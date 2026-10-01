@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 Maturin response-lifecycle coverage closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#1653@5cd141ec2c33b631d164af936cd1c9de70e4c9a4` passed all 5,314 tests but failed the complete branch gate because the canonical Maturin downloader left five error-path statements and two branches unexecuted | Trusted uv Materializer run `36811202519`, job `110206427182`; `verify_release_maturin_tool_assets.py` 95%, missing lines 104 and 106-112 plus branch 114→116 | Repair canonical successor `.github#2530`: exercise non-200 and opener-raised `HTTPError` closure, replace the impossible nullable-response finalizer with one unconditional response-owned close scope, preserve all network and fail-closed boundaries, then ordinary-merge the accepted owner head into #1653 | **Proposed / hosted RED reproduced; focused 17 tests and 100% statement/branch coverage GREEN locally; exact-head hosted full-suite, security, CodeQL, and independent approval required** |
+
 ## 2026-10-01 bounded Maturin release downloader SAST closure
 
 | Gap | Exact evidence | Action | Status |
