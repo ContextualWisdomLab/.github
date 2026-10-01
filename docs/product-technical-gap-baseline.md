@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 review catalog input-modality evidence
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The central review sidecar discarded discovered `input_modalities` at its report and policy boundaries, so persisted review agents lacked the released gateway's `input:<modality>` admission tags | `.github#2538` verified restack `409069d855e50c30002d83701d036fa3bc593050`; exact merged tree `7b3b1348cfb5fbd66b075738ce2972438c2fe195`; RED history 11 failures; 316 focused warning-fatal tests, 148 GitHub Actions-environment tests, and 5,323 complete-suite tests GREEN | Preserve scalar/list/tuple modality evidence through report normalization and catalog construction; normalize nonempty strings and duplicates, fail closed on malformed evidence, retain image-capable routes, and do not change price, ZDR, credentials, priority, provider fallback, model identity, or timeout policy | **Proposed / ordinary two-parent restack published; fresh exact-head hosted Checks and qualifying independent approval required; provider HTTP 400 causality remains unproven** |
+
 ## 2026-10-01 bounded Maturin release downloader SAST closure
 
 | Gap | Exact evidence | Action | Status |
