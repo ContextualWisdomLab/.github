@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,10 +22,6 @@ import pytest
 
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
-from tests.test_required_workflow_queue_contract import (
-    workflow_level_cancels_in_progress,
-    workflow_level_concurrency_group,
-)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
@@ -110,24 +107,18 @@ def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
     ``required_language`` in the concurrency group was the 2026-09-05
     workaround after contextual-orchestrator#1049 / run 33938784437 cancelled
     sibling scans. Independence now comes from ``strategy.fail-fast: false``
-    on this run's language matrix, so the group can be
-    ``{workflow}-{repository}-{PR}`` and ``cancel-in-progress: true`` only
-    drops a superseded HEAD of the same pull request.
+    on this run's language matrix. Unvalidated workflow-level cancellation is
+    forbidden because a delayed stale payload could evict current exact work.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    group_value = workflow_level_concurrency_group(workflow)
     header = workflow.split("\non:", 1)[0]
     scan = workflow.split("  scan:\n", 1)[1]
     strategy = scan.split("    strategy:\n", 1)[1].split("    steps:\n", 1)[0]
 
-    assert "github.event.client_payload.target_repository" in group_value
-    assert "github.event.client_payload.pr_number" in group_value
-    assert "github.event.client_payload.required_language" not in group_value
-    assert "unknown-language" not in group_value
+    assert not re.search(r"(?m)^concurrency:", workflow)
     assert "required_language" not in header
     assert "fail-fast: false" in strategy
     assert "include: ${{ fromJSON(needs.validate-dispatch.outputs.matrix) }}" in strategy
-    assert workflow_level_cancels_in_progress(workflow)
 
 
 def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_request: dict) -> subprocess.CompletedProcess[str]:
@@ -976,28 +967,23 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
-def test_codeql_scan_dispatch_run_name_versions_source_without_changing_concurrency() -> None:
-    """v2 adds source identity while both protocols retain one PR writer.
+def test_codeql_scan_dispatch_run_name_versions_exact_source_without_early_cancellation() -> None:
+    """v2 exposes exact source identity without cancelling before validation.
 
     The required shard cannot read client_payload. Encoding those fields in
     run-name lets it reject a same-head retarget or a different waiting
-    required run. The #2008/#2009 group stays repository+PR so a newer HEAD
-    of the same pull request still cancels its predecessor.
+    required run. Workflow concurrency cannot safely act on payload identity
+    before the protected handler validates the actor and live pull request.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     header = workflow.split("\non:", 1)[0]
-    group_value = workflow_level_concurrency_group(workflow)
 
     assert "github.event.client_payload.pr_head_sha" in header
     assert "github.event.client_payload.pr_base_sha" in header
     assert "github.event.client_payload.required_run_id" in header
     assert "github.event.client_payload.producer_source_sha" in header
     assert "github.event.action == 'codeql-scan-v2'" in header
-    assert "github.event.client_payload.pr_base_sha" not in group_value
-    assert "github.event.client_payload.required_run_id" not in group_value
-    assert "github.event.client_payload.target_repository" in group_value
-    assert "github.event.client_payload.pr_number" in group_value
-    assert "github.event.action" not in group_value
+    assert not re.search(r"(?m)^concurrency:", workflow)
 
 
 def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:

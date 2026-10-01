@@ -163,6 +163,32 @@ workflow does not claim SLSA Build L3.
 
 ## Control-plane data flow
 
+### CodeQL required-workflow admission
+
+```mermaid
+flowchart TD
+  Required["Required CodeQL coordinator"]
+  Active{"Exact trusted handler active?"}
+  Validate["Control pool: validate identity"]
+  Scan["CodeQL pool: matrix scan"]
+  Settle["Control pool: settle exact run"]
+
+  Required --> Active
+  Active -->|"yes: preserve"| Required
+  Active -->|"no: dispatch"| Validate
+  Validate --> Scan
+  Scan --> Settle
+```
+
+The coordinator binds active-run reuse to the protected handler path and
+event, the full repository/PR/head/base/required-run/merge-source title, a
+trusted app actor, and an active GitHub state. The check precedes OIDC exchange
+and never treats activity as success. The handler deliberately has no
+workflow-level cancellation: GitHub evaluates that key before protected actor
+and live-PR validation, so arrival order cannot be trusted to retire work.
+Event-driven scheduler cleanup separately revalidates both the run and PR at
+the destructive boundary and cancels only closed or stale-head work.
+
 ```mermaid
 sequenceDiagram
   participant PR as Pull request

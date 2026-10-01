@@ -85,8 +85,8 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         follow-up sweep as still open).
         """
         workflow = OPENCODE_REVIEW_DISPATCH.read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("group: CWL central OpenCode"), 3)
-        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 3)
+        self.assertEqual(workflow.count("group: CWL central OpenCode"), 4)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 4)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
 

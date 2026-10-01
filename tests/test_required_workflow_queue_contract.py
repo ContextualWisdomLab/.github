@@ -7,11 +7,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,8 +22,7 @@ def workflow_text(name: str) -> str:
 def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
-        ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 4),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -33,11 +30,42 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
         assert text.count(f"    runs-on:\n      group: {group}\n      labels: [self-hosted, linux, x64]") == jobs
         assert "runs-on: ubuntu-24.04" not in text
 
+    codeql = workflow_text("codeql-scan-dispatch.yml")
+    codeql_group = "    runs-on:\n      group: CWL central CodeQL\n      labels: [self-hosted, linux, x64]"
+    control_group = "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]"
+    validate_block = codeql.split("  validate-dispatch:\n", 1)[1].split(
+        "\n  scan:\n", 1
+    )[0]
+    scan_block = codeql.split("  scan:\n", 1)[1].split(
+        "\n  settle-required-run:\n", 1
+    )[0]
+    settlement_block = codeql.split("  settle-required-run:\n", 1)[1]
+    assert codeql.count(codeql_group) == 1
+    assert codeql.count(control_group) == 2
+    assert control_group in validate_block
+    assert codeql_group in scan_block
+    assert control_group in settlement_block
+    assert "runs-on: ubuntu-24.04" not in codeql
+
+
+def test_codeql_dispatch_does_not_cancel_from_unvalidated_arrival_order() -> None:
+    """A delayed stale payload must not evict current exact-head CodeQL work."""
+    workflow = workflow_text("codeql-scan-dispatch.yml")
+    header = workflow.split("\npermissions:\n", 1)[0]
+
+    # Native workflow concurrency is evaluated before actor and live-PR
+    # validation. Any shared payload-derived group therefore lets arrival order
+    # cancel work that has not yet been proven stale.
+    assert not re.search(r"(?m)^concurrency:", header)
+
 
 def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
     """Reusable trusted schedulers share control capacity without PR execution."""
     text = workflow_text("pr-review-merge-scheduler.yml")
-    selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
+    scan_job = text.split("\n  scan-pr-queue:\n", 1)[1]
+    selector = next(
+        line for line in scan_job.splitlines() if line.strip().startswith("runs-on:")
+    )
     assert selector.strip() == "runs-on:"
     assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
     assert "fromJSON" not in selector
@@ -251,11 +279,22 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
-    # Anchored, not a substring: this workflow's value is an expression rather
-    # than a constant, so it cannot use the boolean helper, but a commented-out
-    # setting must not satisfy it either.
-    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{", concurrency_contract)
+    assert "queue: max" in concurrency_contract
+    assert "cancel-in-progress:" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" in concurrency_contract
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
+
+    cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
+        "  scan-pr-queue:", 1
+    )[0]
+    assert "actions: write" in cleanup_job
+    assert "actions/checkout" not in cleanup_job
+    assert "github.event.pull_request.number" in cleanup_job
+    assert "github.event.pull_request.head.sha" in cleanup_job
+    assert ".pull_requests[]?" in cleanup_job
+    assert ".head.sha" in cleanup_job
+    assert "force-cancel" in cleanup_job
 
 
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
@@ -356,8 +395,8 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
-def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission() -> None:
-    """A superseded dispatch must be cancelled while queued, not after it takes a runner.
+def test_privileged_review_dispatch_avoids_lossy_native_concurrency() -> None:
+    """The receiver must never let GitHub replace pending exact-head work.
 
     ``opencode-review-dispatch.yml`` carried its concurrency group only on the
     long ``opencode-review-target`` job. A job-level group is not evaluated
@@ -369,25 +408,16 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
     while they queued, every one of them after ``coverage-source-tree`` and
     ``coverage-evidence`` had already run.
 
-    The workflow-level group is keyed by the dispatched pull request, matching
-    ``codeql-scan-dispatch.yml``'s workflow-level group and the job-level group
-    this workflow keeps for the review job itself.
+    GitHub native concurrency retains at most one pending run per group and
+    replaces an older pending member even when ``cancel-in-progress`` is false.
+    The receiver therefore uses no native concurrency group. Trusted producer
+    deduplication and live-head cleanup remain the admission authorities.
     """
     workflow = workflow_text("opencode-review-dispatch.yml")
     header = workflow.split("permissions:", 1)[0]
-    concurrency_contract = header.split("concurrency:", 1)[1]
-    group_value = workflow_level_concurrency_group(workflow)
-
-    assert re.search(r"(?m)^concurrency:", header)
-    assert "opencode-review-dispatch-" in group_value
-    assert (
-        "github.event.client_payload.target_repository || github.repository"
-        in group_value
-    )
-    assert "github.event.client_payload.pr_number || github.run_id" in group_value
-    assert workflow_level_cancels_in_progress(workflow)
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert re.search(r"(?m)^    concurrency:", workflow)
+    assert not re.search(r"(?m)^concurrency:", header)
+    review_job = workflow.split("\n  opencode-review-target:\n", 1)[1]
+    assert not re.search(r"(?m)^    concurrency:", review_job)
 
 
 @pytest.mark.parametrize(
@@ -674,6 +704,8 @@ def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
     assert 'event_type:"opencode-review"' in dispatch
     assert 'event_type:"merge-scheduler"' not in dispatch
     assert 'required_run_id:$required_run_id' in dispatch
+    assert "--argjson draft_review_only false" in dispatch
+    assert "draft_review_only:$draft_review_only" in dispatch
     for field in (
         "target_repository",
         "pr_number",
@@ -1131,9 +1163,23 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+        elif filename == "pr-review-merge-scheduler.yml":
+            assert "cancel-closed-pr-runs:" not in workflow
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
+            assert "github.event.pull_request.number" in concurrency_contract
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+            assert "queue: max" in concurrency_contract
+            assert "cancel-in-progress:" not in concurrency_contract
+            assert "cancel-superseded-pr-runs:" in workflow
+            cleanup_job = workflow.split(
+                "  cancel-superseded-pr-runs:", 1
+            )[1].split("  scan-pr-queue:", 1)[0]
+            assert "actions: write" in cleanup_job
+            assert "actions/checkout" not in cleanup_job
         elif filename in {
             "codeql-pr.yml",
-            "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
             "security-scan.yml",
@@ -1149,7 +1195,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
-        assert "github.event.action != 'closed'" in workflow
+        if filename == "pr-review-merge-scheduler.yml":
+            assert "github.event.action == 'closed'" in workflow
+        else:
+            assert "github.event.action != 'closed'" in workflow
         if filename in {"noema-review.yml", "strix.yml"}:
             assert "github.event.action != 'converted_to_draft'" in workflow
 
@@ -1515,6 +1564,231 @@ def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
+
+
+def _run_merge_scheduler_cleanup(
+    tmp_path: Path,
+    pull_states: list[dict[str, object]],
+    run_states: list[dict[str, object]],
+    inventory_responses: list[dict[str, object]] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Execute predecessor cleanup against stateful GitHub API fixtures."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute the production cleanup")
+    step = workflow_step(
+        workflow_text("pr-review-merge-scheduler.yml"),
+        "Cancel revalidated predecessor scheduler runs",
+    )
+    run_block = step.split("        run: |\n", 1)[1].split(
+        "\n  scan-pr-queue:", 1
+    )[0]
+    script = textwrap.dedent(run_block)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    pulls = tmp_path / "pulls"
+    runs = tmp_path / "runs"
+    inventories = tmp_path / "inventories"
+    pulls.write_text(
+        "\n".join(json.dumps(state) for state in pull_states) + "\n",
+        encoding="utf-8",
+    )
+    runs.write_text(
+        "\n".join(json.dumps(state) for state in run_states) + "\n",
+        encoding="utf-8",
+    )
+    if inventory_responses is None:
+        default_inventory = {
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "id": 100,
+                    "status": "queued",
+                    "pull_requests": [
+                        {
+                            "number": 7,
+                            "head": {"sha": "b" * 40},
+                        }
+                    ],
+                }
+            ],
+        }
+        inventory_responses = [default_inventory] * 10
+    inventories.write_text(
+        "\n".join(json.dumps(response) for response in inventory_responses) + "\n",
+        encoding="utf-8",
+    )
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        '''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+next_line() {
+  local source="$1" count_file="${1}.count" count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$count_file"
+  sed -n "${count}p" "$source"
+}
+if [[ "$*" == *"/pulls/7"* ]]; then
+  next_line "$FAKE_PULLS"
+elif [[ "$*" == *"actions/workflows/pr-review-merge-scheduler.yml/runs"* ]]; then
+  printf '[%s]\n' "$(next_line "$FAKE_INVENTORIES")"
+elif [[ "$*" == *"actions/runs/100/force-cancel"* ]]; then
+  exit 0
+elif [[ "$*" == *"actions/runs/100"* ]]; then
+  state="$(next_line "$FAKE_RUNS")"
+  jq -r '[.status // "", .conclusion // ""] | @tsv' <<<"$state"
+else
+  exit 1
+fi
+''',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_CALLS": str(calls),
+            "FAKE_PULLS": str(pulls),
+            "FAKE_RUNS": str(runs),
+            "FAKE_INVENTORIES": str(inventories),
+            "GH_TOKEN": "synthetic-actions-token",
+            "GITHUB_RUN_ID": "999",
+            "TARGET_REPOSITORY": "owner/repo",
+            "TARGET_PR_NUMBER": "7",
+            "TARGET_PR_HEAD_SHA": "a" * 40,
+            "TARGET_ACTION": "synchronize",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, calls.read_text(encoding="utf-8")
+
+
+def _live_scheduler_pull(*, head_sha: str = "a" * 40) -> dict[str, object]:
+    """Build one live pull-request response for scheduler cleanup evidence."""
+    return {
+        "base": {"repo": {"full_name": "owner/repo"}},
+        "number": 7,
+        "state": "open",
+        "head": {"sha": head_sha},
+    }
+
+
+def test_scheduler_cleanup_revalidates_target_after_run_selection(tmp_path: Path) -> None:
+    """A concurrent head advance after selection prevents cancellation."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull(), _live_scheduler_pull(head_sha="c" * 40)],
+        [{"status": "completed", "conclusion": "cancelled"}],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("/pulls/7") == 2
+    assert "/actions/runs/100/force-cancel" not in calls
+
+
+def test_scheduler_cleanup_fails_when_accepted_cancel_never_finishes(
+    tmp_path: Path,
+) -> None:
+    """An accepted POST is not terminal cancellation evidence."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "in_progress", "conclusion": None}] * 6,
+    )
+    assert result.returncode == 1
+    assert calls.count("actions/runs/100 --jq") == 6
+    assert "did not reach completed/cancelled" in result.stdout
+
+
+def test_scheduler_cleanup_verifies_accepted_cancelled_state(tmp_path: Path) -> None:
+    """Finish only after GitHub reports completed/cancelled."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("actions/runs/100 --jq") == 2
+    assert "Verified cancelled scheduler run 100." in result.stdout
+
+
+def test_scheduler_cleanup_second_inventory_pass_catches_state_transition(
+    tmp_path: Path,
+) -> None:
+    """A run moving between filtered states remains visible on the second pass."""
+    empty_inventory = {"total_count": 0, "workflow_runs": []}
+    transitioned_inventory = {
+        "total_count": 1,
+        "workflow_runs": [
+            {
+                "id": 100,
+                "status": "in_progress",
+                "pull_requests": [
+                    {"number": 7, "head": {"sha": "b" * 40}}
+                ],
+            }
+        ],
+    }
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [empty_inventory] * 5
+        + [empty_inventory] * 4
+        + [transitioned_inventory],
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.count("actions/workflows/pr-review-merge-scheduler.yml/runs") == 10
+    assert "/actions/runs/100/force-cancel" in calls
+
+
+def test_scheduler_cleanup_inventory_covers_review_event_runs(tmp_path: Path) -> None:
+    """A new head must retire predecessor runs triggered by PR reviews too."""
+    review_inventory = {
+        "total_count": 1,
+        "workflow_runs": [
+            {
+                "id": 100,
+                "event": "pull_request_review",
+                "status": "queued",
+                "pull_requests": [
+                    {"number": 7, "head": {"sha": "b" * 40}},
+                ],
+            }
+        ],
+    }
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [review_inventory] * 10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "event=pull_request_target" not in calls
+    assert "/actions/runs/100/force-cancel" in calls
+
+
+def test_scheduler_cleanup_fails_closed_on_truncated_inventory(
+    tmp_path: Path,
+) -> None:
+    """Never treat GitHub's filtered-search ceiling as a complete snapshot."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()],
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [{"total_count": 1001, "workflow_runs": []}],
+    )
+    assert result.returncode == 1
+    assert "inventory was incomplete" in result.stdout
+    assert "/force-cancel" not in calls
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
