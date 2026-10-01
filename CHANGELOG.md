@@ -1,3 +1,15 @@
+### OpenCode mixed-output framing preserves later controls
+
+- Ignore prose `{` or `[` delimiters whose next non-whitespace token cannot
+  start the corresponding JSON container. This preserves a later complete
+  exact-run control after diagnostics such as `Diagnostic: [pending` without
+  weakening the existing fail-closed rule for malformed outer objects or
+  arrays. RED commit `42099a359cdfb8126ea4e3d9118c60f6d98af1fa`
+  records the lost-control case; GREEN commit
+  `07baba20259c9061fbb647963f09745a9ca6931b` restores the framing boundary.
+  Fresh exact-head hosted Checks and a qualifying independent approval remain
+  required before ordinary merge.
+
 ### OpenCode embedded JSON evidence is outermost and linear-time
 
 - Parse prose-wrapped JSON by scanning each outermost object or array once,
