@@ -1,3 +1,17 @@
+### OpenCode embedded JSON evidence is outermost and linear-time
+
+- Parse prose-wrapped JSON by scanning each outermost object or array once,
+  with string and escape awareness, instead of retrying `raw_decode` at every
+  nested `{`. A malformed outer container can no longer promote a nested
+  exact-run control object into top-level approval evidence, and adversarial
+  nested prefixes no longer cause quadratic decoding work. RED commit
+  `d05f67f6c5f164309d3cbf15f4858c5fa3d176cd` preserves the malformed-object
+  exploit; GREEN commit `86f52f320e8eb5ac56efdf9a3e2552b20bf409de`
+  replaces the retry loop, and `1a00c73a752b45d9d2a808d9bc96baae51ea8402`
+  extends the same invariant to malformed array nesting. Fresh exact-head
+  hosted Checks and a qualifying independent approval remain required before
+  ordinary merge.
+
 ### OpenCode evidence labels require standalone identity boundaries
 
 - Reject a purported verification label when it is only the suffix of an
