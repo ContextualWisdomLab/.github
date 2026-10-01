@@ -2519,15 +2519,17 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
 
 
 def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
-    """A malformed outer value cannot turn a nested control into top-level evidence."""
+    """A malformed outer container cannot promote nested control evidence."""
     nested_control = {
         "head_sha": "head",
         "run_id": "run",
         "run_attempt": "attempt",
     }
-    payload = '{"outer":' * 2_000 + json.dumps(nested_control) + " trailing"
+    malformed_object = '{"outer":' * 2_000 + json.dumps(nested_control) + " trailing"
+    malformed_array = "[" * 2_000 + json.dumps(nested_control) + " trailing"
 
-    assert norm.iter_json_objects(payload) == []
+    assert norm.iter_json_objects(malformed_object) == []
+    assert norm.iter_json_objects(malformed_array) == []
 
 
 @pytest.mark.parametrize("approve_first", [True, False])
