@@ -122,12 +122,10 @@ class SchedulerAdmissionGate:
             records = dict(state.records)
             latest = dict(state.latest_sequences)
             for identity, record in tuple(records.items()):
-                if record.request.repository != repository:
+                if record.status != "dispatched" or record.request.repository != repository:
                     continue
                 pr = live_prs.get(record.request.pull_request)
                 live_head = str((pr or {}).get("headRefOid") or "").lower()
-                if record.status != "dispatched":
-                    continue
                 if live_head != record.request.head_sha:
                     records[identity] = RequestRecord(record.request, "stale")
                     continue
