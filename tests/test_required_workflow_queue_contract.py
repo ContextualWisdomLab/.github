@@ -7,11 +7,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1149,7 +1147,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
-        assert "github.event.action != 'closed'" in workflow
+        if filename == "pr-review-merge-scheduler.yml":
+            assert "github.event.action == 'closed'" in workflow
+        else:
+            assert "github.event.action != 'closed'" in workflow
         if filename in {"noema-review.yml", "strix.yml"}:
             assert "github.event.action != 'converted_to_draft'" in workflow
 

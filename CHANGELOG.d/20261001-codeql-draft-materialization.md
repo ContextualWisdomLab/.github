@@ -1,1 +1,2 @@
 - Materialize central CodeQL evidence for Draft consumer heads while keeping native-owner Drafts runner-free and using `converted_to_draft` only to retire stale same-PR work.
+- Retire stale or closed-PR central CodeQL, OpenCode, and Strix dispatches from the canonical scheduler after fresh run/PR revalidation, including before Draft skip and outside the open-PR queue.

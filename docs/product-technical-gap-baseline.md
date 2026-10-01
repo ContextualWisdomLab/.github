@@ -3739,9 +3739,12 @@ head/base/source/run identity, GHAS, SARIF, and terminal-verdict requirements
 are unchanged. The residual OpenCode, Strix, and Noema unchanged-head Ready
 materialization Gap remains open at the central review owner. Protected
 integration, fresh hosted exact-head evidence, and qualifying independent
-approval remain mandatory. The refreshed two-parent integration tree passes
-the 86-test focused lifecycle/queue suite and the warnings-fatal repository
-suite with 5,273 passes and five optional skips.
+approval remain mandatory. The predecessor #2548 integration tree passed the 86-test focused lifecycle/
+queue suite and 5,273 warnings-fatal repository tests with five optional skips.
+Canonical owner #2537 at `f79c8f2e1d1a7d2e1db94ae3fbfc120aa827e716`
+separately passes 458 focused scheduler/admission tests for bounded central-
+dispatch retirement. Fresh combined-tree local and hosted evidence remains
+mandatory after ordinary integration.
 
 ## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
 
@@ -3878,3 +3881,43 @@ fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
 the exact hosted command now covers all 18,252 production statements and 7,498
 branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
 Fresh exact-head hosted revalidation is required.
+
+## 2026-10-01 Central dispatch stale-run retirement
+
+**Status:** Proposed owner repair; local GREEN, protected integration and
+hosted exact-head evidence pending.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns central CodeQL,
+OpenCode, Strix, and PR scheduler admission. Product repositories supply PR
+identity and consume released workflow behavior; they do not cancel the
+owner's receiver runs or copy its scheduler.
+
+**Gap / RCA.** A live `.github` Actions snapshot contained 457 queued and two
+in-progress `repository_dispatch` runs. In the newest 100 queued runs, 38
+targeted superseded heads and five targeted closed PRs (CodeQL: 20 superseded,
+three closed; OpenCode: 18 superseded, two closed). Workflow-level
+`cancel-in-progress` could not retire them because Draft/close produced no new
+central dispatch in the same group. The scheduler also returned on Draft before
+calling stale-run cleanup, while closed PRs were absent from its open-PR scan.
+Representative obsolete runs included `.github#2548` OpenCode `36842116744`
+and CodeQL `36842027523`, both targeting `a9b20a…` after the live head moved to
+`2583cc…`; closed examples included AppGuardrail #1365 CodeQL `36818449683`.
+
+**Action / evidence.** The owner now parses only exact protected CodeQL,
+OpenCode, and Strix dispatch workflow paths and their repository/PR/head
+run-name contracts. Before force-cancel it re-fetches the active run and PR;
+the inventory and destructive-boundary validation both recognize all five
+GitHub active states (`queued`, `in_progress`, `waiting`, `pending`, and
+`requested`) so state transitions cannot evade cleanup. Then
+only closed targets or head mismatches authorize cancellation. Current-head,
+malformed, unrelated, and unreadable-authority cases fail closed. Consumer
+repository tokens are not accepted as central Actions authority; cross-repo
+cleanup requires an explicit organization token and otherwise fails closed.
+Draft cleanup precedes Draft skip. Only `converted_to_draft` and `closed` transition events
+are newly admitted to the bounded scheduler control job; closed cleanup returns
+before review, branch, auto-merge, or merge behavior, and ordinary Draft events
+still assign no runner. The RED-first tests reproduced all three missing paths;
+all 458 focused scheduler and admission tests pass with warnings fatal. Required
+checks, review admission, scanner verdicts, concurrency keys, and merge policy
+are unchanged. Fresh hosted exact-head checks and independent review remain
+mandatory.

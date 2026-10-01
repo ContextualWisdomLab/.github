@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
 
 
@@ -23,7 +22,7 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     filename: str,
     evidence_job: str,
 ) -> None:
-    """PR-stable concurrency retires close work without a no-op runner."""
+    """Close work takes no evidence runner; scheduler may take its cleanup runner."""
     workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
 
@@ -32,5 +31,8 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     assert "github.event.pull_request.head.sha" not in concurrency
     assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\S", concurrency)
     assert "cancel-closed-pr-runs:" not in workflow
-    assert "github.event.action != 'closed'" in workflow
+    if filename == "pr-review-merge-scheduler.yml":
+        assert "github.event.action == 'closed'" in workflow
+    else:
+        assert "github.event.action != 'closed'" in workflow
     assert evidence_job in workflow
