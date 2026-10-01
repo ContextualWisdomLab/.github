@@ -1,3 +1,12 @@
+### Python CI locks remediate refreshed advisory findings
+
+- Python Security run `36923052046` found three urllib3 advisories in the
+  pip-audit runtime and 25 findings across the Strix lock. The reproducible uv
+  inputs and hash locks now pin `urllib3` 2.8.0, `litellm` 1.94.3, `PyJWT`
+  2.15.0, and `pypdf` 6.19.0. The lock refresh preserves every unrelated
+  version, passes hash-verified pip dry runs, and adds an executable version
+  contract; no advisory exclusion or gate weakening is used.
+
 ### Security-scanned dependency fixtures use patched releases
 
 - Exact-head Security Scan run `36921642491` exposed five protected-base

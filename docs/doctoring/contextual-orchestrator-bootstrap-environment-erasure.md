@@ -79,3 +79,23 @@ GHSA-chgr-c6px-7xpp). Test-only commit
 ordinary child replaces those inputs with `fast-uri` 3.1.8, `ip-address`
 10.7.1, and `pyo3` 0.29.0; it does not exclude fixtures, lower severities,
 or weaken the Trivy gate.
+
+
+## Python Security lock RCA
+
+Exact-head Python Security run `36923052046` failed the pip-audit job
+`110573703288`. The audit completed normally and reported real findings:
+`requirements-pip-audit-ci-hashes.txt` retained `urllib3` 2.7.0
+(PYSEC-2026-4175, PYSEC-2026-4176, and PYSEC-2026-4177), while the overridden
+Strix lock retained `litellm` 1.94.1, `PyJWT` 2.13.0, `pypdf` 6.16.1,
+and the same `urllib3` release (25 findings across four packages).
+
+Test-only commit `e2c112a92a10d58e32c39c0c4b2799b7de8bfbe0` fixes the patched target versions
+as an executable contract before this lock repair. The inputs now constrain
+`urllib3` 2.8.0 for pip-audit and exact temporary Strix overrides
+`litellm` 1.94.3, `PyJWT` 2.15.0, `pypdf` 6.19.0, and `urllib3` 2.8.0.
+Both locks were regenerated with their checked-in uv commands while using the
+prior locks as version preferences; comparison confirms every unrelated package
+version is unchanged. `pip install --dry-run --require-hashes` succeeds for
+the pip-audit lock, and the Strix workflow-equivalent
+`--dry-run --no-deps --require-hashes` succeeds for its full lock.

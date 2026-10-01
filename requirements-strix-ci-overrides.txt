@@ -13,3 +13,11 @@
 #
 # Re-verify this override whenever strix-agent is bumped again.
 cryptography==50.0.0
+
+# Exact temporary security overrides from Python Security run 36923052046.
+# Remove a line only after a released strix-agent graph carries an equal or
+# newer patched lower bound and the regenerated lock passes the same audit.
+litellm==1.94.3
+pyjwt==2.15.0
+pypdf==6.19.0
+urllib3==2.8.0
