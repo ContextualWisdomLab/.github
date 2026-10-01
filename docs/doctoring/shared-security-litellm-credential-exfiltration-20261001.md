@@ -33,9 +33,13 @@ the source input did not own a LiteLLM pin. The minimal repair:
    lock, and nested-copy regression contract as unchanged ancestry.
 
 No scanner finding is ignored or suppressed. `pip-audit` over the repaired
-hash lock reports no known vulnerabilities. Hosted Security Scan, Python
-Security, CodeQL, SAST, independent review, and ordinary protected merge remain
-required; local evidence is not merge authorization.
+hash lock reports no known vulnerabilities. At repaired exact head
+`fe879f7b7f48f729f757e03851bf61149470ccb5`, Python Security run `36800615364`,
+Security Scan run `36800615435`, SAST run `36800615456`, and runtime-quality run
+`36800615444` are terminal GREEN. CodeQL run `36800615319` remains fail-closed:
+both language jobs recorded `verdict=pending` while the exact-head dispatch job
+succeeded. A qualifying independent approval and ordinary protected merge are
+still required; local or partial hosted evidence is not merge authorization.
 
 ## References
 
