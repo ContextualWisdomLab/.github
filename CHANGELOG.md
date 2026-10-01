@@ -1,3 +1,16 @@
+### OpenCode evidence labels require standalone identity boundaries
+
+- Reject a purported verification label when it is only the suffix of an
+  identifier-like token such as `uncoverage:`. The OpenCode normalizer now
+  applies the same boundary rule while selecting the last admissible label and
+  while finding the next label that terminates its section. RED commit
+  `af06cf9c87de4ac76db575d087a170746d6ab83d` proves that a forged suffix could
+  override an earlier fail-closed coverage statement; GREEN commit
+  `4d49b8307706ab8d4565cca8b0d9728bcdad2a35` preserves repeated labels,
+  Markdown decoration, and the distinct `docstring coverage:` label while
+  rejecting the identity-confused form. Fresh exact-head hosted Checks and a
+  qualifying independent approval remain required before ordinary merge.
+
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT
