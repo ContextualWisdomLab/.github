@@ -268,6 +268,56 @@ def test_dist_directory_accepts_matching_sdist_and_wheel_descriptions(
     assert module.main(["--dist", str(tmp_path)]) == 0
 
 
+def test_missing_description_sources_fail_closed(tmp_path: Path) -> None:
+    """An empty distribution directory or absent source is never a clean report."""
+    module = _module()
+    assert module.main(["--dist", str(tmp_path)]) == 2
+    with pytest.raises(ValueError, match="pass --dist or --readme"):
+        module.load_description(None, None)
+
+
+@pytest.mark.parametrize("builder", [_sdist, _wheel])
+def test_empty_distribution_description_uses_metadata_fallback(
+    tmp_path: Path, builder
+) -> None:
+    """Missing body and Description header produce an empty description."""
+    description, _source = _module().load_description(builder(tmp_path, ""), None)
+    assert description == ""
+
+
+def test_unreadable_sdist_metadata_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    """A missing metadata stream must fail instead of inspecting empty content."""
+    dist = _sdist(tmp_path, "description\n")
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", lambda _archive, _member: None)
+    assert _module().main(["--dist", str(dist)]) == 2
+
+
+def test_wheel_cli_entry_point_returns_the_gate_result(tmp_path: Path, monkeypatch) -> None:
+    """The executable entry point reads the wheel directly and exits cleanly."""
+    import runpy
+
+    dist = _wheel(tmp_path, "released description\n")
+    monkeypatch.setattr(sys, "argv", [str(_SCRIPT), "--dist", str(dist)])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(_SCRIPT), run_name="__main__")
+    assert result.value.code == 0
+
+
+def test_requirement_map_is_advisory_and_recorded(tmp_path: Path) -> None:
+    """Requirement vocabulary remains visible without blocking the default gate."""
+    module = _module()
+    dist = _sdist(tmp_path, "PRD/TRD traceability\n")
+    out = tmp_path / "report.json"
+    assert module.main(["--dist", str(dist), "--json", str(out)]) == 0
+    assert json.loads(out.read_text())["findings"] == [
+        {
+            "rule": "requirement-map",
+            "detail": "PRD/TRD traceability",
+            "blocking": False,
+        }
+    ]
+
+
 def test_readme_fallback_is_available_before_a_first_release(tmp_path: Path) -> None:
     """A repo with no distribution yet can still be gated on its README."""
     module = _module()
