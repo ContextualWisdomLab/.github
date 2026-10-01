@@ -1323,11 +1323,11 @@ def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path
                 for path in ("src/a.py", "README.md", "empty.txt")
             ) + "\n"
         if "contents/src/a.py" in target:
-            return encoded
+            return json.dumps({"content": encoded, "encoding": "base64", "size": 15})
         if "contents/README.md" in target:
             raise RuntimeError("Command failed: token secret")
         if "contents/empty.txt" in target:
-            return ""
+            return json.dumps({"content": "", "encoding": "base64", "size": 0})
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
@@ -1725,10 +1725,15 @@ def test_append_github_output_noop_without_path_or_values(monkeypatch):
     noema.append_github_output({})
 
 
-def test_current_transport_retry_attempt_rejects_oversized_counter(monkeypatch):
-    """Counters above the hard ceiling fail closed to zero."""
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "65")
-    assert noema.current_transport_retry_attempt() == 0
+@pytest.mark.parametrize("counter", ["65", "junk", "-1", "", '"1"', "true", "9" * 80])
+def test_current_transport_retry_attempt_rejects_invalid_counter(monkeypatch, counter):
+    """Malformed counters spend the budget instead of restarting it."""
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", counter)
+    attempt = noema.current_transport_retry_attempt()
+    assert attempt == noema.MAX_TRANSPORT_REDISPATCH_ATTEMPTS
+    assert noema.transport_redispatch_delay_seconds(
+        transport_retry_attempt=attempt, head_sha="a" * 40
+    ) is None
 
 
 def test_transport_redispatch_delay_rejects_negative_attempt_and_non_int_retry_after():
@@ -1755,11 +1760,12 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
     """A non-transient 400 stays typed transport without authorizing re-dispatch."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    error_body = io.BytesIO(b"{}")
 
     class Opener:
         def open(self, request):
             raise noema.urllib.error.HTTPError(
-                request.full_url, 400, "Bad Request", {}, io.BytesIO(b"{}")
+                request.full_url, 400, "Bad Request", {}, error_body
             )
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
@@ -1769,6 +1775,7 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
 
     assert exc_info.value.capacity_unavailable is False
     assert exc_info.value.http_status == 400
+    assert error_body.closed
     assert "outcome=provider_capacity_unavailable" not in capsys.readouterr().out
 
 
@@ -1832,10 +1839,12 @@ def test_append_github_output_writes_allowlisted_keys(tmp_path, monkeypatch):
 
 
 def test_current_transport_retry_attempt_parses_decimal_env(monkeypatch):
-    """Malformed counters fail closed to zero rather than inventing a budget."""
+    """Only an absent counter starts the first dispatch budget."""
     monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "1")
     assert noema.current_transport_retry_attempt() == 1
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "nope")
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "2")
+    assert noema.current_transport_retry_attempt() == 2
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "null")
     assert noema.current_transport_retry_attempt() == 0
     monkeypatch.delenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", raising=False)
     assert noema.current_transport_retry_attempt() == 0
@@ -1957,7 +1966,7 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError):
+    with pytest.raises(noema.urllib.error.HTTPError) as exc_info:
         handler.redirect_request(
             request,
             fp=None,
@@ -1966,6 +1975,7 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+    exc_info.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
@@ -2857,3 +2867,47 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_fetch_file_content_at_ref_refuses_malformed_base64(monkeypatch):
+    """A content response that is not valid base64 must fail, not decode partially.
+
+    GitHub returns file contents base64-encoded. Decoding without `validate=True`
+    would silently discard non-alphabet characters and hand the gate a truncated
+    file, which would then be reviewed as if it were the real one. The decode is
+    strict, so a malformed response is a RuntimeError naming the cause.
+    """
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps({"content": "not*valid*base64!!", "encoding": "base64", "size": 1}))
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+
+
+def test_fetch_file_content_at_ref_refuses_malformed_json(monkeypatch):
+    """A malformed GitHub API envelope fails closed before metadata inspection."""
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "{not-json")
+
+    with pytest.raises(RuntimeError, match="GitHub content response was malformed"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+
+
+@pytest.mark.parametrize("payload,reason", [
+    ({"content": "", "encoding": "none", "size": 1048577}, "API omitted"),
+    ({"content": "", "encoding": "base64", "size": 1}, "nonempty file"),
+    ({}, "response was malformed"),
+    ({"content": "YQ==", "encoding": "base64", "size": 2}, "size did not match"),
+])
+def test_fetch_file_content_at_ref_refuses_omitted_content(monkeypatch, payload, reason):
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(payload))
+    with pytest.raises(RuntimeError, match=reason):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+    context = noema.changed_file_context(
+        "owner/repo", 7, "deadbeef", changed_files=[("docs/a.md", "modified")]
+    )
+    assert "Unavailable from head content API" in context
+
+
+def test_fetch_file_content_at_ref_returns_empty_for_a_zero_byte_file(monkeypatch):
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(
+        {"content": "", "encoding": "base64", "size": 0}
+    ))
+    assert noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef") == ""

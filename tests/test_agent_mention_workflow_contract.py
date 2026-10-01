@@ -20,7 +20,8 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "workflow_dispatch:" not in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header
-    assert text.count("runs-on: ubuntu-24.04") == 2
+    assert text.count("group: CWL central control") == 2
+    assert text.count("labels: [self-hosted, linux, x64]") == 2
     assert text.count(CHECKOUT_PIN) == 2
     assert "ubuntu-latest" not in text
     assert "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8" not in text
@@ -49,6 +50,19 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "TARGET_REPOSITORY_SOURCE" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
     assert "agent_mention_sweep.py" in sweep
+
+
+def test_full_suite_tooling_lock_includes_collection_dependencies() -> None:
+    """A quality install must provide both parsers imported during suite collection."""
+    lock = (ROOT / "requirements-opencode-review-ci-hashes.txt").read_text(
+        encoding="utf-8"
+    )
+    requirements = {
+        line.split("==", 1)[0].casefold()
+        for line in lock.splitlines()
+        if line and not line.startswith(("#", " ", "-")) and "==" in line
+    }
+    assert {"defusedxml", "pyyaml"} <= requirements
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:

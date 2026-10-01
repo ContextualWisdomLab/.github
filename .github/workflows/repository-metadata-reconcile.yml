@@ -21,6 +21,10 @@ on:
       - "tests/test_repository_label_convergence.py"
       - "tests/test_repository_label_identity.py"
       - "tests/test_repository_label_live_verification.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-noema-document-ci.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
       - ".github/workflows/repository-metadata-reconcile.yml"
   schedule:
     - cron: "23 * * * *"
@@ -45,6 +49,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Verify exact revision
         shell: bash

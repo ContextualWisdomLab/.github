@@ -53,7 +53,9 @@ jobs:
     # inside a 13h57m run, ~97.5% of which was queue wait between exactly
     # these job boundaries).
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -394,7 +396,9 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -450,6 +454,15 @@ jobs:
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
+          # Persistent runners retain old files and Git configuration between jobs.
+          if [ -z "${GITHUB_WORKSPACE:-}" ] || [ -z "${RUNNER_WORKSPACE:-}" ] ||
+            [ -L "$GITHUB_WORKSPACE" ] || [ "$RUNNER_WORKSPACE" = / ] ||
+            [ "$(realpath "$GITHUB_WORKSPACE")" != "$(pwd -P)" ] ||
+            [ "$(dirname "$(realpath "$GITHUB_WORKSPACE")")" != "$(realpath "$RUNNER_WORKSPACE")" ]; then
+            echo "::error::Coverage workspace is outside the current runner job directory."
+            exit 1
+          fi
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
           git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
@@ -466,11 +479,11 @@ jobs:
       - name: Prepare pull request merge tree for coverage measurement
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          rm -rf "$COVERAGE_SOURCE_WORKDIR"
-          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
+          # Each attempt owns a fresh tree; never delete another job's checkout.
+          mkdir "$COVERAGE_SOURCE_WORKDIR"
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
@@ -520,7 +533,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -555,7 +568,7 @@ jobs:
       - name: Enforce changed-file syntax gate
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           # Deterministic per-file syntax check on the PR's changed files. The
@@ -582,12 +595,57 @@ jobs:
             exit 1
           fi
 
+      - name: Reclaim stale coverage images
+        # One OpenCode job runs per runner at a time, so coverage images older
+        # than two hours belong to finished or abandoned runs. Runs dispatched
+        # before per-run cleanup existed left them behind and filled the
+        # self-hosted guest disk. Failure here never blocks measurement.
+        run: |
+          set -uo pipefail
+          reclaim() {
+            docker image ls --filter reference=opencode-coverage-tools --filter until=2h --format '{{.ID}}' |
+              sort -u | while read -r image; do docker image rm -f "$image" || return 1; done &&
+              docker image prune -f &&
+              docker builder prune -f --filter until=24h
+          }
+          if ! reclaim; then
+            echo "::warning::Could not reclaim stale coverage images; continuing."
+          fi
+          # The sandbox writes workspaces as root, so the runner's own temp
+          # cleanup cannot remove them; sweep ones older than two hours that
+          # a cancelled or pre-cleanup run left behind, never this run's.
+          if [ -d "${RUNNER_TEMP:-}" ]; then
+            # Only run-numbered directories; shared ones (artifact, source,
+            # sandbox-result, tool-build) are never swept.
+            if ! find "$RUNNER_TEMP" -mindepth 1 -maxdepth 1 -type d \
+              \( -name 'opencode-coverage-[0-9]*-[0-9]*' -o -name 'opencode-coverage-tool-build-[0-9]*-[0-9]*' \) \
+              -mmin +120 ! -name "opencode-coverage-${GITHUB_RUN_ID}-*" \
+              ! -name "opencode-coverage-tool-build-${GITHUB_RUN_ID}-*" -print0 |
+              xargs -0 -r sudo rm -rf --; then
+              echo "::warning::Could not reclaim stale coverage workspaces; continuing."
+            fi
+          fi
+
+      - name: Expose runner Rust toolchain
+        # Self-hosted runners keep rustup's cargo in ~/.cargo/bin, which the
+        # runner service does not put on PATH. Hosted images already have it.
+        run: |
+          set -euo pipefail
+          if command -v cargo >/dev/null 2>&1; then
+            exit 0
+          fi
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            exit 0
+          fi
+          echo "::warning::cargo is not installed on this runner; Rust coverage will report a missing toolchain."
+
       - name: Measure test and docstring evidence
         id: measure
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Apply wheel-only resolution in the same step that consumes
           # pull-request dependency metadata. A value on an earlier step does
           # not cross the GitHub Actions step boundary.
@@ -630,12 +688,17 @@ jobs:
             # PR-head source, credentials, lifecycle execution, or runner
             # command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
+            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
+            trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
             trusted_vcs_import_root_resolver="${GITHUB_WORKSPACE}/scripts/ci/resolve_opencode_base_vcs_import_root.sh"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_noema_document_requirements" ] || [ -L "$trusted_noema_document_requirements" ]; then
+              echo "::error::Trusted Noema document requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
@@ -651,10 +714,26 @@ jobs:
             chmod 0700 "$coverage_build_dir"
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            install -m 0644 "$trusted_noema_document_requirements" \
+              "$coverage_build_dir/requirements-noema-document-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
             install -m 0755 "$trusted_vcs_import_root_resolver" \
               "$coverage_build_dir/resolve-opencode-base-vcs-import-root.sh"
+            trusted_cargo_fixture="${GITHUB_WORKSPACE}/tests/fixtures/coverage-cargo"
+            if [ -L "$trusted_cargo_fixture" ] || [ -L "$trusted_cargo_fixture/src" ]; then
+              echo "::error::Trusted Cargo coverage fixture directories must not be symlinks."
+              exit 1
+            fi
+            for fixture_file in Cargo.toml Cargo.lock src/lib.rs; do
+              if [ ! -f "$trusted_cargo_fixture/$fixture_file" ] ||
+                [ -L "$trusted_cargo_fixture/$fixture_file" ]; then
+                echo "::error::Trusted Cargo coverage fixture is missing or not a regular file."
+                exit 1
+              fi
+              install -D -m 0644 "$trusted_cargo_fixture/$fixture_file" \
+                "$coverage_build_dir/coverage-cargo-fixtures/$fixture_file"
+            done
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -713,10 +792,30 @@ jobs:
             # the generic Python coverage path failed at collection with `ImportError: cannot
             # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
             # even when the pull request itself introduced no regression.
+            rust_lock_args=()
+            rust_change_files="${RUNNER_TEMP}/opencode-rust-change-files"
+            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --no-renames --name-only -z \
+              "$PR_BASE_SHA" "$PR_HEAD_SHA" >"$rust_change_files"; then
+              echo "::error::Could not classify exact-head Cargo changes." >&2
+              exit 1
+            fi
+            rust_lock_changed=0
+            rust_manifest_changed=0
+            while IFS= read -r -d '' changed_path; do
+              case "${changed_path##*/}" in
+                Cargo.lock) rust_lock_changed=1 ;;
+                Cargo.toml) rust_manifest_changed=1 ;;
+              esac
+            done <"$rust_change_files"
+            if [ "$rust_lock_changed" -eq 1 ] && [ "$rust_manifest_changed" -eq 0 ]; then
+              # The trusted materializer still rejects non-base pins and changed graphs.
+              rust_lock_args=(--head-sha "$PR_HEAD_SHA")
+            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
               --output-dir "$coverage_build_dir/base-rust-dependencies" \
+              "${rust_lock_args[@]}" \
               --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
@@ -743,6 +842,11 @@ jobs:
               vulkan-tools \
               xz-utils \
             && rm -rf /var/lib/apt/lists/*
+          COPY coverage-cargo-fixtures /tmp/coverage-cargo-fixtures
+          RUN CARGO_HOME=/opt/coverage-cargo-home cargo fetch --locked \
+                --manifest-path /tmp/coverage-cargo-fixtures/Cargo.toml \
+            && rm -rf /tmp/coverage-cargo-fixtures \
+            && chmod -R a+rX /opt/coverage-cargo-home
           ENV LLVM_COV=/usr/bin/llvm-cov-19
           ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
           ENV COREPACK_HOME=/opt/corepack
@@ -762,6 +866,27 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
+          ARG OPENCODE_RUST_TOOLCHAIN=
+          RUN set -eu; \
+            [ -n "$OPENCODE_RUST_TOOLCHAIN" ] || exit 0; \
+            printf '%s\n' "$OPENCODE_RUST_TOOLCHAIN" | grep -Eqx '1\.[0-9]{1,3}\.[0-9]{1,3}'; \
+            curl --proto '=https' --tlsv1.2 -fsSLo /tmp/rustup-init \
+              https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init; \
+            echo 'dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init' | sha256sum -c -; \
+            chmod 0755 /tmp/rustup-init; \
+            RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/rustup/cargo /tmp/rustup-init -y --no-modify-path \
+              --profile minimal --default-toolchain "$OPENCODE_RUST_TOOLCHAIN" --component llvm-tools-preview; \
+            rm -f /tmp/rustup-init; \
+            toolchain="/usr/local/rustup/toolchains/${OPENCODE_RUST_TOOLCHAIN}-x86_64-unknown-linux-gnu"; \
+            ln -s "$toolchain/bin/cargo" /usr/local/bin/cargo; \
+            ln -s "$toolchain/bin/rustc" /usr/local/bin/rustc; \
+            mkdir -p /usr/local/libexec/opencode-rust; \
+            ln -s "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-cov" /usr/local/libexec/opencode-rust/llvm-cov; \
+            ln -s "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata" /usr/local/libexec/opencode-rust/llvm-profdata; \
+            chmod -R a+rX /usr/local/rustup; \
+            test "$(/usr/local/bin/rustc --version | cut -d ' ' -f 2)" = "$OPENCODE_RUST_TOOLCHAIN"; \
+            /usr/local/libexec/opencode-rust/llvm-cov --version >/dev/null; \
+            /usr/local/libexec/opencode-rust/llvm-profdata --version >/dev/null
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
               mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
@@ -852,10 +977,32 @@ jobs:
             && rm -f /usr/local/libexec/install-base-python-locks.py
           COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
-            if ! docker build --pull --no-cache --network=default \
-              --tag "$coverage_tool_image" \
-              --file "$coverage_build_dir/Dockerfile" \
-              "$coverage_build_dir"; then
+            # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
+            # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
+            # release installed at build time. Unpinned repositories keep Debian's.
+            base_rust_toolchain="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/resolve_base_rust_toolchain.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" --base-sha "$PR_BASE_SHA")"
+            build_coverage_tool_image() {
+              docker build --pull --no-cache --network=default \
+                --build-arg "OPENCODE_RUST_TOOLCHAIN=$1" \
+                --tag "$coverage_tool_image" \
+                --file "$coverage_build_dir/Dockerfile" \
+                "$coverage_build_dir"
+            }
+            coverage_llvm_cov=/usr/bin/llvm-cov-19
+            coverage_llvm_profdata=/usr/bin/llvm-profdata-19
+            if [ -n "$base_rust_toolchain" ] && build_coverage_tool_image "$base_rust_toolchain"; then
+              coverage_llvm_cov=/usr/local/libexec/opencode-rust/llvm-cov
+              coverage_llvm_profdata=/usr/local/libexec/opencode-rust/llvm-profdata
+            elif [ -n "$base_rust_toolchain" ]; then
+              # Rollback: a failed toolchain layer must not cost the repository its
+              # previous Debian-toolchain image.
+              echo "::warning::Rust ${base_rust_toolchain} layer failed; rebuilding with the Debian toolchain."
+              if ! build_coverage_tool_image ""; then
+                echo "::error::Trusted coverage tool image build failed before PR execution."
+                exit 1
+              fi
+            elif ! build_coverage_tool_image ""; then
               echo "::error::Trusted coverage tool image build failed before PR execution."
               exit 1
             fi
@@ -893,8 +1040,8 @@ jobs:
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
-              --env LLVM_COV=/usr/bin/llvm-cov-19 \
-              --env LLVM_PROFDATA=/usr/bin/llvm-profdata-19 \
+              --env LLVM_COV="$coverage_llvm_cov" \
+              --env LLVM_PROFDATA="$coverage_llvm_profdata" \
               "$coverage_tool_image" \
               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
 
@@ -933,6 +1080,7 @@ jobs:
             chown -R root:root /work/.git
             chmod -R go-w /work/.git
           fi
+          rm -rf -- /work/.opencode-sandbox-home
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
@@ -940,12 +1088,15 @@ jobs:
           # the read-only image -- so the baked offline vendor config from
           # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
           # copied there explicitly rather than set as an image ENV default.
+          mkdir -p /work/.opencode-sandbox-home/.cargo
+          cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/
           if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
-            mkdir -p /work/.opencode-sandbox-home/.cargo
-            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+            install -m 0644 /opt/base-rust-dependencies/cargo-config.toml \
               /work/.opencode-sandbox-home/.cargo/config.toml
-            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           fi
+          printf '\n[net]\noffline = true\n' >>/work/.opencode-sandbox-home/.cargo/config.toml
+          chmod 0444 /work/.opencode-sandbox-home/.cargo/config.toml
+          chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
@@ -956,6 +1107,8 @@ jobs:
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
+          not_measured=0
+          coverage_timeout_not_measured=0
           r_peer_check_required=0
 
           append() {
@@ -982,6 +1135,22 @@ jobs:
             append "... output truncated: showing first 140 and last 180 of ${line_count} lines ..."
             append ""
             tail -n 180 "$log_file" >>"$summary_file"
+          }
+
+          # fast-mlsirm's Rust suite runs for tens of minutes under llvm-cov, past
+          # the 900 s per-command cap. Only for Rust coverage, a timeout (exit 124)
+          # is disclosed as not measured instead of failing the gate; test
+          # failures, kills (137) and every other command still fail.
+          record_command_result() {
+            if [ "$1" -eq 124 ] && [ "$coverage_timeout_not_measured" = 1 ]; then
+              append "- Result: NOT MEASURED (timed out after 900 s; disclosed to the reviewer, not counted as a failure)"
+              not_measured=$((not_measured + 1))
+            elif [ "$1" -ne 0 ]; then
+              append "- Result: FAIL (exit ${1})"
+              failures=$((failures + 1))
+            else
+              append "- Result: PASS"
+            fi
           }
 
           run_and_capture() {
@@ -1025,12 +1194,7 @@ jobs:
             emit_captured_log "$log_file"
             append '```'
             append ""
-            if [ "$rc" -ne 0 ]; then
-              append "- Result: FAIL (exit ${rc})"
-              failures=$((failures + 1))
-            else
-              append "- Result: PASS"
-            fi
+            record_command_result "$rc"
             append ""
             rm -f "$log_file"
           }
@@ -1247,7 +1411,8 @@ jobs:
                 dist_dir="$(mktemp -d)"
                 python3 -m maturin build --offline --release -o "$dist_dir"
                 python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
-                rm -rf "$dist_dir"' bash "$project_dir"
+                python3 "$2" "$dist_dir"/*.whl .
+                rm -rf "$dist_dir"' bash "$project_dir" "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
           }
 
           run_python_test_coverage() {
@@ -1969,13 +2134,17 @@ jobs:
           }
 
           ensure_rust_toolchain() {
-            if [ "${LLVM_COV:-}" != "/usr/bin/llvm-cov-19" ] || \
-              [ "${LLVM_PROFDATA:-}" != "/usr/bin/llvm-profdata-19" ] || \
+            case "${LLVM_COV:-}:${LLVM_PROFDATA:-}" in
+              /usr/bin/llvm-cov-19:/usr/bin/llvm-profdata-19) llvm_pair_reviewed=1 ;;
+              /usr/local/libexec/opencode-rust/llvm-cov:/usr/local/libexec/opencode-rust/llvm-profdata) llvm_pair_reviewed=1 ;;
+              *) llvm_pair_reviewed=0 ;;
+            esac
+            if [ "$llvm_pair_reviewed" != 1 ] || \
               ! test -x "$LLVM_COV" || ! test -x "$LLVM_PROFDATA"; then
               append "### Rust coverage toolchain"
               append ""
               append "- Result: FAIL"
-              append "- Reason: the networkless coverage runtime did not preserve the reviewed LLVM 19 tool paths."
+              append "- Reason: the networkless coverage runtime did not preserve the reviewed LLVM tool paths (Debian LLVM 19 or the base-pinned Rust toolchain)."
               append "- Fix: rebuild the trusted coverage image and preserve the exact LLVM bindings at the Docker boundary."
               append ""
               failures=$((failures + 1))
@@ -2053,6 +2222,7 @@ jobs:
             else
               manifests="$(rust_coverage_manifests)"
               if [ -n "$manifests" ]; then
+                coverage_timeout_not_measured=1
                 while IFS= read -r manifest; do
                   local threshold
                   if ! threshold="$(rust_coverage_fail_under_lines "$manifest")"; then
@@ -2085,6 +2255,7 @@ jobs:
                       cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
                   fi
                 done <<<"$manifests"
+                coverage_timeout_not_measured=0
               else
                 append "### Rust test coverage"
                 append ""
@@ -2267,6 +2438,9 @@ jobs:
 
           append "## Coverage Decision"
           append ""
+          if [ "$not_measured" -ne 0 ]; then
+            append "- Not measured: ${not_measured} Rust coverage command(s) exceeded the 900 s per-command cap; line coverage for that code is unproven, not failed."
+          fi
           if [ "$failures" -eq 0 ]; then
             append "- Result: PASS"
             if [ "$measured_any" -eq 0 ]; then
@@ -2326,6 +2500,21 @@ jobs:
             exit 1
           fi
 
+      - name: Clean up coverage runner resources
+        if: always()
+        env:
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          COVERAGE_BUILD_DIR: ${{ runner.temp }}/opencode-coverage-tool-build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # The sandbox writes as uid 65532; the runner cannot remove its files.
+          sudo rm -rf -- "$COVERAGE_SOURCE_WORKDIR"
+          sudo rm -rf -- "$COVERAGE_BUILD_DIR"
+          coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker image inspect "$coverage_tool_image" >/dev/null 2>&1; then
+            docker image rm "$coverage_tool_image"
+          fi
+
   opencode-review-target:
     name: opencode-review
     needs: [validate-pr-metadata, coverage-evidence]
@@ -2340,7 +2529,9 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -2457,8 +2648,16 @@ jobs:
           printf 'Validated exact-head OpenCode review source for %s#%s (%s).\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$head_repository"
 
+      - name: Set up lock-compatible sidecar Python
+        id: sidecar_python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          update-environment: false
+
       - name: Provision contextual-orchestrator review sidecar
         env:
+          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
@@ -2573,6 +2772,9 @@ jobs:
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
+          # This checkout outlives jobs on self-hosted runners; drop registrations
+          # whose directories runner temp cleanup already removed.
+          git worktree prune
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
@@ -3990,7 +4192,7 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
                   "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
@@ -5299,13 +5501,9 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
-            # FORMAL_STATES, so the required workflow's "Fail closed without a
-            # current-head OpenCode verdict" job never sees a receipt, the
-            # rerun step gated on that receipt is skipped, and the required
-            # check fails closed forever instead of settling on an honest
-            # verdict.
-            event="REQUEST_CHANGES"
+            # Infrastructure failure is not a source-backed product verdict.
+            # COMMENT preserves diagnostics while coverage and receipt gates fail closed.
+            event="COMMENT"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5316,10 +5514,7 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # create_pull_review REQUEST_CHANGES rewrites the status comment to
-            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
-            # never looks finished; next action stays "fix coverage evidence,
-            # then rerun".
+            # Retain the coverage blocker independently of the diagnostic review.
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }

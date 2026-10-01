@@ -43,7 +43,7 @@ jobs:
     # queue wait between two single-digit-second jobs. See
     # docs/doctoring/actions-capacity-root-cause-20260917.md for the
     # underlying measurement methodology.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       pull-requests: read
@@ -152,6 +152,10 @@ jobs:
           api_url="${GITHUB_API_URL:-https://api.github.com}"
           mkdir -p "$trusted_source_dir"
           curl -fsSL \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --retry-max-time 30 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
@@ -303,8 +307,8 @@ jobs:
     # every PR event including docs/changelog-only diffs; this closes that
     # gap using the identical classifier. Fails OPEN: an unreadable, empty,
     # or truncated file list reviews everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
+    if: (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -358,7 +362,7 @@ jobs:
     name: coverage-source-tree
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - run: >-
           echo "PR-head source and coverage execution are delegated to the
@@ -378,7 +382,7 @@ jobs:
     # through coverage-source-tree, so an unadmitted head still skips it.
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - run: >-
           echo "This required-workflow job preserves the stable branch-protection
@@ -397,7 +401,7 @@ jobs:
     # directly by this job's own `if:` below, not inherited through that edge.
     needs: [required-workflow-bootstrap, changed-scope]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       pull-requests: read
@@ -607,7 +611,7 @@ jobs:
     # head no longer matches the live one. The target job also revalidates the
     # live PR before dispatch and verdict admission.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       actions: write
       contents: read
