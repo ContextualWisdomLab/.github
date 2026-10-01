@@ -201,18 +201,14 @@ def test_maturin_download_closes_unsuccessful_responses_and_http_errors(monkeypa
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
     assert closed == ["response"]
 
+    class ErrorBody(io.BytesIO):
+        def close(self):
+            closed.append("http-error")
+            super().close()
+
+    error_body = ErrorBody()
     transport_error = urllib.error.HTTPError(
-        "https://github.com/asset", 502, "Bad Gateway", {}, io.BytesIO()
-    )
-    original_close = transport_error.close
-
-    def close_transport_error() -> None:
-        """Record the production close without replacing response cleanup."""
-        closed.append("http-error")
-        original_close()
-
-    monkeypatch.setattr(
-        transport_error, "close", close_transport_error
+        "https://github.com/asset", 502, "Bad Gateway", {}, error_body
     )
 
     class ErrorOpener:
@@ -228,6 +224,7 @@ def test_maturin_download_closes_unsuccessful_responses_and_http_errors(monkeypa
     with pytest.raises(ValueError, match="HTTP 502"):
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
     assert closed == ["response", "http-error"]
+    assert error_body.closed
 
 
 def test_maturin_download_rejects_unlisted_name_before_network(monkeypatch):
@@ -339,6 +336,12 @@ def test_maturin_main_reads_an_explicit_asset_root(tmp_path, monkeypatch):
     assert captured["evidence"]["schema"] == "cwl.release-maturin-tool/1"
     assert captured["reader"] == "/reader"
     assert captured["raw"] == b"asset"
+
+
+def test_maturin_verifier_has_complete_docstrings():
+    """Every production entry point explains its trust-boundary responsibility."""
+    assert verifier._binary.__doc__
+    assert verifier.main.__doc__
 
 
 def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):

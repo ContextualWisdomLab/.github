@@ -262,6 +262,7 @@ esac
         "DEFAULT_BRANCH": "main",
         "TARGET_REPOSITORY_INPUT": "ContextualWisdomLab/naruon",
         "TARGET_PR_NUMBER": "1179",
+        "TARGET_HEAD_SHA_INPUT": "4afd4af7ad343660356791873d940aa2846f40c2",
         "TARGET_BASE_BRANCH_INPUT": "develop",
         "ALLOWED_TARGET_REPOSITORIES": (
             "ContextualWisdomLab/.github, ContextualWisdomLab/naruon"
@@ -300,6 +301,22 @@ esac
 
     assert rejected.returncode == 1
     assert "absent from the configured exact allowlist" in rejected.stdout
+    assert not output.exists()
+
+    stale_head_env = {
+        **env,
+        "TARGET_HEAD_SHA_INPUT": "a" * 40,
+    }
+    stale_head = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=stale_head_env,
+    )
+    assert stale_head.returncode == 1
+    assert "head does not match the live PR" in stale_head.stdout
     assert not output.exists()
 
     output.unlink(missing_ok=True)

@@ -16,19 +16,50 @@
   stacked-base admission; the minimal repair removes only that base filter.
   CodeQL and review evidence remain mandatory; release admission stays HOLD.
 
+### OpenCode preserves exact-head queue position
+
+- Remove the central receiver's lossy native concurrency group after live
+  evidence showed a later same-head wake cancelling the queued authoritative
+  run. The required wake now inventories all five active states twice, retires
+  only identity-validated older-head runs after live authority checks, and
+  fails closed until every accepted cancellation is proven
+  `completed/cancelled`. The merge scheduler now preserves exact-head
+  admissions within GitHub's documented `queue: max` bound and retires
+  predecessor heads from every PR-associated scheduler trigger only through a
+  metadata-only,
+  live-head-revalidated cleanup job. The receiver atomically compare-and-swaps one
+  repository/PR lease file on a dedicated central branch before source
+  materialization, coverage, or model execution, closing the cross-producer
+  check-then-POST race without lossy native concurrency. A dedicated minimal
+  admission job owns the central `contents: write` grant, rejects unauthorized
+  or malformed envelopes before OIDC exchange, and revalidates the complete
+  live state/draft/base/head identity immediately before each compare-and-swap;
+  metadata and source jobs remain read-only. Self-reruns retain their lease and
+  different-head takeovers validate the recorded owner. After formal receipt,
+  the publisher inventories repository-wide runs, binds the intended PR head
+  through `pull_requests[]` rather than the trusted-base run-level SHA,
+  recursively partitions the PR-lifetime `created` range below GitHub's
+  1,000-result filtered-search ceiling, rejects `total_count`/collection
+  mismatches, revalidates live authority before each POST, and reruns every
+  matching failed Required OpenCode job. A losing duplicate therefore needs
+  neither a callback payload nor a polling runner.
+
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected
   responses share one unconditional close path while `HTTPError` keeps its own
   explicit close path. A new regression exercises a non-200 response and an
-  opener-raised HTTP error. This removes an impossible optional-response branch
+  opener-raised HTTP error through a close-observing body without replacing the
+  error's real `close()` method. This removes an impossible optional-response branch
   without changing hosts, redirects, byte limits, hashes, or fail-closed error
   mapping; the focused suite is 17 passed with 100% statement and branch
   coverage. The trusted full-suite workflow now also tracks the verifier source
   and its focused test, so a future lifecycle change cannot omit the repository
   coverage gate that detected this regression. The pull-request trigger admits
   stacked canonical-owner bases as well as `main`; the protected-branch push
-  trigger remains restricted to `main`.
+  trigger remains restricted to `main`. Document the archive extractor and CLI
+  entry point, and expand the trusted docstring gate from one materializer file
+  to all `scripts/ci` production modules.
 
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
