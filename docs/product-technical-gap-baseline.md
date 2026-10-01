@@ -3776,3 +3776,31 @@ cases pass; Python compilation and `git diff --check` are GREEN. A direct
 1,600-level case required 0.065367 seconds. These are local diagnostic values,
 not a hosted performance claim. Pytest is unavailable in the local runner, so
 the complete suite remains an exact-head hosted acceptance requirement.
+
+
+## 2026-10-01 OpenCode mixed-output JSON framing boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN complete, fresh exact-head hosted Checks and a qualifying independent
+approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. OpenCode output is
+untrusted: prose delimiters must not block a later complete top-level control,
+while actual malformed outer containers must continue to suppress nested
+controls.
+
+**Gap / RCA.** CodeRabbit review on prior exact head
+`2ee8ddad072fe59bbe33c99994fa1e8c9cb5387c` showed that
+`Diagnostic: [pending` was treated as an unclosed JSON array and hid a later
+valid control. Direct reproduction showed the same regression for
+`Diagnostic: {pending`. The outermost single-pass repair had dropped the
+predecessor's candidate-start grammar gate.
+
+**RED → GREEN / action.** RED
+`42099a359cdfb8126ea4e3d9118c60f6d98af1fa` binds both prose delimiters.
+GREEN `07baba20259c9061fbb647963f09745a9ca6931b` admits an object start only
+before `"` or `}`, and an array start only before a JSON value starter.
+Existing malformed object/array nested-control cases remain fail-closed.
+Direct focused cases 8/8, Python compilation, and `git diff --check` are GREEN;
+pytest is unavailable locally, so the full hosted suite remains required.
