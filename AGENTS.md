@@ -19,8 +19,11 @@ Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
-as bootstrap transport in the same process that discovers models and serves;
-OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
+as bootstrap transport in the same process. Immediately after registration, the
+launcher erases those exact five values from Linux's initial C environment and
+removes their names from the live process environment before auth lookup,
+model discovery, or serving; neither procfs nor child inheritance may recover
+them. OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
 `orchestrator/free`. Strix was switched onto `orchestrator/free` on
 2026-08-30, superseding the prior `orchestrator/auto` (provider-diverse,
 non-free-admitting) default; private targets still require ZDR-compliant

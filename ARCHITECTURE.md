@@ -203,6 +203,10 @@ sequenceDiagram
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
+- Provider credentials are one-shot bootstrap transport. After KV registration,
+  the gateway clears the exact five values from Linux's original environment
+  memory and removes their names from the live environment before discovery or
+  serving; child processes and `/proc/<pid>/environ` must not recover them.
 - Every LLM-bearing review and scheduled-repair workflow routes model traffic
   through the vendored contextual-orchestrator gateway. OpenCode and Noema remain
   independent read-only verdict controls with their existing credential mappings,

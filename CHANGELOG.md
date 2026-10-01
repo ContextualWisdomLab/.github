@@ -1,3 +1,29 @@
+### Python CI locks remediate refreshed advisory findings
+
+- Python Security run `36923052046` found three urllib3 advisories in the
+  pip-audit runtime and 25 findings across the Strix lock. The reproducible uv
+  inputs and hash locks now pin `urllib3` 2.8.0, `litellm` 1.94.3, `PyJWT`
+  2.15.0, and `pypdf` 6.19.0. The lock refresh preserves every unrelated
+  version, passes hash-verified pip dry runs, and adds an executable version
+  contract; no advisory exclusion or gate weakening is used.
+
+### Security-scanned dependency fixtures use patched releases
+
+- Exact-head Security Scan run `36921642491` exposed five protected-base
+  findings in the reviewed Noema reader lock and Cargo coverage fixture:
+  `fast-uri` is pinned to 3.1.8, `ip-address` to 10.7.1, and `pyo3` to
+  0.29.0. Regression contracts bind those patched versions so refreshed
+  vulnerability databases cannot silently reintroduce the causal patterns.
+
+### Review sidecar erases one-shot provider bootstrap secrets
+
+- After the five provider credentials enter the process-local KV, the launcher now
+  zeroes their Linux initial-environment value bytes and removes the exact names
+  from the live environment before discovery, preflight, or serving. A subprocess
+  regression verifies absence from the long-lived process mapping,
+  `/proc/self/environ`, and a child environment while preserving unrelated values.
+  Refs ContextualWisdomLab/.github#1742 and ContextualWisdomLab/appguardrail#1092.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

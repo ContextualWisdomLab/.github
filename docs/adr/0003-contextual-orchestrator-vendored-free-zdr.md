@@ -315,3 +315,15 @@ all five, and auto-optimize routing by cost.
   vulnerabilities in the same audit. The earlier byte-identical-lock claim
   describes the superseded proposal, not this amended target. No review
   completion or runtime provider success is inferred from the lock audit.
+
+
+- **2026-10-02 amendment: erase provider bootstrap transport before long-lived work.**
+  The five provider credentials remain environment inputs only until
+  `register_review_credentials(os.environ)` copies them into the process-local KV.
+  Immediately afterward, before auth lookup, discovery, preflight, or serving, the
+  launcher zeroes their value bytes in Linux's original environment block and removes
+  the exact five names from `os.environ`. This closes both child-process inheritance
+  and `/proc/<pid>/environ` recovery without broad prefix deletion. Linux bootstrap
+  fails closed if the original environment cannot be located or its bounded scan is
+  malformed. Non-Linux runtimes still remove the names from the live and child
+  environment; they do not claim a Linux procfs guarantee.
