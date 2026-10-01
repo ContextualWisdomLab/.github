@@ -1,11 +1,10 @@
-"""Control-pool review workflows must not occupy a runner for draft pull requests.
+"""Review workflows may skip drafts only when Ready re-admission is observable.
 
 On 2026-09-29, 325 of 836 queued control-pool runs were for draft PRs; each
-only concluded "draft, no verdict required". Entry jobs now skip drafts at
-the job level, so no runner is assigned. This is safe only because every
-workflow re-runs on `ready_for_review` (same head), where the real gate runs,
-and because merge readiness comes from an opencode-agent review, not from
-these check results.
+only concluded "draft, no verdict required". Model-review entry jobs skip
+drafts at the job level so no runner is assigned. CodeQL is deliberately
+excluded: organization ruleset consumers do not receive `ready_for_review`,
+so a draft-skipped exact head would never receive its security evidence.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = [
     "opencode-review.yml",
     "strix.yml",
-    "codeql-pr.yml",
     "pr-review-merge-scheduler.yml",
 ]
 DRAFT_GUARD = (
@@ -75,6 +73,14 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
         if _is_cancellation_job(job_name, job):
             continue
         assert DRAFT_GUARD in str(job.get("if", "")), f"{name}:{job_name} lacks the draft guard"
+
+
+def test_codeql_materializes_draft_heads_for_ruleset_consumers() -> None:
+    """CodeQL cannot depend on a Ready event that ruleset consumers never receive."""
+    detect_languages = _load("codeql-pr.yml")["jobs"]["detect-languages"]
+    condition = str(detect_languages.get("if", ""))
+    assert "pull_request.draft" not in condition
+    assert condition == "github.event.action != 'closed'"
 
 
 def test_opencode_verdict_gate_still_runs_on_ready_for_review() -> None:
