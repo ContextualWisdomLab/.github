@@ -1,12 +1,12 @@
 """Official build-tool assets must match reviewed bytes and native links."""
 
 import hashlib
-import http.client
 import io
 import json
 import runpy
 import sys
 import tarfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -154,24 +154,20 @@ def test_maturin_download_is_bounded(monkeypatch):
         def close(self):
             pass
 
-    class Connection:
-        def __init__(self, host, timeout):
-            assert host == "github.com"
+    class Opener:
+        def open(self, request, timeout):
+            assert request.method == "GET"
+            assert request.full_url.endswith(
+                "/maturin-x86_64-pc-windows-msvc.zip"
+            )
+            assert request.headers == {"User-agent": "cwl-release-gate"}
             assert timeout == 60
-
-        def request(self, method, path, headers):
-            assert method == "GET"
-            assert path.endswith("/maturin-x86_64-pc-windows-msvc.zip")
-            assert headers == {"User-Agent": "cwl-release-gate"}
-
-        def getresponse(self):
             return Response()
 
-        def close(self):
-            pass
-
     monkeypatch.setattr(verifier, "MAX_ASSET_BYTES", 3)
-    monkeypatch.setattr(verifier, "HTTPSConnection", Connection)
+    monkeypatch.setattr(
+        verifier.urllib.request, "build_opener", lambda _handler: Opener()
+    )
     with pytest.raises(ValueError, match="asset exceeds"):
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
 
@@ -179,8 +175,8 @@ def test_maturin_download_is_bounded(monkeypatch):
 def test_maturin_download_rejects_unlisted_name_before_network(monkeypatch):
     """Caller-controlled paths and URLs never reach the network transport."""
     monkeypatch.setattr(
-        verifier,
-        "HTTPSConnection",
+        verifier.urllib.request,
+        "build_opener",
         lambda *_args, **_kwargs: pytest.fail("network opened for unlisted asset"),
     )
     for filename in ("foreign.zip", "../maturin.zip", "https://example.test/x", "x?y"):
@@ -204,84 +200,61 @@ def test_maturin_download_rejects_unsafe_redirect(monkeypatch, location):
     closed = []
 
     class Response:
-        status = 302
-
-        def getheader(self, name):
-            assert name == "Location"
-            return location
-
         def close(self):
             closed.append("response")
 
-    class Connection:
-        def __init__(self, host, timeout):
-            assert host == "github.com"
-
-        def request(self, *_args, **_kwargs):
-            pass
-
-        def getresponse(self):
-            return Response()
-
-        def close(self):
-            closed.append("connection")
-
-    monkeypatch.setattr(verifier, "HTTPSConnection", Connection)
+    handler = verifier._ExactReleaseRedirect()
+    handler.add_parent(
+        type("Parent", (), {"open": lambda *_args, **_kwargs: pytest.fail("redirect opened")})()
+    )
+    request = urllib.request.Request(
+        "https://github.com/PyO3/maturin/releases/download/v1.15.0/asset"
+    )
+    request.timeout = 60
     with pytest.raises(ValueError, match="redirect is not trusted"):
-        verifier._download("maturin-x86_64-pc-windows-msvc.zip")
-    assert closed == ["response", "connection"]
+        handler.http_error_302(
+            request, Response(), 302, "Found", {"Location": location}
+        )
+    assert closed == ["response"]
 
 
 def test_maturin_download_follows_one_exact_release_cdn_redirect(monkeypatch):
     """The normal GitHub release redirect stays HTTPS and drops all authority."""
-    requests = []
+    closed = []
+    sentinel = object()
 
     class Response:
-        def __init__(self, status, *, location=None, raw=b""):
-            self.status = status
-            self.location = location
-            self.raw = raw
-
-        def getheader(self, name):
-            assert name == "Location"
-            return self.location
-
-        def read(self, limit):
-            assert limit == verifier.MAX_ASSET_BYTES + 1
-            return self.raw
-
         def close(self):
-            pass
+            closed.append("response")
 
-    class Connection:
-        def __init__(self, host, timeout):
-            self.host = host
-            assert timeout == 60
+    captured = {}
 
-        def request(self, method, path, headers):
-            requests.append((self.host, method, path, headers))
+    class Parent:
+        def open(self, request, timeout):
+            captured.update(request=request, timeout=timeout)
+            return sentinel
 
-        def getresponse(self):
-            if self.host == "github.com":
-                return Response(
-                    302,
-                    location=(
-                        "https://release-assets.githubusercontent.com/"
-                        "github-production-release-asset/123/asset?sig=abc"
-                    ),
-                )
-            return Response(200, raw=b"archive")
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(verifier, "HTTPSConnection", Connection)
-    assert verifier._download("maturin-x86_64-pc-windows-msvc.zip") == b"archive"
-    assert [request[0] for request in requests] == [
-        "github.com",
-        "release-assets.githubusercontent.com",
-    ]
-    assert all(request[3] == {"User-Agent": "cwl-release-gate"} for request in requests)
+    handler = verifier._ExactReleaseRedirect()
+    handler.add_parent(Parent())
+    request = urllib.request.Request(
+        "https://github.com/PyO3/maturin/releases/download/v1.15.0/asset"
+    )
+    request.timeout = 60
+    location = (
+        "https://release-assets.githubusercontent.com/"
+        "github-production-release-asset/123/asset?sig=abc"
+    )
+    assert (
+        handler.http_error_302(
+            request, Response(), 302, "Found", {"Location": location}
+        )
+        is sentinel
+    )
+    assert closed == ["response"]
+    assert captured["timeout"] == 60
+    assert captured["request"].full_url == location
+    assert captured["request"].headers == {"User-agent": "cwl-release-gate"}
+    assert captured["request"]._cwl_release_redirected is True
 
 
 def test_maturin_downloader_has_no_scanner_suppressions():
@@ -290,6 +263,7 @@ def test_maturin_downloader_has_no_scanner_suppressions():
     assert "nosemgrep" not in source
     assert "nosec" not in source
     assert "urlopen" not in source
+    assert "HTTPSConnection" not in source
 
 
 def test_maturin_main_reads_an_explicit_asset_root(tmp_path, monkeypatch):
@@ -337,26 +311,18 @@ def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):
         def close(self):
             pass
 
-    class Connection:
-        def __init__(self, host, timeout):
-            assert host == "github.com"
+    class Opener:
+        def open(self, request, timeout):
+            assert request.method == "GET"
+            assert request.headers == {"User-agent": "cwl-release-gate"}
             assert timeout == 60
-            self.filename = None
-
-        def request(self, method, path, headers):
-            assert method == "GET"
-            assert headers == {"User-Agent": "cwl-release-gate"}
-            self.filename = path.rsplit("/", 1)[-1]
-
-        def getresponse(self):
-            return Response(archives[self.filename])
-
-        def close(self):
-            pass
+            return Response(archives[request.full_url.rsplit("/", 1)[-1]])
 
     monkeypatch.setattr(Path, "read_text", read_text)
     monkeypatch.setattr(scanner, "_reader", lambda: {"path": "/reader"})
     monkeypatch.setattr(scanner, "_links", links)
-    monkeypatch.setattr(http.client, "HTTPSConnection", Connection)
+    monkeypatch.setattr(
+        urllib.request, "build_opener", lambda _handler: Opener()
+    )
     monkeypatch.setattr(sys, "argv", ["verify"])
     runpy.run_path(verifier.__file__, run_name="__main__")
