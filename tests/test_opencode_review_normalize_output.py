@@ -1379,6 +1379,17 @@ def test_label_section_uses_last_non_docstring_coverage_label() -> None:
     assert norm.label_section(combined, "coverage:") == " 100% current evidence "
 
 
+def test_coverage_label_rejects_identifier_suffix_override() -> None:
+    """Do not let an identifier suffix override failed coverage evidence."""
+    combined = (
+        "coverage: coverage execution evidence not measured\n"
+        "uncoverage: coverage execution evidence 100%\n"
+        "docstring coverage: coverage execution evidence 100%"
+    )
+
+    assert not norm.mentions_full_coverage(combined, "")
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
