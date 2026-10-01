@@ -41,3 +41,5 @@ python3 -m interrogate
 새 회귀를 포함한 Maturin 테스트 24개, 해당 모듈의 statement·branch coverage 및 docstring 100%를 확인했다. 변경된 combined HEAD의 전체 재측정과 hosted 검증은 별도 진행한다.
 
 이후 전체 실행은 5,312 passed와 1 failed였다. 실패는 기존 OpenCode CLI integration의 bare-origin 회귀에서 요청 경로가 `/chat/completions`로 기록됐지만 formatted 출력에 `not found`가 없었던 경우다. 설치된 CLI 1.18.33이 지원하는 `--format json`으로 결과를 수집하고 실제 `error` event 안의 같은 메시지를 확인하도록 보강했다. Gateway의 served-route·잘못된 경로·오류 메시지 assertion을 제거하지 않았으며 테스트용 timeout도 늘리지 않았다. 두 integration 테스트가 두 차례 통과했다(27.71초, structured error assertion 추가 후 30.49초). 이는 loopback stub을 대상으로 한 CLI 증거이며 실제 모델 추론이나 hosted approval은 아니다.
+
+JSON 변경 후에도 전체 실행에서 같은 native CLI 실패가 재현됐다(5,312 passed / 1 failed). 이를 최종 복구로 취급하지 않았다. Helper는 첫 요청 직후 수집을 끝내고 20초 grace 뒤 CLI를 종료할 수 있어, 요청보다 늦게 도착하는 오류 event를 잃는 구조였다. 25초에 오류가 준비되는 simulated process는 기존 helper에서 premature kill로 RED였다. 오류 증거에는 CLI 종료까지 기다리고, 경로만 필요한 성공 사례에는 명시적으로 조기 종료하도록 분리한 뒤 GREEN을 확인했다. 기존 120초·20초 테스트 제한 수치는 바꾸지 않았다. Deterministic 회귀와 실제 native CLI 두 사례는 3 passed(69.47초)였다. 전체 결합 HEAD의 재측정은 별도 필요하다.
