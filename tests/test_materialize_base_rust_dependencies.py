@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -170,6 +171,7 @@ def test_root_and_fuzz_vendor_distinct_crates_and_reject_changed_or_missing_lock
         (dependency / "src").mkdir()
         (dependency / "src" / "lib.rs").write_text("pub fn marker() {}\n", encoding="utf-8")
         _commit_all(dependency)
+        assert set(materializer.tomllib.loads((dependency / "Cargo.toml").read_text())) == {"package"}
         dependencies[name] = dependency.as_uri()
 
     repo = tmp_path / "repo"
@@ -186,11 +188,17 @@ def test_root_and_fuzz_vendor_distinct_crates_and_reject_changed_or_missing_lock
         )
         (directory / "src").mkdir()
         (directory / "src" / "lib.rs").write_text("pub fn marker() {}\n", encoding="utf-8")
+        declared = materializer.tomllib.loads((directory / "Cargo.toml").read_text())["dependencies"]
+        assert declared == {dependency: {"git": dependencies[dependency]}}
+        assert dependencies[dependency].startswith("file://")
+        # Cargo offline mode blocks even a first fetch of these fixture-local
+        # Git URLs. Only this lock-generation call admits that local fetch.
         subprocess.run(
             ["cargo", "generate-lockfile"],
             cwd=directory,
             check=True,
             capture_output=True,
+            env={**os.environ, "CARGO_NET_OFFLINE": "false"},
         )
     base_sha = _commit_all(repo)
     monkeypatch.setenv("CARGO_NET_OFFLINE", "true")
@@ -570,3 +578,18 @@ def test_missing_cargo_is_reported_as_a_runner_toolchain_gap(
     err = capsys.readouterr().err
     assert "cargo is not installed or not on PATH" in err
     assert "~/.cargo/bin" in err
+
+
+@pytest.mark.parametrize("error", [OSError("transport"), subprocess.TimeoutExpired("cargo", 1)])
+def test_vendor_os_and_timeout_errors_remain_fail_closed(tmp_path, monkeypatch, error):
+    """Runner exceptions name the trusted lock and preserve the original cause."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
+    base_sha = _commit_all(repo)
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(materializer, "_run_cargo_vendor", fail)
+    with pytest.raises(RuntimeError, match=f"Cargo.lock: {type(error).__name__}") as result:
+        materializer.materialize(repo, base_sha, tmp_path / "out")
+    assert result.value.__cause__ is error

@@ -330,3 +330,69 @@ def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):
     )
     monkeypatch.setattr(sys, "argv", ["verify"])
     runpy.run_path(verifier.__file__, run_name="__main__")
+
+
+@pytest.mark.parametrize("raised", [False, True])
+def test_maturin_download_errors_close_every_open_response(monkeypatch, raised):
+    """Returned non-200 responses and HTTP exceptions both close their streams."""
+    import io
+    import urllib.error
+    stream = io.BytesIO(b"private error body")
+    class Response:
+        status = 503
+        closed = False
+        def close(self):
+            self.closed = True
+    response = Response()
+    error = urllib.error.HTTPError("https://github.com/asset", 503, "unavailable", {}, stream)
+    class Opener:
+        def open(self, request, timeout):
+            if raised:
+                raise error
+            return response
+    monkeypatch.setattr(verifier.urllib.request, "build_opener", lambda *_: Opener())
+    with pytest.raises(ValueError, match="returned HTTP 503"):
+        verifier._download("maturin-x86_64-pc-windows-msvc.zip")
+    if raised:
+        assert stream.closed
+    else:
+        assert response.closed
+        error.close()
+
+
+@pytest.mark.parametrize("stage,error_kind", [("acquire", "http"), ("acquire", "os"),
+                                              ("read", "http"), ("read", "os"),
+                                              ("oversize", None)])
+def test_maturin_response_lifetime_across_acquisition_and_read_failures(monkeypatch, stage, error_kind):
+    """Acquisition failures close no nonexistent response; reads always release the acquired one."""
+    import io
+    import urllib.error
+    stream = io.BytesIO(b"error") if error_kind == "http" else None
+    error = (urllib.error.HTTPError("https://github.com/asset", 503, "unavailable", {}, stream)
+             if stream is not None else OSError("local transport failed"))
+    class Response:
+        status = 200
+        closed = False
+        def read(self, limit):
+            if stage == "read":
+                raise error
+            assert limit == 4
+            return b"four"
+        def close(self):
+            self.closed = True
+    response = Response()
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url.startswith("https://github.com/PyO3/maturin/releases/download/v1.15.0/")
+            if stage == "acquire":
+                raise error
+            return response
+    monkeypatch.setattr(verifier.urllib.request, "build_opener", lambda *_: Opener())
+    monkeypatch.setattr(verifier, "MAX_ASSET_BYTES", 3)
+    expected_type = OSError if error_kind == "os" else ValueError
+    message = "local transport" if error_kind == "os" else "returned HTTP 503" if error_kind == "http" else "asset exceeds"
+    with pytest.raises(expected_type, match=message):
+        verifier._download("maturin-x86_64-pc-windows-msvc.zip")
+    assert response.closed is (stage != "acquire")
+    if stream is not None:
+        assert stream.closed

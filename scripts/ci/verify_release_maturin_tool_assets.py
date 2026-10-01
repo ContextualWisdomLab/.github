@@ -97,12 +97,14 @@ def _download(filename: str) -> bytes:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _ExactReleaseRedirect()
     )
-    response = None
     try:
         response = opener.open(request, timeout=60)
-        if response.status != 200:
-            raise ValueError(f"maturin release download returned HTTP {response.status}")
-        raw = response.read(MAX_ASSET_BYTES + 1)
+        try:
+            if response.status != 200:
+                raise ValueError(f"maturin release download returned HTTP {response.status}")
+            raw = response.read(MAX_ASSET_BYTES + 1)
+        finally:
+            response.close()
     except urllib.error.HTTPError as error:
         try:
             raise ValueError(
@@ -110,15 +112,13 @@ def _download(filename: str) -> bytes:
             ) from error
         finally:
             error.close()
-    finally:
-        if response is not None:
-            response.close()
     if len(raw) > MAX_ASSET_BYTES:
         raise ValueError("maturin release asset exceeds inspection limit")
     return raw
 
 
 def _binary(raw: bytes, filename: str) -> bytes:
+    """Read the single bounded executable member from a release asset."""
     if filename.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
@@ -167,6 +167,7 @@ def verify_assets(evidence: dict, reader: str, fetch=_download) -> None:
 
 
 def main() -> None:
+    """Verify pinned asset metadata using local files or the admitted downloader."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--asset-root", type=Path)
     args = parser.parse_args()
