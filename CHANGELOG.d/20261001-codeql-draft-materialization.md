@@ -1,2 +1,3 @@
 - Materialize central CodeQL evidence for Draft consumer heads while keeping native-owner Drafts runner-free and using `converted_to_draft` only to retire stale same-PR work.
 - Retire stale or closed-PR central CodeQL, OpenCode, and Strix dispatches from the canonical scheduler after fresh run/PR revalidation, including before Draft skip and outside the open-PR queue.
+- Correct required-workflow scope guidance: unfiltered workflow triggers do not widen the organization ruleset beyond default-base pull requests, so stacked feature-base pull requests wait for prerequisite merge and retargeting before central Security, SAST, and CodeQL evidence materializes.

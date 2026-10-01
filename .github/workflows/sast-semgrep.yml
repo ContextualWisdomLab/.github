@@ -22,7 +22,10 @@ name: SAST Semgrep
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
-    # Scan every PR base ref, including feature branches used by stacked PRs.
+    # Keep the native trigger base-ref agnostic. This does not widen ruleset
+    # 18156473, which injects this required workflow only for pull requests
+    # targeting the repository default branch. A feature-base stacked PR gets
+    # this gate only where the workflow is run natively, or after retargeting.
   push:
     branches: [main, master, develop]
   schedule:
