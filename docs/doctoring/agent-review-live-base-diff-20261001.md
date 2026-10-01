@@ -37,3 +37,17 @@ Completion requires a dedicated owner PR, exact-current-head hosted Checks,
 qualifying independent review, ordinary protected-main integration, ordinary
 merge of the owner into #1678, and a fresh successful #1678 run. Pending,
 queued, skipped, or predecessor results are not passing evidence.
+
+## Canonical shared-security integration
+
+Before dependent exact-head revalidation, the repair ordinary-merges canonical
+shared-security owner `.github#2531@7900ba4c4d68c378023592252f2579646fad9aaa`.
+That owner head has terminal-success Security Scan `36804208012`, Python
+Security `36804208106`, SAST Semgrep `36804208049`, and Agent Review Runtime
+Quality `36803662119`. Its CodeQL run `36804208074` failed closed because the
+compatibility jobs still read an authenticated verdict as pending; that result
+is not represented as passing.
+
+The merge preserves both lineages without force or rebase and keeps dependency
+repair in the canonical owner. The resulting dependent head must rerun all
+Checks; predecessor success is causal evidence only, not admission evidence.
