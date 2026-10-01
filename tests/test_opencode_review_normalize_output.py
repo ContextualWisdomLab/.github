@@ -2518,6 +2518,23 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects("no json here") == []
 
 
+def test_iter_json_objects_skips_non_json_prose_delimiters():
+    """Unclosed prose delimiters cannot hide a later complete control object."""
+    control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(control)
+
+    assert norm.iter_json_objects("Diagnostic: [pending\n" + encoded_control) == [
+        control
+    ]
+    assert norm.iter_json_objects("Diagnostic: {pending\n" + encoded_control) == [
+        control
+    ]
+
+
 def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
     """A malformed outer container cannot promote nested control evidence."""
     nested_control = {
