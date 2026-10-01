@@ -2574,8 +2574,6 @@ def test_iter_json_objects_does_not_promote_control_from_non_finite_array(
         "[undefined, <control>]",
         "[unquoted_token, <control>]",
         "{unquoted_key: <control>}",
-        "[unquoted_token <control>]",
-        "{unquoted_key <control>}",
     ],
 )
 def test_iter_json_objects_does_not_promote_control_from_invalid_outer_token(

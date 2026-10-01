@@ -97,16 +97,12 @@ def _download(filename: str) -> bytes:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _ExactReleaseRedirect()
     )
+    response = None
     try:
         response = opener.open(request, timeout=60)
-        try:
-            if response.status != 200:
-                raise ValueError(
-                    f"maturin release download returned HTTP {response.status}"
-                )
-            raw = response.read(MAX_ASSET_BYTES + 1)
-        finally:
-            response.close()
+        if response.status != 200:
+            raise ValueError(f"maturin release download returned HTTP {response.status}")
+        raw = response.read(MAX_ASSET_BYTES + 1)
     except urllib.error.HTTPError as error:
         try:
             raise ValueError(
@@ -114,6 +110,9 @@ def _download(filename: str) -> bytes:
             ) from error
         finally:
             error.close()
+    finally:
+        if response is not None:
+            response.close()
     if len(raw) > MAX_ASSET_BYTES:
         raise ValueError("maturin release asset exceeds inspection limit")
     return raw
