@@ -1465,6 +1465,22 @@ def iter_json_objects(text: str) -> list[Any]:
         if start_index is None:
             if character not in "{[":
                 continue
+            next_index = index + 1
+            while next_index < len(text) and text[next_index] in " \t\r\n":
+                next_index += 1
+            if next_index == len(text):
+                continue
+            next_character = text[next_index]
+            if character == "{" and next_character not in {'"', "}"}:
+                continue
+            if character == "[" and not (
+                next_character in '\"{[-0123456789]'
+                or any(
+                    text.startswith(literal, next_index)
+                    for literal in ("true", "false", "null")
+                )
+            ):
+                continue
             start_index = index
             container_stack.append("}" if character == "{" else "]")
             continue
