@@ -117,8 +117,10 @@ def _run_opencode(
     base_url_template: str,
     gateway_origin: str,
     requested_paths: list[str],
+    *,
+    stop_after_request: bool = False,
 ) -> tuple[str, str]:
-    """Run the OpenCode CLI until it asks the gateway for one route."""
+    """Capture CLI completion, or only the first request for transport-only proof."""
     provider = _tracked_provider_block()
     provider = json.loads(json.dumps(provider))
     provider["options"]["baseURL"] = base_url_template
@@ -164,12 +166,11 @@ def _run_opencode(
         stderr=subprocess.PIPE,
         text=True,
     )
-    # The served route answers successfully, after which the agent keeps
-    # working; the requested path is the evidence, so stop as soon as one
-    # arrives. An unserved route makes the CLI exit on its own.
+    # Transport-only proof can stop at the first request. Error evidence needs
+    # CLI completion: a request may arrive before its error event is emitted.
     deadline = time.monotonic() + CLI_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        if requested_paths or process.poll() is not None:
+        if (stop_after_request and requested_paths) or process.poll() is not None:
             break
         time.sleep(0.2)
     try:
@@ -189,7 +190,7 @@ def test_tracked_config_requests_the_gateway_served_route(gateway_stub, tmp_path
     """The shipped baseURL must make the CLI ask for the served /v1 route."""
     origin, requested_paths = gateway_stub
     base_url = _tracked_provider_block()["options"]["baseURL"]
-    _run_opencode(tmp_path, base_url, origin, requested_paths)
+    _run_opencode(tmp_path, base_url, origin, requested_paths, stop_after_request=True)
     assert requested_paths, "the CLI issued no request to the gateway stub"
     assert requested_paths[0] == GATEWAY_SERVED_ROUTE
 
