@@ -62,6 +62,20 @@
   rejecting the identity-confused form. Fresh exact-head hosted Checks and a
   qualifying independent approval remain required before ordinary merge.
 
+### Maturin download failures close every transport response
+
+- Refactor the bounded Maturin asset downloader so successful and rejected
+  responses share one unconditional close path while `HTTPError` keeps its own
+  explicit close path. A new regression exercises a non-200 response and an
+  opener-raised HTTP error. This removes an impossible optional-response branch
+  without changing hosts, redirects, byte limits, hashes, or fail-closed error
+  mapping; the focused suite is 17 passed with 100% statement and branch
+  coverage. The trusted full-suite workflow now also tracks the verifier source
+  and its focused test, so a future lifecycle change cannot omit the repository
+  coverage gate that detected this regression. The pull-request trigger admits
+  stacked canonical-owner bases as well as `main`; the protected-branch push
+  trigger remains restricted to `main`.
+
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT
