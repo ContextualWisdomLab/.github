@@ -43,16 +43,22 @@ qualifying independent review, ordinary protected-main integration, ordinary
 merge of the owner into #1678, and a fresh successful #1678 run. Pending,
 queued, skipped, or predecessor results are not passing evidence.
 
-## Canonical shared-security integration
+## Canonical owner integration and stacked admission
 
 Before dependent exact-head revalidation, the repair ordinary-merges canonical
-shared-security owner `.github#2531@7900ba4c4d68c378023592252f2579646fad9aaa`.
-That owner head has terminal-success Security Scan `36804208012`, Python
-Security `36804208106`, SAST Semgrep `36804208049`, and Agent Review Runtime
-Quality `36803662119`. Its CodeQL run `36804208074` failed closed because the
-compatibility jobs still read an authenticated verdict as pending; that result
-is not represented as passing.
+parser/security/coverage owner
+`.github#2530@dc54310c8c5ee6637274e7e82f5ea53d64ad91e6`. The resulting owner PR head
+`b66036e3702b95d47fc7eac5eb6097e198d49997` is an ordinary two-parent merge,
+but it produced no Agent Review Runtime Quality run: the workflow's
+`pull_request` trigger still admitted only base `main`, while this PR now
+targets the canonical owner branch.
+
+The regression contract failed against that filter. The minimal repair removes
+only the pull-request base restriction and retains path selection, read-only
+permissions, exact-head checkout, and PR-stable concurrency. This permits the
+owner workflow to produce exact-head evidence on canonical stacked bases; it
+does not make a pending or skipped result passing evidence.
 
 The merge preserves both lineages without force or rebase and keeps dependency
-repair in the canonical owner. The resulting dependent head must rerun all
-Checks; predecessor success is causal evidence only, not admission evidence.
+repair in the canonical owner. The resulting head must rerun all Checks;
+predecessor success is causal evidence only, not admission evidence.

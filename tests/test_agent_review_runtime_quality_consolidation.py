@@ -90,6 +90,16 @@ def test_changelog_only_edits_do_not_boot_the_consolidated_runner() -> None:
     assert '      - "CHANGELOG.md"' not in trigger
 
 
+def test_runtime_quality_admits_stacked_pull_requests() -> None:
+    """A canonical owner base must not suppress exact-head quality evidence."""
+
+    pull_request_trigger = _workflow_text().split("  pull_request:\n", 1)[1].split(
+        "\nconcurrency:\n", 1
+    )[0]
+
+    assert "branches:" not in pull_request_trigger
+
+
 def test_consolidated_workflow_preserves_all_contract_suites() -> None:
     """Keep the retired Noema, OpenCode, and Strix evidence in one job."""
 

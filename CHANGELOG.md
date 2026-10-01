@@ -9,12 +9,12 @@
 - Refetch the base ref immediately before both merge-base decisions. A base
   advance during the quality job can no longer revive the same stale-diff
   failure at the terminal whitespace gate.
-- Preserve the canonical shared-security owner `.github#2531@7900ba4c4` as an
-  ordinary second parent of the workflow repair. Its exact-head Security Scan,
-  Python Security, SAST, and runtime-quality runs are green, so the dependent
-  branch consumes patched PyJWT, PyO3, urllib3, LiteLLM, `fast-uri`, and
-  `ip-address` bytes instead of duplicating a leaf lock repair. CodeQL remains
-  fail-closed pending an authenticated verdict; release admission stays HOLD.
+- Preserve canonical parser/security/coverage owner `.github#2530@dc54310c` as
+  an ordinary second parent. The integrated PR exposed that this quality
+  workflow still admitted only pull requests targeting `main`, so its own
+  stacked exact head produced no quality run. A RED contract now requires
+  stacked-base admission; the minimal repair removes only that base filter.
+  CodeQL and review evidence remain mandatory; release admission stays HOLD.
 
 ### Maturin download failures close every transport response
 
