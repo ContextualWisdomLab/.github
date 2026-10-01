@@ -1,10 +1,12 @@
-"""Review workflows may skip drafts only when Ready re-admission is observable.
+"""Control workflows admit Draft events only for required security evidence.
 
 On 2026-09-29, 325 of 836 queued control-pool runs were for draft PRs; each
-only concluded "draft, no verdict required". Model-review entry jobs skip
-drafts at the job level so no runner is assigned. CodeQL is deliberately
-excluded: organization ruleset consumers do not receive `ready_for_review`,
-so a draft-skipped exact head would never receive its security evidence.
+only concluded "draft, no verdict required". Review workflows skip Drafts at
+the job level. CodeQL is different: organization ruleset consumers do not
+receive an unchanged-head `ready_for_review` launch, so consumer Draft heads
+must materialize security evidence while the native owner still saves its
+runner. Draft conversion and close events only enter concurrency to retire
+stale work.
 """
 
 from __future__ import annotations
@@ -72,18 +74,20 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
         assert DRAFT_GUARD in str(job.get("if", "")), f"{name}:{job_name} lacks the draft guard"
 
 
-def test_codeql_materializes_draft_heads_without_scanning_draft_conversion() -> None:
-    """Draft heads scan, while conversion only retires the prior same-PR run."""
+def test_codeql_materializes_only_consumer_draft_heads() -> None:
+    """Consumer Drafts scan; owner Drafts and retirement events take no runner."""
     doc = _load("codeql-pr.yml")
     assert "converted_to_draft" in _pr_types(doc)
-    detect_languages = doc["jobs"]["detect-languages"]
-    condition = str(detect_languages.get("if", ""))
-    assert "pull_request.draft" not in condition
-    assert condition == (
+    assert str(doc["jobs"]["detect-languages"].get("if", "")) == (
         "github.event.action != 'closed' && "
-        "github.event.action != 'converted_to_draft'"
+        "github.event.action != 'converted_to_draft' && "
+        "(github.event.pull_request.draft != true || "
+        "github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')"
     )
+
+
 QUEUE_RETIREMENT_WORKFLOWS = [
+    "codeql-pr.yml",
     "pr-review-merge-scheduler.yml",
     "sast-semgrep.yml",
     "security-scan.yml",
@@ -100,7 +104,10 @@ def test_converted_to_draft_retires_queued_run_without_runner(name: str) -> None
         if _is_cancellation_job(job_name, job):
             continue
         condition = str(job.get("if", ""))
-        assert "github.event.pull_request.draft != true" in condition
+        if name != "codeql-pr.yml":
+            assert "github.event.pull_request.draft != true" in condition
+        else:
+            assert "github.event.action != 'converted_to_draft'" in condition
         assert "github.event.action == 'converted_to_draft'" not in condition
 
 

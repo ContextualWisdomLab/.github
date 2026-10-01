@@ -3709,7 +3709,7 @@ verdict-shape acceptance, and qualifying independent approval.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
 
-## 2026-10-01 CodeQL Draft-to-Ready materialization
+## 2026-10-01 CodeQL Draft event materialization
 
 **Status:** Proposed owner repair; protected integration, hosted exact-head
 evidence, and qualifying independent approval remain mandatory.
@@ -3721,23 +3721,23 @@ consumer canary and does not copy or override the owner workflow.
 **Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
 #448, and #100 produced no new central CodeQL run. Ruleset consumers receive
 opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
-entry job nevertheless skipped Draft event snapshots and claimed Ready would
-re-run the same head. That made the only reachable exact-head security run a
-permanent skip.
+entry job nevertheless skipped every Draft event and claimed Ready would
+re-run the same head. At the same time, native-owner `converted_to_draft`
+events must enter per-PR concurrency to retire stale work without starting a
+replacement scan. A single blanket Draft predicate encoded incompatible
+halves of that lifecycle.
 
-**Action / evidence.** The integrated contract preserves both valid owner
-deltas. CodeQL runs on Draft consumer heads for `opened`, `synchronize`, and
-`reopened`; `converted_to_draft` still enters the stable per-PR concurrency
-group to retire an older Ready run but skips before runner admission. Closed
-events remain excluded. Review workflows stay Draft-gated because Ready is
-their admission boundary. The test-first contract failed when CodeQL lacked
-the Draft-conversion event and passes only when the event matrix separates
-materialization from queue retirement. Authenticated status, exact
-head/base/source/run identity, GHAS, SARIF, and terminal-verdict requirements
-are unchanged. The residual OpenCode, Strix, and Noema unchanged-head Ready
-materialization Gap remains open at the central review owner. Protected
-integration, fresh hosted exact-head evidence, and qualifying independent
-approval remain mandatory.
+**Action / evidence.** The owner now distinguishes event and repository:
+consumer Draft heads materialize CodeQL evidence, native-owner Draft heads
+remain runner-free, and `converted_to_draft`/`closed` only retire stale work.
+Authenticated status, exact head/base/source/run identity, GHAS, SARIF, and
+terminal-verdict requirements are unchanged. The RED-first matrix produced
+two intended failures; the focused Draft-control plus queue suite passes 86
+tests, and the warnings-fatal repository suite passes 5,261 tests, five
+optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Full exact-tree
+and hosted evidence remain required and are not inferred from either
+predecessor PR.
 
 ## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
 

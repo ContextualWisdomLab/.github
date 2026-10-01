@@ -1,3 +1,1 @@
-- Run the central CodeQL required workflow for Draft consumer heads because
-  organization ruleset consumers do not receive an unchanged-head
-  `ready_for_review` event; model review remains Ready-gated.
+- Materialize central CodeQL evidence for Draft consumer heads while keeping native-owner Drafts runner-free and using `converted_to_draft` only to retire stale same-PR work.

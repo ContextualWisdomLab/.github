@@ -58,14 +58,11 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    # Organization ruleset consumers receive opened/synchronize/reopened but
-    # not ready_for_review. CodeQL therefore materializes exact-head security
-    # evidence for drafts instead of depending on a Ready event that will not
-    # exist in those repositories. A converted_to_draft event still enters the
-    # workflow concurrency group to retire a stale Ready run, but it does not
-    # start a replacement scan. Review workflows keep their separate Ready
-    # admission contract; this scanner never publishes a review verdict.
-    if: github.event.action != 'closed' && github.event.action != 'converted_to_draft'
+    # Ruleset consumers do not receive unchanged-head Ready events, so their
+    # Draft heads materialize security evidence. The native owner saves its
+    # runner, while Draft conversion and close events only retire stale work
+    # through the per-PR concurrency group above.
+    if: github.event.action != 'closed' && github.event.action != 'converted_to_draft' && (github.event.pull_request.draft != true || github.event.pull_request.base.repo.full_name != 'ContextualWisdomLab/.github')
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
