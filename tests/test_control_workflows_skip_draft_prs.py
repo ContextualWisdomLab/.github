@@ -22,10 +22,7 @@ WORKFLOWS = [
     "strix.yml",
     "pr-review-merge-scheduler.yml",
 ]
-DRAFT_GUARD = (
-    "(github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' "
-    "|| github.event.action == 'closed')"
-)
+DRAFT_GUARD = "github.event.pull_request.draft != true"
 
 
 def _load(name: str) -> dict:
@@ -75,12 +72,36 @@ def test_entry_jobs_skip_draft_prs(name: str) -> None:
         assert DRAFT_GUARD in str(job.get("if", "")), f"{name}:{job_name} lacks the draft guard"
 
 
-def test_codeql_materializes_draft_heads_for_ruleset_consumers() -> None:
-    """CodeQL cannot depend on a Ready event that ruleset consumers never receive."""
-    detect_languages = _load("codeql-pr.yml")["jobs"]["detect-languages"]
+def test_codeql_materializes_draft_heads_without_scanning_draft_conversion() -> None:
+    """Draft heads scan, while conversion only retires the prior same-PR run."""
+    doc = _load("codeql-pr.yml")
+    assert "converted_to_draft" in _pr_types(doc)
+    detect_languages = doc["jobs"]["detect-languages"]
     condition = str(detect_languages.get("if", ""))
     assert "pull_request.draft" not in condition
-    assert condition == "github.event.action != 'closed'"
+    assert condition == (
+        "github.event.action != 'closed' && "
+        "github.event.action != 'converted_to_draft'"
+    )
+QUEUE_RETIREMENT_WORKFLOWS = [
+    "pr-review-merge-scheduler.yml",
+    "sast-semgrep.yml",
+    "security-scan.yml",
+    "python-security.yml",
+]
+
+
+@pytest.mark.parametrize("name", QUEUE_RETIREMENT_WORKFLOWS)
+def test_converted_to_draft_retires_queued_run_without_runner(name: str) -> None:
+    """A draft transition cancels the same-PR queue without taking a runner."""
+    doc = _load(name)
+    assert "converted_to_draft" in _pr_types(doc)
+    for job_name, job in _entry_jobs(doc).items():
+        if _is_cancellation_job(job_name, job):
+            continue
+        condition = str(job.get("if", ""))
+        assert "github.event.pull_request.draft != true" in condition
+        assert "github.event.action == 'converted_to_draft'" not in condition
 
 
 def test_opencode_verdict_gate_still_runs_on_ready_for_review() -> None:

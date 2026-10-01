@@ -112,7 +112,7 @@ jobs:
           github.event_name != 'repository_dispatch' ||
           github.event.client_payload.org_sweep != true
         )
-      ) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+      ) && github.event.pull_request.draft != true
     # The group admits only trusted central main workflows, including reusable
     # callers. Keep admission/dispatch off pools occupied by model execution.
     runs-on:

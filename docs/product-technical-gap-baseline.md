@@ -31,6 +31,26 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 OpenCode approval-order delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-LATEST-REVIEW-01 | **Proposed — exact head `ba55414b…`; local RED→GREEN; hosted exact-head acceptance pending** | `.github#2536@18c886cb…`에서 existing-approval gate가 같은 head의 최신 `CHANGES_REQUESTED`를 건너뛰고 과거 validated `APPROVED`를 재사용하는 RED를 재현했다. Gate를 dispatch-status와 동일한 latest-decision authority로 정렬한 focused suite는 44 passed다. 후속 coverage 회귀가 stale-head와 unknown-actor skip 분기를 실제 실행하며 최종 warning-fatal coverage suite는 5,257 passed, 5 optional skips, 40 subtests, 18,252/18,252 statements와 7,498/7,498 branches다. 첫 수리는 ordinary one-parent commit `ba55414b…`로 force 없이 게시됐다. | Canonical owner는 중앙 `scripts/ci/opencode_existing_approval_gate.py`다. 후속 보안 delta를 ordinary descendant로 게시하고 hosted quality/review Checks와 qualifying independent approval을 새 exact head에서 확인한다. queued/skipped/pending은 acceptance evidence가 아니다. |
+| CONTROL-NOEMA-DOCUMENT-LOCK-01 | **Proposed — hosted Security RED repaired and integrated locally; republish pending** | exact-head Security Scan run `36779214593`, Trivy job `110104871060`이 중앙 Noema document-reader lock의 `fast-uri` 3.1.7(CVE-2026-86472)과 `ip-address` 10.7.0(CVE-2026-101911, CVE-2026-101912)을 검출했다. 회귀는 vulnerable lock에서 1 failed / 11 passed / 2 skipped였고, `fast-uri` 3.1.8 및 `ip-address` 10.7.2로 재생성한 lock에서 12 passed / 2 skipped다. `npm audit --omit=dev --audit-level=moderate`는 109 production dependencies와 vulnerability 0을 보고했고 통합 full coverage도 100%다. | Canonical owner는 중앙 `scripts/ci/noema-document-reader/package-lock.json`이다. ordinary descendant로 #2536을 갱신한 뒤 fresh exact-head Security/quality/review Checks를 수집한다. |
+| CONTROL-STRIX-LITELLM-LOCK-01 | **Proposed — hosted Python Security RED repaired and integrated locally; republish pending** | exact-head Python Security run `36779214017`, pip-audit job `110104825199`이 Strix hash lock의 LiteLLM 1.94.1에서 CVE-2026-84377을 검출했다. Source input에 fixed 1.94-line release `litellm==1.94.3`을 명시하고 기존 uv command/override로 hash lock을 재생성했다. 새 source/lock parity regression은 old lock에서 RED였다. strict exact-pin pip-audit는 known vulnerability 0이며 통합 full coverage도 100%다. | Canonical owner는 중앙 `requirements-strix-ci.txt`와 생성 `requirements-strix-ci-hashes.txt`다. ordinary descendant를 게시하고 fresh exact-head Python Security 및 review Checks를 수집한다. |
+
+### 2026-09-30 central coverage owner stack delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-CENTRAL-COVERAGE-OWNER-01 | **Proposed — complete local integration GREEN; hosted exact-head acceptance pending** | `.github#2521@f62bb7ec…` 위에 parser/security/response integration successor `.github#2530@2510618f…`와 GitHub API response-lifecycle owner `.github#2532@9d3ec75d…`를 ordinary two-parent merge로 보존했다. 첫 integrated warning-fatal run은 `5196 passed, 6 skipped` 뒤 queue/Strix/release prescreen/release dependency의 실제 미실행 분기 90개와 partial branch 29개를 드러냈다. Dummy/live-CLI tests를 bounded behavior contracts로 교체하고, exact Git blob·Cargo development lock·runtime receipt·final fanout cap·Python 3.10 TOML fallback을 검증했으며, 앞선 필수조건 때문에 도달 불가능했던 prescreener postcondition만 제거했다. 이동한 #2530 head까지 재수집·일반 병합한 최종 exact local tree는 `5228 passed, 5 skipped, 40 subtests passed`, owned production `18232/18232` statements 및 `7488/7488` branches, warning 0이다. | Canonical owner는 중앙 `ContextualWisdomLab/.github`이며 source delta는 #2521 stack에만 통합한다. #2530의 live head 이동을 재수집해 force 없이 merge했고 새 integrated tree 전체를 재검증했다. 게시된 #2521 exact head의 hosted security/quality Checks 및 qualifying independent approval을 새로 확인한다. queued/skipped/pending을 성공으로 간주하지 않고 #2530/#2532를 단순 Close하지 않는다. [RCA와 검증 근거](doctoring/central-coverage-owner-stack-2521.md). |
+
+### 2026-09-30 full-suite parser-lock incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530@ef28f6bc…` integration successor (tree `76ec51bb…`) preserves security prerequisite `.github#2531@d1aa3659…` and response-lifecycle prerequisite `.github#2532@9d3ec75d…`; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. #2530의 parser-lock head `bc40de51…`에 #2531과 #2532의 exact owner heads를 두 ordinary merge commit의 부모로 보존해 순환 full-suite 의존성을 해소했다. 통합 tree `76ec51bb…`에서 Python 3.14 warning-fatal 전체 suite는 5,173 passed, 6 skipped, 40 subtests passed였고, focused cross-owner regression은 524 passed, 2 skipped였다. ref는 force 없이 fast-forward됐다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 `requirements-opencode-review-ci.txt`, 생성 hash lock, 직접 소비 quality workflows다. #2530은 Draft로 유지하고 새 exact head의 hosted Checks, 미해결 thread 0, qualifying independent approval을 다시 수집한다. #2531/#2532는 protected integration과 complete carryover가 검증되기 전 닫지 않으며, #2531 ordinary merge 뒤 #2530 base를 current `main` ancestry에 맞춰 비강제 retarget한다. full-quality의 honest 99% coverage failure는 별도 coverage owner #2521에서 통합·수리하며 이 stack으로 waive하지 않는다. fast-mlsirm의 Noema HTTP 400·Strix linkage·제품 coverage 문제의 완료 증거로 재사용하지 않는다. |
+
 ### 2026-09-30 공유 보안 기준 exact-head delta
 
 이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
@@ -40,6 +60,12 @@
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
 | CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
+
+### 2026-09-30 GitHub API response lifecycle incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-GITHUB-API-HTTP-ERROR-CLOSE-01 | **Proposed — protected-main RED reproduced; source repair under hosted exact-head verification** | 보호된 `.github/main@37b10243cec3d160ecc9c1be75c71428b160a703`의 Python 3.14.7 `tests/test_github_api_url_boundary.py -W error`가 실제 CodeQL/Strix opener의 synthetic 302 여덟 경우에서 `ResourceWarning: Implicitly cleaning up <HTTPError 302>`로 `8 failed, 26 passed`였다. 첫 repair의 warning-fatal full suite가 동일 defect를 Noema/Pingora/preflight/Pages/sandbox readiness에서 추가로 드러냈다. | Canonical owner는 중앙 `.github`이다. 각 caller가 기존 bounded status/telemetry와 fail-closed mapping을 보존한 뒤 file-like error response를 명시적으로 닫는다. `5161 passed, 10 skipped, 40 subtests passed`로 complete warning-fatal local tree가 GREEN이다. [RCA와 acceptance](doctoring/github-api-http-error-response-lifecycle.md)를 따라 exact-head hosted security, independent review, ordinary protected merge를 완료한 뒤 `.github#2040`과 review-transport stack이 새 protected head를 정상 병합해 downstream 증거를 재생성해야 한다. |
 
 ### 2026-09-19 exact-head incident delta
 
@@ -3699,16 +3725,152 @@ entry job nevertheless skipped Draft event snapshots and claimed Ready would
 re-run the same head. That made the only reachable exact-head security run a
 permanent skip.
 
-**Action / evidence.** CodeQL now runs on Draft consumer heads and excludes
-only closed pull requests. Review workflows stay Draft-gated because Ready is
-their admission boundary. The test-first contract failed on the former Draft
-predicate and passes only when the CodeQL entry job uses the closed-event
-guard. Authenticated status, exact head/base/source/run identity, GHAS, SARIF,
-and terminal verdict requirements are unchanged. The residual OpenCode,
-Strix, and Noema unchanged-head Ready materialization Gap remains open at the
-central review owner. Warnings-fatal focused evidence is 52 passed. The full
-suite reached 5,135 passed, 8 skipped, and 40 subtests with 25 existing
-protected-main failures; representative HTTP response-lifecycle and
-review-preflight failures reproduce on clean
-`main@37b10243cec3d160ecc9c1be75c71428b160a703`, so they remain separate owner
-work and are not presented as acceptance evidence here.
+**Action / evidence.** The integrated contract preserves both valid owner
+deltas. CodeQL runs on Draft consumer heads for `opened`, `synchronize`, and
+`reopened`; `converted_to_draft` still enters the stable per-PR concurrency
+group to retire an older Ready run but skips before runner admission. Closed
+events remain excluded. Review workflows stay Draft-gated because Ready is
+their admission boundary. The test-first contract failed when CodeQL lacked
+the Draft-conversion event and passes only when the event matrix separates
+materialization from queue retirement. Authenticated status, exact
+head/base/source/run identity, GHAS, SARIF, and terminal-verdict requirements
+are unchanged. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Protected
+integration, fresh hosted exact-head evidence, and qualifying independent
+approval remain mandatory.
+
+## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; hosted exact-head
+revalidation and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` metadata-maintenance bounded
+context owns its workflow and repository-wide evidence contracts. Git object
+ancestry is local runner evidence; no product repository may fabricate or copy
+that result.
+
+**Gap / RCA.** Exact-head run
+[`36720930491`](https://github.com/ContextualWisdomLab/.github/actions/runs/36720930491),
+job `109905558240`, checked out
+`737fc6fd3b536495a7d5f8bbbae9d0474771d21f` at depth one. The full suite then
+failed because documented G-17 evidence commit
+`57477289ebec5631b0c48f0bc419f336dbe19deb` was absent from that shallow object
+database. This was a workflow-fixture defect: the test deliberately proves
+reachability with `git cat-file` and `git merge-base --is-ancestor`, while the
+workflow supplied only the exact tip object. The earlier local full-history run
+masked the hosted condition.
+
+**RED → GREEN / action.** A new contract first failed on the missing complete-
+history input. Commit `3bc859c73ed67074df13b2e01aa89dff2159e260`
+sets `fetch-depth: 0` only on the validation checkout; exact revision
+verification, `persist-credentials: false`, apply credentials, and all gates
+remain unchanged. The focused workflow plus G-17 ancestry suites pass 37 tests.
+Publication must trigger fresh checks on the new exact head; predecessor GREEN
+and queued/skipped/pending conclusions do not authorize merge.
+
+## 2026-09-30 Shared Python CI urllib3 security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks and qualifying independent
+review.
+
+**Context Map / owner.** Central `.github` owns the pip-audit and Strix
+hash-locked CI runtimes. urllib3 and its security advisories are upstream
+evidence; product repositories consume only an ordinarily integrated central
+workflow revision.
+
+**Gap / RCA.** Exact-head Python Security run
+[`36737059681`](https://github.com/ContextualWisdomLab/.github/actions/runs/36737059681),
+job `109961499214`, found urllib3 2.7.0 vulnerable to CVE-2026-97687,
+CVE-2026-97688, and CVE-2026-97689 in both the pip-audit installer lock and
+the Strix runtime lock. The upstream 2.8.0 release fixes the corresponding
+HTTPS-proxy TLS-policy crossover and chunked-stream CPU/memory denial-of-service
+issues. Because neither source input constrained urllib3, unrelated dependency
+resolution could retain the vulnerable transitive version.
+
+**RED → repair.** The retained regression first failed because the two source
+inputs had no urllib3 row. Both sources now require `urllib3==2.8.0`; both
+generated locks carry the same exact version and PyPI artifact hashes. The
+detailed evidence and APA 7th references are in
+[`docs/doctoring/shared-security-baseline-urllib3-20260930.md`](doctoring/shared-security-baseline-urllib3-20260930.md).
+Both exact-pin audits return no known vulnerabilities; the focused dependency
+contract passes 5 tests and the warnings-as-errors full suite passes 5,236
+tests, 5 optional skips, and 40 subtests. No audit threshold, failure mode, or
+workflow gate changes. Fresh exact-head Python Security and the remaining
+applicable checks are mandatory; the failed predecessor and any skipped or
+pending result are not acceptance evidence.
+
+## 2026-09-30 Shared Strix PyJWT recursion security refresh
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks and qualifying independent
+review.
+
+**Context Map / owner.** Central `.github` owns the hash-locked Strix CI
+runtime. PyJWT and its signed package artifacts are upstream evidence; product
+repositories consume only an ordinarily integrated central workflow revision.
+
+**Gap / RCA.** Exact-head Security Scan run
+[`36740858208`](https://github.com/ContextualWisdomLab/.github/actions/runs/36740858208),
+job `109974634074`, found PyJWT 2.14.0 affected by GHSA-42vr-xj54-vc7v in
+`requirements-strix-ci.txt`. The dependency-review support probe succeeded and
+the run's Gitleaks, Scorecard, Trivy, and OSV jobs passed, isolating the actual
+failure to PyJWT's unauthenticated nested-payload recursion path rather than a
+permissions or network condition.
+
+**RED → repair.** The existing source/lock parity contract first failed with
+the old 2.14.0 pin. Both surfaces now select PyJWT 2.15.1 with the signed PyPI
+artifact hashes. Upstream documents the recursion hardening in 2.15.0; 2.15.1
+retains it and fixes Base64URL padding. Detailed evidence and APA 7th references
+are in
+[`docs/doctoring/shared-security-baseline-pyjwt-recursion-20260930.md`](doctoring/shared-security-baseline-pyjwt-recursion-20260930.md).
+No dependency-review threshold, fail-closed behavior, or workflow gate changes.
+The focused dependency contract passes 5 tests; pip-audit 2.10.1's strict
+exact-pin audit reports no known vulnerabilities; and the warnings-as-errors
+repository suite passes 5,236 tests, 5 optional skips, and 40 subtests. Ruff and
+`git diff --check` pass. Fresh exact-head hosted security evidence remains
+mandatory.
+
+## 2026-10-01 OpenCode coverage approval-reuse evidence contract
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2536`; release and merge
+remain HOLD pending fresh exact-head hosted Checks, resolution of the actionable
+review thread, and qualifying independent approval.
+
+**Context Map / owner.** Central `.github` owns the OpenCode coverage producer,
+existing-approval gate, and repository-dispatch status publisher. Consumer
+repositories receive only the released workflow contract and must not reinterpret
+advisory job success as a passing coverage decision.
+
+**Gap / RCA.** CodeRabbit review thread `PRRT_kwDOS_C14s6nmf3Q` showed that two
+approval-reuse paths checked only whether the coverage job concluded `success`;
+a subsequent call-site audit found that the merge-scheduler approval gate did
+not receive the summary at all.
+The producer deliberately uses a successful job to publish an honest
+`NOT MEASURED` diagnostic, so this result is necessary but not sufficient
+approval evidence. A same-head approval could therefore be reused without a
+current unique `PASS` decision.
+
+**RED → repair.** New regressions reject missing, `NOT MEASURED`, malformed,
+and duplicate decisions. A shared validator and the workflow shell guard now
+require exactly one `- Result: PASS` line before either existing-approval reuse
+or success-status publication; the current summary is passed explicitly across
+all approval consumers. The integrated focused suite passes 186 tests with 1 optional
+LLVM-platform skip, including concurrent exact-head test commit
+`87ffafa2f6b19080c01f6ee24b987b37cb92dcb8` and implementation commit
+`0bcded6b08af4554541223438d046bc412c4b093`. Detailed evidence is in
+[`docs/doctoring/opencode-coverage-approval-reuse-20261001.md`](doctoring/opencode-coverage-approval-reuse-20261001.md).
+The warnings-as-errors repository suite passes 5,255 tests, 5 optional skips,
+and 40 subtests. No threshold or required gate changed. Fresh exact-head hosted
+evidence remains mandatory before integration.
+
+**Hosted follow-up.** Exact-head Trusted uv run
+[`36751696675`](https://github.com/ContextualWisdomLab/.github/actions/runs/36751696675),
+job `110011676248`, passed the tests but correctly failed the 100% repository
+coverage gate because the new CLI rejection at
+`scripts/ci/opencode_existing_approval_gate.py:241-242` had no direct caller.
+The added regression executes a `NOT MEASURED` decision and verifies the
+fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
+the exact hosted command now covers all 18,252 production statements and 7,498
+branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
+Fresh exact-head hosted revalidation is required.
