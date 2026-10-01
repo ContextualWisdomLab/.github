@@ -63,6 +63,13 @@ against its canonical workflow, event, title, and head; a rerun with the same
 GitHub run ID retains its own lease. The lease file remains as auditable
 bounded state and is updated, not multiplied, on later heads.
 
+Lease ownership alone is not a durable completion receipt. Immediately after
+acquiring or retaining the exact-PR lease, the receiver revalidates live
+repository/PR/head authority and evaluates the formal exact-head review receipt
+from the trusted default-branch helper. An existing receipt returns
+`admitted=false` before source materialization, coverage, or model execution;
+an unavailable or malformed receipt lookup fails closed.
+
 The dedicated admission job alone holds `contents: write` for that lease
 branch; later metadata validation and source materialization return to
 `contents: read`.
@@ -108,7 +115,7 @@ authority movement between mutations, partial rerun failure, recursive
 partitioning above 1,000 results, and detected pagination truncation. The
 independent byte-for-byte reviewer pin was regenerated from the repaired
 receiver as exact Git blob
-`10707b070475c5e0889501ae4178b7868c6a7cc9`.
+`5c87c74863ef6872c1ef7136d5b330071920c09e`.
 
 Local focused verification on the stacked successor base
 `5a91ce9f9c3e773aa1172f1055fd791ccde8fdaa`:

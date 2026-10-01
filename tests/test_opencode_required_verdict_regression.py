@@ -268,14 +268,23 @@ exit 97
 
 
 @pytest.mark.parametrize(
-    ("lease_state", "owner_run_id", "owner_head", "owner_status", "expected_admitted"),
     (
-        ("absent", 41, HEAD, "", True),
-        ("present", 41, HEAD, "in_progress", False),
-        ("present", 41, HEAD, "completed", True),
-        ("present", 42, HEAD, "in_progress", True),
-        ("present", 41, "d" * 40, "in_progress", True),
-        ("present", 43, "d" * 40, "in_progress", True),
+        "lease_state",
+        "owner_run_id",
+        "owner_head",
+        "owner_status",
+        "receipt_present",
+        "expected_admitted",
+    ),
+    (
+        ("absent", 41, HEAD, "", False, True),
+        ("present", 41, HEAD, "in_progress", False, False),
+        ("present", 41, HEAD, "completed", False, True),
+        ("present", 41, HEAD, "completed", True, False),
+        ("present", 42, HEAD, "in_progress", False, True),
+        ("present", 42, HEAD, "in_progress", True, False),
+        ("present", 41, "d" * 40, "in_progress", False, True),
+        ("present", 43, "d" * 40, "in_progress", False, True),
     ),
 )
 def test_central_dispatch_single_flight_uses_atomic_contents_lease(
@@ -284,6 +293,7 @@ def test_central_dispatch_single_flight_uses_atomic_contents_lease(
     owner_run_id: int,
     owner_head: str,
     owner_status: str,
+    receipt_present: bool,
     expected_admitted: bool,
 ) -> None:
     """One atomic lease owner reaches expensive work; terminal leases recover."""
@@ -294,9 +304,17 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_CALLS"
 if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
   printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
-elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* && "$*" != *"/reviews"* ]]; then
   jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
     '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"opencode_review_receipt_gate.py?ref="* ]]; then
+  base64 <"$RECEIPT_HELPER_SOURCE" | tr -d '\n'
+elif [[ "$*" == *"repos/owner/repo/pulls/7/reviews"* ]]; then
+  if [[ "$FAKE_RECEIPT_PRESENT" == "true" ]]; then
+    jq -cn --arg head "$HEAD_SHA" '[[{id:91,user:{login:"opencode-agent[bot]"},state:"CHANGES_REQUESTED",commit_id:$head,body:"## Pull request overview"}]]'
+  else
+    printf '[[]]'
+  fi
 elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
   if [[ "$FAKE_LEASE_STATE" == "absent" ]]; then exit 1; fi
   owner_title="OpenCode Review Dispatch owner/repo#7@${FAKE_OWNER_HEAD}"
@@ -331,6 +349,8 @@ fi
             "FAKE_OWNER_ID": str(owner_run_id),
             "FAKE_OWNER_HEAD": owner_head,
             "FAKE_OWNER_STATUS": owner_status,
+            "FAKE_RECEIPT_PRESENT": str(receipt_present).lower(),
+            "RECEIPT_HELPER_SOURCE": str(RECEIPT_HELPER.resolve()),
             "GITHUB_OUTPUT": str(output),
             "GITHUB_RUN_ID": "42",
             "GITHUB_SHA": "a" * 40,
@@ -352,7 +372,9 @@ fi
     assert result.returncode == 0, result.stderr
     output_lines = output.read_text(encoding="utf-8").splitlines()
     assert output_lines[0] == f"admitted={str(expected_admitted).lower()}"
-    expected_mutation = expected_admitted and owner_run_id != 42
+    expected_mutation = owner_run_id != 42 and not (
+        owner_head == HEAD and owner_status == "in_progress"
+    )
     assert any("--method PUT" in call for call in calls.read_text().splitlines()) is expected_mutation
 
 
@@ -364,9 +386,13 @@ def test_atomic_contents_lease_admits_one_concurrent_receiver(tmp_path: Path) ->
 set -euo pipefail
 if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
   printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
-elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* && "$*" != *"/reviews"* ]]; then
   jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
     '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"opencode_review_receipt_gate.py?ref="* ]]; then
+  base64 <"$RECEIPT_HELPER_SOURCE" | tr -d '\n'
+elif [[ "$*" == *"repos/owner/repo/pulls/7/reviews"* ]]; then
+  printf '[[]]'
 elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
   [[ -f "$LEASE_OWNER" ]] || exit 1
   owner="$(cat "$LEASE_OWNER")"
@@ -410,6 +436,7 @@ fi
         "EXACT_TITLE": f"OpenCode Review Dispatch owner/repo#7@{HEAD}",
         "GH_TOKEN": "token",
         "TARGET_READ_TOKEN": "target-token",
+        "RECEIPT_HELPER_SOURCE": str(RECEIPT_HELPER.resolve()),
         "LEASE_MUTEX": str(tmp_path / "lease-mutex"),
         "LEASE_OWNER": str(tmp_path / "lease-owner"),
     }
@@ -452,9 +479,13 @@ if [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
   printf '%s' "$reads" >"$REF_READS"
   [[ "$reads" -gt 1 ]] || exit 1
   printf '{"object":{"type":"commit","sha":"%s"}}' "$GITHUB_SHA"
-elif [[ "$*" == *"repos/owner/repo/pulls/7"* ]]; then
+elif [[ "$*" == *"repos/owner/repo/pulls/7"* && "$*" != *"/reviews"* ]]; then
   jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
     '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"opencode_review_receipt_gate.py?ref="* ]]; then
+  base64 <"$RECEIPT_HELPER_SOURCE" | tr -d '\n'
+elif [[ "$*" == *"repos/owner/repo/pulls/7/reviews"* ]]; then
+  printf '[[]]'
 elif [[ "$*" == *"git/refs"* && "$*" == *"--method POST"* ]]; then
   cat >/dev/null
   exit 1
@@ -489,6 +520,7 @@ fi
             "SUPPLIED_HEAD_SHA": HEAD,
             "GH_TOKEN": "token",
             "TARGET_READ_TOKEN": "target-token",
+            "RECEIPT_HELPER_SOURCE": str(RECEIPT_HELPER.resolve()),
         },
         capture_output=True,
         text=True,

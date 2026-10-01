@@ -183,6 +183,8 @@ jobs:
           lease_key="$(printf '%s#%s' "$TARGET_REPOSITORY" "$PR_NUMBER" | sha256sum | cut -d' ' -f1)"
           lease_path="opencode-dispatch-leases/${lease_key}.json"
           lease_ref_api="repos/ContextualWisdomLab/.github/git/ref/heads/${lease_branch}"
+          receipt_helper="$(mktemp)"
+          trap 'rm -f "$receipt_helper"' EXIT
 
           live_authority_matches() {
             local live_pr live_base_repo live_base_ref live_base_sha
@@ -214,6 +216,41 @@ jobs:
             echo "::error::Pull request authority changed before atomic OpenCode admission."
             exit 1
           fi
+
+          definite_receipt_state() {
+            if [ ! -s "$receipt_helper" ] && ! gh api \
+              "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${GITHUB_SHA}" \
+              --jq .content | base64 --decode >"$receipt_helper"; then
+              echo "::error::Could not load the trusted OpenCode receipt helper." >&2
+              return 1
+            fi
+            GH_TOKEN="$TARGET_READ_TOKEN" python3 -c 'import runpy,sys; gate=runpy.run_path(sys.argv[1]); reviews=gate["fetch_reviews"](sys.argv[2],int(sys.argv[3])); receipt,_reason=gate["evaluate_receipts"](reviews,sys.argv[4],is_draft=False); print("present" if receipt is not None else "missing")' \
+              "$receipt_helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA"
+          }
+
+          complete_receipt_admission() {
+            if ! live_authority_matches; then
+              echo "::error::Pull request authority changed before receiver receipt admission."
+              exit 1
+            fi
+            if ! receiver_receipt_state="$(definite_receipt_state)"; then
+              echo "::error::Could not revalidate the formal exact-head receipt after lease acquisition."
+              exit 1
+            fi
+            case "$receiver_receipt_state" in
+              present)
+                echo "admitted=false" >>"$GITHUB_OUTPUT"
+                echo "A formal exact-head OpenCode receipt already exists; duplicate receiver work skipped."
+                ;;
+              missing)
+                echo "admitted=true" >>"$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "::error::Trusted OpenCode receipt helper returned an invalid state."
+                exit 1
+                ;;
+            esac
+          }
 
           validate_lease_ref() {
             jq -e '
@@ -290,7 +327,8 @@ jobs:
               fi
               if [ "$owner_run_id" = "$GITHUB_RUN_ID" ] &&
                 [ "${owner_head,,}" = "${HEAD_SHA,,}" ]; then
-                echo "admitted=true" >>"$GITHUB_OUTPUT"
+                complete_receipt_admission
+                [ "$receiver_receipt_state" = "missing" ] || exit 0
                 echo "Central exact-head rerun ${GITHUB_RUN_ID} retained its canonical lease."
                 exit 0
               fi
@@ -350,10 +388,9 @@ jobs:
                 echo "::error::Central OpenCode lease acquisition returned malformed metadata."
                 exit 1
               fi
-              {
-                echo "admitted=true"
-              } >>"$GITHUB_OUTPUT"
               echo "Central exact-head dispatch ${GITHUB_RUN_ID} acquired the atomic lease."
+              complete_receipt_admission
+              [ "$receiver_receipt_state" = "missing" ] || exit 0
               exit 0
             fi
             echo "Central exact-head lease changed during attempt ${lease_attempt}; retrying from the authoritative branch."

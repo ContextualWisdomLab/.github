@@ -1238,6 +1238,30 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "contents: write" not in review_job
 
 
+def test_receiver_rechecks_formal_receipt_after_exact_head_lease():
+    """A completed owner must not let a duplicate receiver repeat model work."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    admission_job = workflow.split("  admit-exact-head-dispatch:\n", 1)[1].split(
+        "\n  validate-pr-metadata:", 1
+    )[0]
+
+    assert "opencode_review_receipt_gate.py?ref=${GITHUB_SHA}" in admission_job
+    assert "definite_receipt_state()" in admission_job
+    assert 'gate["evaluate_receipts"](' in admission_job
+    assert 'echo "admitted=false" >>"$GITHUB_OUTPUT"' in admission_job
+    assert admission_job.count('echo "admitted=true" >>"$GITHUB_OUTPUT"') == 1
+
+    lease_acquired = admission_job.index(
+        'echo "Central exact-head dispatch ${GITHUB_RUN_ID} acquired the atomic lease."'
+    )
+    receipt_recheck = admission_job.index(
+        "complete_receipt_admission", lease_acquired
+    )
+    assert lease_acquired < receipt_recheck
+
+
 def test_sandbox_git_config_env_trusts_only_the_validated_worktree(tmp_path):
     """The propagated Git config names one exact worktree and no wildcard."""
     worktree = tmp_path / "work"
