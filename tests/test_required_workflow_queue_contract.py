@@ -679,6 +679,8 @@ def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
     assert 'event_type:"opencode-review"' in dispatch
     assert 'event_type:"merge-scheduler"' not in dispatch
     assert 'required_run_id:$required_run_id' in dispatch
+    assert "--argjson draft_review_only false" in dispatch
+    assert "draft_review_only:$draft_review_only" in dispatch
     for field in (
         "target_repository",
         "pr_number",

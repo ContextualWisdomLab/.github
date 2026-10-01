@@ -140,6 +140,7 @@ def test_opencode_dispatch_never_uses_lossy_native_concurrency() -> None:
             "rejected target=",
         ),
         ({"SUPPLIED_HEAD_SHA": "mutable"}, "malformed PR identity metadata"),
+        ({"DRAFT_REVIEW_ONLY": "yes"}, "malformed draft-review authority"),
     ),
 )
 def test_central_authorization_rejects_before_any_token_or_lease_access(
@@ -179,6 +180,7 @@ def test_central_authorization_rejects_before_any_token_or_lease_access(
         "SUPPLIED_BASE_SHA": "b" * 40,
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": HEAD,
+        "DRAFT_REVIEW_ONLY": "false",
         **override,
     }
     result = subprocess.run(
@@ -191,6 +193,199 @@ def test_central_authorization_rejects_before_any_token_or_lease_access(
     assert result.returncode == 1
     assert error_text in result.stdout
     assert not calls.exists()
+
+
+def test_central_admission_accepts_only_an_exact_authorized_draft_marker(
+    tmp_path: Path,
+) -> None:
+    """An explicit Draft review reaches lease admission only with its live marker."""
+    calls = tmp_path / "calls"
+    marker_name = f"cwl-draft-review-request-owner-repo-7-{HEAD}"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:true,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == "api repos/ContextualWisdomLab/.github/actions/artifacts?name=$MARKER_NAME&per_page=100" ]]; then
+  jq -cn --arg name "$MARKER_NAME" '{total_count:1,artifacts:[{id:91,name:$name,expired:false}]}'
+elif [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
+  printf '{}'
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALLS": str(calls),
+            "MARKER_NAME": marker_name,
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "DRAFT_REVIEW_ONLY": "true",
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Central OpenCode lease branch identity was malformed" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines()[:3] == [
+        "api repos/owner/repo/pulls/7",
+        (
+            "api repos/ContextualWisdomLab/.github/actions/artifacts?"
+            f"name={marker_name}&per_page=100"
+        ),
+        "api repos/ContextualWisdomLab/.github/git/ref/heads/opencode-dispatch-leases",
+    ]
+
+
+@pytest.mark.parametrize(
+    "artifact_payload",
+    (
+        '{"total_count":1,"artifacts":[{"id":91,"name":"wrong","expired":false}]}',
+        '{"total_count":1,"artifacts":[{"id":91,"name":"MARKER","expired":true}]}',
+        '{"total_count":"1","artifacts":[]}',
+    ),
+)
+def test_central_admission_rejects_draft_without_a_valid_live_marker(
+    tmp_path: Path, artifact_payload: str
+) -> None:
+    """Malformed, mismatched, or expired Draft authority fails before lease access."""
+    calls = tmp_path / "calls"
+    marker_name = f"cwl-draft-review-request-owner-repo-7-{HEAD}"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:true,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"/actions/artifacts?name="* ]]; then
+  printf '%s' "$ARTIFACT_PAYLOAD" | sed "s/MARKER/$MARKER_NAME/g"
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALLS": str(calls),
+            "MARKER_NAME": marker_name,
+            "ARTIFACT_PAYLOAD": artifact_payload,
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "DRAFT_REVIEW_ONLY": "true",
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "authority changed before atomic OpenCode admission" in result.stdout
+    assert all("opencode-dispatch-leases" not in call for call in calls.read_text().splitlines())
+
+
+def test_central_admission_revalidates_draft_marker_before_lease_mutation(
+    tmp_path: Path,
+) -> None:
+    """A marker that expires after admission cannot authorize a Contents write."""
+    calls = tmp_path / "calls"
+    marker_reads = tmp_path / "marker-reads"
+    marker_name = f"cwl-draft-review-request-owner-repo-7-{HEAD}"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:true,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+elif [[ "$*" == *"/actions/artifacts?name="* ]]; then
+  read_count=0
+  [[ ! -f "$MARKER_READS" ]] || read_count="$(cat "$MARKER_READS")"
+  read_count=$((read_count + 1))
+  printf '%s' "$read_count" >"$MARKER_READS"
+  if [[ "$read_count" -eq 1 ]]; then marker_expired=false; else marker_expired=true; fi
+  jq -cn --arg name "$MARKER_NAME" --argjson expired "$marker_expired" \
+    '{total_count:1,artifacts:[{id:91,name:$name,expired:$expired}]}'
+elif [[ "$*" == *"git/ref/heads/opencode-dispatch-leases"* ]]; then
+  jq -cn --arg sha "$GITHUB_SHA" '{object:{type:"commit",sha:$sha}}'
+elif [[ "$*" == *"contents/opencode-dispatch-leases/"* && "$*" != *"--method PUT"* ]]; then
+  exit 1
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALLS": str(calls),
+            "MARKER_READS": str(marker_reads),
+            "MARKER_NAME": marker_name,
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "DRAFT_REVIEW_ONLY": "true",
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "authority changed before the atomic OpenCode lease mutation" in result.stdout
+    assert marker_reads.read_text(encoding="utf-8") == "2"
+    assert all("--method PUT" not in call for call in calls.read_text().splitlines())
 
 
 @pytest.mark.parametrize(
@@ -255,6 +450,55 @@ exit 97
             "SUPPLIED_BASE_SHA": "b" * 40,
             "SUPPLIED_HEAD_REF": "feature",
             "SUPPLIED_HEAD_SHA": HEAD,
+            "GH_TOKEN": "token",
+            "TARGET_READ_TOKEN": "target-token",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "authority changed before atomic OpenCode admission" in result.stdout
+    assert calls.read_text().splitlines() == ["api repos/owner/repo/pulls/7"]
+
+
+def test_central_admission_rejects_draft_request_after_pr_becomes_ready(
+    tmp_path: Path,
+) -> None:
+    """Draft-only authority cannot survive a Draft-to-Ready state transition."""
+    calls = tmp_path / "calls"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  jq -cn --arg base "$SUPPLIED_BASE_SHA" --arg head "$HEAD_SHA" \
+    '{state:"open",draft:false,base:{ref:"main",sha:$base,repo:{full_name:"owner/repo"}},head:{ref:"feature",sha:$head,repo:{full_name:"owner/repo"}}}'
+  exit 0
+fi
+exit 97
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", central_single_flight_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALLS": str(calls),
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_SHA": "a" * 40,
+            "TARGET_REPOSITORY": "owner/repo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": HEAD,
+            "DRAFT_REVIEW_ONLY": "true",
             "GH_TOKEN": "token",
             "TARGET_READ_TOKEN": "target-token",
         },
@@ -764,6 +1008,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
     assert 'event_type:"opencode-review"' in workflow
     assert "required_run_id:$required_run_id" in workflow
+    assert "--argjson draft_review_only false" in workflow
+    assert "draft_review_only:$draft_review_only" in workflow
     dispatch_step = target_job.split(
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
@@ -1355,6 +1601,7 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     wake_step = dispatched.split(
         "Wake every failed exact-head Required OpenCode workflow", 1
     )[1].split("\n\n      - name:", 1)[0]
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in wake_step
     target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
     target_permissions = target_job.split("    env:\n", 1)[0]
     assert "actions: write" in target_permissions
@@ -1372,6 +1619,49 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     assert "display_title ==" not in wake_step
     assert ".name | startswith(" not in wake_step
     assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
+
+
+def test_authorized_draft_review_cannot_publish_approval_or_run_merge_followups() -> None:
+    """Review-only Draft work publishes prose but cannot create approval authority."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    fast_approval = dispatched.split(
+        "      - name: Publish central OpenCode fast approval", 1
+    )[1].split("      - name: Publish OpenCode review outcome", 1)[0]
+    publication = dispatched.split(
+        "      - name: Publish OpenCode review outcome", 1
+    )[1].split("      - name: Enforce current-head formal OpenCode review receipt", 1)[0]
+    formal_receipt = dispatched.split(
+        "      - name: Enforce current-head formal OpenCode review receipt", 1
+    )[1].split("      - name: Wake every failed exact-head Required OpenCode workflow", 1)[0]
+    status_publication = dispatched.split(
+        "      - name: Publish repository_dispatch OpenCode status", 1
+    )[1].split("      - name: Dispatch Noema after current-head OpenCode approval", 1)[0]
+    noema_handoff = dispatched.split(
+        "      - name: Dispatch Noema after current-head OpenCode approval", 1
+    )[1].split("      - name: Run merge scheduler after approval", 1)[0]
+    merge_followup = dispatched.split(
+        "      - name: Run merge scheduler after approval", 1
+    )[1]
+
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in fast_approval
+    assert "PR_DRAFT: ${{ needs.validate-pr-metadata.outputs.is_draft }}" in publication
+    assert (
+        'if [ "$event" = "APPROVE" ] && [ "$PR_DRAFT" = "true" ]; then'
+        in publication
+    )
+    assert 'event="COMMENT"' in publication
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in formal_receipt
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in status_publication
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in noema_handoff
+    assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in merge_followup
+
+
+def test_dispatch_preserves_draft_review_authority_type_before_validation() -> None:
+    """Falsy non-booleans cannot be normalized into Ready review authority."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    raw_binding = "toJSON(github.event.client_payload.draft_review_only)"
+    assert dispatched.count(raw_binding) == 3
+    assert "draft_review_only || false" not in dispatched
 
 
 def wake_selector(run: dict[str, object], *, head: str = HEAD) -> str:

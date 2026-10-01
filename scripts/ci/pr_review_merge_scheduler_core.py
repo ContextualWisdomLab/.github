@@ -70,6 +70,34 @@ class SchedulerAdmissionGate:
 
         def lease(state):
             """Apply this request to `state` and record any lease it wins."""
+            prior_record = state.records.get(request.identity)
+            if (
+                component == "opencode"
+                and not bool(pr.get("isDraft"))
+                and prior_record is not None
+                and has_current_head_draft_review_completion(pr)
+                and not has_current_head_approval(pr)
+                and not has_current_head_changes_requested(pr)
+                and (
+                    prior_record.status == "complete"
+                    or (
+                        prior_record.status == "dispatched"
+                        and opencode_progress_state(
+                            pr, stale_after_minutes=DEFAULT_STALE_OPENCODE_MINUTES
+                        )
+                        != "running"
+                    )
+                )
+            ):
+                # The durable identity intentionally omits Draft/Ready mode.
+                # Retire only a terminal prior lease at the moment a Ready
+                # dispatch asks for admission; an in-flight Ready lease keeps
+                # its bounded worker slot on subsequent reconciliations.
+                updated_records = dict(state.records)
+                updated_records[request.identity] = RequestRecord(
+                    prior_record.request, "stale"
+                )
+                state = type(state)(updated_records, dict(state.latest_sequences))
             plan = plan_dispatches(
                 state,
                 [request],
@@ -103,7 +131,14 @@ class SchedulerAdmissionGate:
                     continue
                 terminal = (
                     record.request.component == "opencode"
-                    and (has_current_head_approval(pr) or has_current_head_changes_requested(pr))
+                    and (
+                        has_current_head_approval(pr)
+                        or has_current_head_changes_requested(pr)
+                        or (
+                            bool(pr.get("isDraft"))
+                            and has_current_head_draft_review_completion(pr)
+                        )
+                    )
                 ) or (
                     record.request.component == "strix"
                     and strix_evidence_state(pr) == "complete"
@@ -2296,6 +2331,28 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def has_current_head_draft_review_completion(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode completed an exact-head Draft review-only request.
+
+    A clean Draft cannot receive merge approval authority. The central reviewer
+    therefore publishes a formal COMMENTED review carrying an explicit result
+    marker and explanatory sentence. Both markers are required so an ordinary
+    status comment cannot suppress a later explicit Draft review request.
+    """
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        body = review.get("body") or ""
+        if (
+            (review.get("state") or "").upper() == "COMMENTED"
+            and "- Result: DRAFT_REVIEW_COMPLETE" in body
+            and "Draft review-only request completed without publishing merge approval authority."
+            in body
+        ):
+            return True
+    return False
+
+
 def latest_current_head_coverage_change_request(
     pr: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -3862,6 +3919,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         "pr_base_sha": base_sha,
         "pr_head_ref": head_ref,
         "pr_head_sha": head_sha,
+        "draft_review_only": bool(pr.get("isDraft")),
     }
     complete_paginated_pr_contexts(target_repo, pr)
     required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
@@ -4233,7 +4291,11 @@ def dispatch_draft_review_only(
     # alone as a verdict would make a failed dispatch attempt permanently
     # block every later explicit retry. Only an actual current-head formal
     # review is a verdict.
-    if has_current_head_approval(pr) or has_current_head_changes_requested(pr):
+    if (
+        has_current_head_approval(pr)
+        or has_current_head_changes_requested(pr)
+        or has_current_head_draft_review_completion(pr)
+    ):
         return Decision(
             number,
             "skip",

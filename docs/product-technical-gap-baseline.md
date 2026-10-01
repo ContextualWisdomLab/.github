@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 authorized Draft review admission
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The agent-mention workflow and scheduler created an exact repository/PR/head durable Draft-review request, but the central receiver unconditionally required `live_draft=false`; every explicitly authorized Draft review therefore stopped before lease admission and could never produce the semantic review it requested. Once admitted, the clean-verdict publisher also attempted `APPROVED` before its downstream Draft receipt guard, which could grant merge authority to review-only work. Finally, a completed Draft lease shared the Ready identity and could suppress same-head Ready review forever | `.github#2546@db81de7a09268eb0abfc5b5c675ddd9a0a38a3e2`; `.github/workflows/agent-mention-opencode-dispatch.yml` marker `cwl-draft-review-request-<repo>-<pr>-<head>`; `.github/workflows/opencode-review-dispatch.yml` former `live_authority_matches` and unconditional clean-verdict approval; mode-independent admission identity in `scripts/ci/review_admission_controller.py`; local RED contracts in `tests/test_opencode_required_verdict_regression.py` and `tests/test_pr_review_merge_scheduler.py` | Carry a typed review-only boolean in every producer payload, reject omitted/malformed authority before token exchange, and admit a live Draft only after re-fetching a non-expired exact marker from the central Actions artifact API. Revalidate state/base/head plus marker before every lease mutation. Convert a clean Draft verdict to an exact-head `DRAFT_REVIEW_COMPLETE` formal comment before publication; accept only that source-backed comment as Draft scheduler completion, retire that lease if the same head becomes Ready without approval, and structurally skip formal merge receipt, Ready status, Noema, merge-scheduler, and Required-workflow wake follow-ups. See [RCA and executable acceptance](doctoring/opencode-authorized-draft-review-admission.md) | **Proposed / local RED→GREEN complete; exact-head hosted Checks and independent semantic review required** |
+
 ## 2026-10-01 OpenCode same-head dispatch idempotency
 
 | Gap | Exact evidence | Action | Status |
