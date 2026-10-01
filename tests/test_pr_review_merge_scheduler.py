@@ -5606,9 +5606,43 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             "pr_base_sha": base_sha,
             "pr_head_ref": "feature",
             "pr_head_sha": head_sha,
+            "draft_review_only": False,
             "required_run_id": 42,
         },
     }
+
+
+def test_draft_review_dispatch_carries_explicit_review_only_authority(monkeypatch):
+    """The receiver can distinguish an authorized Draft review from merge work."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *args: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *args: ([], []))
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *args: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *args: True)
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *args: None)
+    monkeypatch.setattr(sched, "reset_active_workflow_runs_cache", lambda: None)
+    dispatch_payloads = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda _args, stdin=None: dispatch_payloads.append(json.loads(stdin)),
+    )
+    pull_request = make_pr(
+        isDraft=True,
+        baseRefOid="b" * 40,
+        headRefOid="a" * 40,
+    )
+
+    assert (
+        sched.dispatch_opencode_review(
+            "owner/repo", "OpenCode Review", pull_request, dry_run=False
+        )
+        == "dispatched"
+    )
+    assert dispatch_payloads[0]["client_payload"]["draft_review_only"] is True
 
 
 def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
@@ -8280,6 +8314,67 @@ def test_draft_pr_review_only_dispatch_skips_when_a_current_head_verdict_exists(
     assert changes_requested_decision.action == "skip"
     assert changes_requested_decision.reason == (
         "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+    draft_completion = {
+        **opencode_review("COMMENTED", "head"),
+        "body": (
+            "OpenCode review\n\n"
+            "- Result: DRAFT_REVIEW_COMPLETE\n"
+            "- Head SHA: `head`\n\n"
+            "Draft review-only request completed without publishing merge approval authority."
+        ),
+    }
+    completed_draft = make_pr(isDraft=True, reviews={"nodes": [draft_completion]})
+    completed_decision = inspect(completed_draft, allow_draft_review_dispatch=True)
+    assert completed_decision.action == "skip"
+    assert completed_decision.reason == (
+        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+
+def test_draft_review_completion_requires_exact_head_and_both_formal_markers():
+    """A stale or generic comment cannot suppress an explicit Draft review."""
+    complete_body = (
+        "OpenCode review\n\n"
+        "- Result: DRAFT_REVIEW_COMPLETE\n\n"
+        "Draft review-only request completed without publishing merge approval authority."
+    )
+    stale = {
+        **opencode_review("COMMENTED", "old-head"),
+        "body": complete_body,
+    }
+    missing_explanation = {
+        **opencode_review("COMMENTED", "head"),
+        "body": "OpenCode review\n\n- Result: DRAFT_REVIEW_COMPLETE",
+    }
+    generic = {
+        **opencode_review("COMMENTED", "head"),
+        "body": "OpenCode is still running.",
+    }
+
+    assert not sched.has_current_head_draft_review_completion(
+        make_pr(isDraft=True, reviews={"nodes": [stale]})
+    )
+    assert not sched.has_current_head_draft_review_completion(
+        make_pr(isDraft=True, reviews={"nodes": [missing_explanation]})
+    )
+    assert not sched.has_current_head_draft_review_completion(
+        make_pr(isDraft=True, reviews={"nodes": [generic]})
+    )
+    assert sched.has_current_head_draft_review_completion(
+        make_pr(
+            isDraft=True,
+            reviews={
+                "nodes": [
+                    {
+                        **opencode_review("COMMENTED", "head"),
+                        "body": complete_body,
+                    },
+                    generic,
+                ]
+            },
+        )
     )
 
 

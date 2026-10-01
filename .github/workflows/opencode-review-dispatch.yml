@@ -43,6 +43,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
         run: |
           set -euo pipefail
           [ "$EVENT_NAME" = "repository_dispatch" ] || {
@@ -87,6 +88,10 @@ jobs:
             ! [[ "$SUPPLIED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$SUPPLIED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             printf '::error::repository_dispatch admission rejected malformed PR identity metadata. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
+            exit 1
+          fi
+          if ! [[ "$DRAFT_REVIEW_ONLY" =~ ^(true|false)$ ]]; then
+            echo "::error::repository_dispatch admission rejected malformed draft-review authority."
             exit 1
           fi
           printf 'Authorized exact repository_dispatch envelope for %s#%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER"
@@ -176,6 +181,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
         run: |
           set -euo pipefail
           exact_title="OpenCode Review Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}"
@@ -185,6 +191,31 @@ jobs:
           lease_ref_api="repos/ContextualWisdomLab/.github/git/ref/heads/${lease_branch}"
           receipt_helper="$(mktemp)"
           trap 'rm -f "$receipt_helper"' EXIT
+
+          authorized_draft_marker_matches() {
+            local marker_name marker_inventory
+            [ "${DRAFT_REVIEW_ONLY:-false}" = "true" ] || return 1
+            marker_name="cwl-draft-review-request-${TARGET_REPOSITORY//\//-}-${PR_NUMBER}-${HEAD_SHA}"
+            marker_inventory="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${marker_name}&per_page=100")" || return 1
+            jq -e --arg marker_name "$marker_name" '
+              (.total_count | type) == "number"
+              and (.total_count | floor) == .total_count
+              and .total_count >= 0
+              and (.artifacts | type) == "array"
+              and .total_count == (.artifacts | length)
+              and all(.artifacts[];
+                type == "object"
+                and (.id | type) == "number"
+                and (.id | floor) == .id
+                and .id >= 1
+                and (.name | type) == "string"
+                and .name == $marker_name
+                and (.expired | type) == "boolean"
+              )
+              and any(.artifacts[]; .name == $marker_name and .expired == false)
+            ' <<<"$marker_inventory" >/dev/null
+          }
 
           live_authority_matches() {
             local live_pr live_base_repo live_base_ref live_base_sha
@@ -203,14 +234,18 @@ jobs:
             live_state="$(jq -r \
               'if (.state | type) == "string" then .state else empty end' \
               <<<"$live_pr")"
-            [ "$live_state" = "open" ] && [ "$live_draft" = "false" ] &&
+            [ "$live_state" = "open" ] &&
               [ "$live_base_repo" = "$TARGET_REPOSITORY" ] &&
               [[ "$live_head_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] &&
               [ "$live_base_ref" = "$SUPPLIED_BASE_REF" ] &&
               [ "$live_base_sha" = "$SUPPLIED_BASE_SHA" ] &&
               [ "$live_head_ref" = "$SUPPLIED_HEAD_REF" ] &&
               [ "${live_head_sha,,}" = "${SUPPLIED_HEAD_SHA,,}" ] &&
-              [ "${live_head_sha,,}" = "${HEAD_SHA,,}" ]
+              [ "${live_head_sha,,}" = "${HEAD_SHA,,}" ] &&
+              {
+                { [ "$live_draft" = "false" ] && [ "${DRAFT_REVIEW_ONLY:-false}" = "false" ]; } ||
+                  { [ "$live_draft" = "true" ] && authorized_draft_marker_matches; }
+              }
           }
           if ! live_authority_matches; then
             echo "::error::Pull request authority changed before atomic OpenCode admission."
@@ -224,8 +259,8 @@ jobs:
               echo "::error::Could not load the trusted OpenCode receipt helper." >&2
               return 1
             fi
-            GH_TOKEN="$TARGET_READ_TOKEN" python3 -c 'import runpy,sys; gate=runpy.run_path(sys.argv[1]); reviews=gate["fetch_reviews"](sys.argv[2],int(sys.argv[3])); receipt,_reason=gate["evaluate_receipts"](reviews,sys.argv[4],is_draft=False); print("present" if receipt is not None else "missing")' \
-              "$receipt_helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA"
+            GH_TOKEN="$TARGET_READ_TOKEN" python3 -c 'import runpy,sys; gate=runpy.run_path(sys.argv[1]); reviews=gate["fetch_reviews"](sys.argv[2],int(sys.argv[3])); receipt,_reason=gate["evaluate_receipts"](reviews,sys.argv[4],is_draft=sys.argv[5] == "true"); print("present" if receipt is not None else "missing")' \
+              "$receipt_helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" "${DRAFT_REVIEW_ONLY:-false}"
           }
 
           complete_receipt_admission() {
@@ -436,6 +471,7 @@ jobs:
       base_sha: ${{ steps.validate.outputs.base_sha }}
       head_ref: ${{ steps.validate.outputs.head_ref }}
       head_sha: ${{ steps.validate.outputs.head_sha }}
+      is_draft: ${{ steps.validate.outputs.is_draft }}
       is_private: ${{ steps.validate.outputs.is_private }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
@@ -526,6 +562,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
@@ -581,6 +618,9 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_draft="$(jq -r \
+            'if (.draft | type) == "boolean" then (.draft | tostring) else empty end' \
+            <<<"$pull_request_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
           live_visibility="$(jq -r '.base.repo.visibility // empty | ascii_downcase' <<<"$pull_request_json")"
           case "$live_visibility" in
@@ -594,6 +634,7 @@ jobs:
             ! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_draft" =~ ^(true|false)$ ]] ||
             ! [[ "$live_is_private" =~ ^(true|false)$ ]] ||
             [ -z "$live_base_ref" ] ||
             [ -z "$live_head_ref" ]; then
@@ -607,6 +648,7 @@ jobs:
             [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
             [ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")
             [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
+            [ "$DRAFT_REVIEW_ONLY" = "$live_draft" ] || mismatches+=("draft_review_only")
             if [ "${#mismatches[@]}" -gt 0 ]; then
               printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
               exit 1
@@ -620,6 +662,7 @@ jobs:
             printf 'base_sha=%s\n' "$live_base_sha"
             printf 'head_ref=%s\n' "$live_head_ref"
             printf 'head_sha=%s\n' "$live_head_sha"
+            printf 'is_draft=%s\n' "$live_draft"
             printf 'is_private=%s\n' "$live_is_private"
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
@@ -4884,6 +4927,7 @@ jobs:
           && needs.coverage-evidence.result == 'success'
           && steps.opencode_review_model_pool.outputs.review_status == 'success'
           && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
         continue-on-error: true
         # Keep the normal peer-check hold short, but leave bounded room for
         # dynamic image/package-build extensions and review publication overhead.
@@ -5223,6 +5267,7 @@ jobs:
           NO_COLOR: "1"
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          PR_DRAFT: ${{ needs.validate-pr-metadata.outputs.is_draft }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
@@ -5251,6 +5296,10 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
+          if ! [[ "$PR_DRAFT" =~ ^(true|false)$ ]]; then
+            echo "::error::OpenCode publication rejected malformed live Draft metadata."
+            exit 1
+          fi
           quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
           COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
             --repo "$GH_REPOSITORY" \
@@ -5541,6 +5590,11 @@ jobs:
             local gh_error_file
             local review_payload_file
             local review_response_file
+            if [ "$event" = "APPROVE" ] && [ "$PR_DRAFT" = "true" ]; then
+              event="COMMENT"
+              body="${body//- Result: APPROVE/- Result: DRAFT_REVIEW_COMPLETE}"
+              body="${body}"$'\n\n'"Draft review-only request completed without publishing merge approval authority."
+            fi
             if [ -z "${review_write_token:-}" ]; then
               printf '::error::OPENCODE_REVIEW_IDENTITY_UNAVAILABLE: refusing to publish %s with a GitHub Actions or PAT identity for head %s.\n' "$event" "$HEAD_SHA"
               return 1
@@ -8138,6 +8192,7 @@ jobs:
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.pr_number != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
@@ -8148,21 +8203,17 @@ jobs:
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
         run: |
           set -euo pipefail
-          draft_args=()
-          if [ "$(gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.draft')" = "true" ]; then
-            draft_args=(--draft)
-          fi
           python3 scripts/ci/opencode_review_receipt_gate.py \
             --repo "$GH_REPOSITORY" \
             --pr-number "$PR_NUMBER" \
-            --head-sha "$PR_HEAD_SHA" \
-            "${draft_args[@]}"
+            --head-sha "$PR_HEAD_SHA"
 
       - name: Wake every failed exact-head Required OpenCode workflow
         if: >-
           always()
           && github.event_name == 'repository_dispatch'
           && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
@@ -8329,6 +8380,7 @@ jobs:
         if: >-
           always()
           && github.event_name == 'repository_dispatch'
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
@@ -8393,6 +8445,7 @@ jobs:
         if: >-
           always()
           && github.event_name == 'repository_dispatch'
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.pr_number != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
@@ -8421,6 +8474,9 @@ jobs:
             --interval-seconds 10
 
       - name: Run merge scheduler after approval
+        if: >-
+          always()
+          && needs.validate-pr-metadata.outputs.is_draft == 'false'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}

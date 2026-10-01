@@ -1,3 +1,19 @@
+### Authorized Draft reviews reach the exact-head receiver
+
+- Carry an explicit `draft_review_only` boolean from the merge scheduler to the
+  central OpenCode receiver. The receiver accepts a live Draft only while an
+  exact repository/PR/head durable request artifact is present, non-expired,
+  structurally complete, and independently re-fetched with `actions: read`;
+  malformed payloads, missing markers, and every base/head/state mismatch fail
+  before the Contents lease can be mutated. Ready pull requests reject Draft
+  authority. A clean Draft publishes an exact-head formal comment with
+  `DRAFT_REVIEW_COMPLETE`, never an approval or a merge-authorizing receipt;
+  the scheduler recognizes only that source-backed comment as completion.
+  Review-only runs never publish Ready status, dispatch Noema, invoke the merge
+  scheduler, or wake merge-required OpenCode jobs. This reconnects the
+  already-authorized agent-mention/scheduler path without weakening ordinary
+  ready-for-review admission.
+
 ### OpenCode preserves exact-head queue position
 
 - Remove the central receiver's lossy native concurrency group after live
