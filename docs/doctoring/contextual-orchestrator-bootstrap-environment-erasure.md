@@ -41,8 +41,11 @@ repair and remains protected by the runner/process trust boundary.
 
 RED commit `2f6cfda90cca913644b0c8a05db55db6284e07f0` adds a subprocess regression
 against protected `main@37b10243cec3d160ecc9c1be75c71428b160a703`; it fails because the scrub
-contract does not exist. The GREEN implementation is an ordinary child of that
-commit. The regression starts a process with five unique sentinel values and
+contract does not exist. First GREEN implementation commit
+`797cedf26e9bdea234d7034f41e3f808769b1f14` is an ordinary child of that
+commit; a subsequent ordinary child narrows regression output so a failing test
+cannot serialize unrelated environment entries or secret values. The regression
+starts a process with five unique sentinel values and
 requires all of the following:
 
 - the live Python environment contains none of the five names;

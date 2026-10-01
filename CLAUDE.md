@@ -142,7 +142,10 @@ repeatable compile command.
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **Central review routes through the vendored contextual-orchestrator gateway.**
   `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
-  (the five provider secrets flow into its KV; the writer runs
+  (the five provider secrets flow into its KV; immediately after registration,
+  the launcher erases their Linux initial-environment value bytes and removes
+  their live names before auth lookup, discovery, or serving, so procfs and
+  child processes cannot recover them; the writer runs
   `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
   exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
