@@ -15,14 +15,17 @@ the #1653 label-taxonomy delta. Its nullable `response` finalizer encoded a
 false branch that cannot fall through: when `opener.open()` raises, control
 re-raises from the `HTTPError` handler before the code following the finalizer.
 That made honest 100% branch evidence impossible even though successful
-responses were closed.
+responses were closed. The Trusted uv workflow path filter also omitted this
+verifier and its tests, so fixing the canonical owner would not itself request
+the complete gate that originally exposed the defect downstream.
 
 ## Repair
 
 The downloader now closes every returned response in one unconditional nested
 `finally` block. An opener-raised `HTTPError` remains independently closed by
 its handler. Tests assert closure for both an HTTP 503 response and an HTTP 502
-exception. The repair does not change admitted hosts, the one-hop redirect
+exception. A workflow contract now requires both verifier paths in pull-request
+and protected-branch triggers. The repair does not change admitted hosts, the one-hop redirect
 contract, credentials, request timeout, byte bounds, digests, or error mapping.
 
 ## Evidence and remaining gates

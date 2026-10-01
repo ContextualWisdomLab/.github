@@ -6,7 +6,9 @@
   opener-raised HTTP error. This removes an impossible optional-response branch
   without changing hosts, redirects, byte limits, hashes, or fail-closed error
   mapping; the focused suite is 17 passed with 100% statement and branch
-  coverage.
+  coverage. The trusted full-suite workflow now also tracks the verifier source
+  and its focused test, so a future lifecycle change cannot omit the repository
+  coverage gate that detected this regression.
 
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 

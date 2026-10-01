@@ -29,11 +29,13 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
     required_paths = (
         '".github/workflows/trusted-uv-materializer-quality-ci.yml"',
         '"scripts/ci/materialize_base_python_requirements.py"',
+        '"scripts/ci/verify_release_maturin_tool_assets.py"',
         '"tests/conftest.py"',
         '"tests/test_materialize*.py"',
         '"tests/test_trusted_uv*.py"',
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
+        '"tests/test_verify_release_maturin_tool_assets.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
         '"requirements-opencode-review-ci.txt"',
         '"requirements-noema-document-ci.txt"',
