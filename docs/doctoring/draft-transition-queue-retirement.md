@@ -77,10 +77,12 @@ all affected workflows because the event was absent. The later single-writer
 reconciliation first produced two focused failures against CodeQL's blanket
 Draft guard, then passed the combined Draft materialization and retirement
 matrix. An affected-workflow audit also found and corrected one stale SAST
-test oracle that still required the old closed-only job guard. The resulting
-workflow-consumer suite reports 672 passes, and the warnings-fatal repository
-suite reports 5,259 passes, five optional-platform skips, and 40 subtests.
-Hosted exact-head checks remain required before protected merge.
+test oracle that still required the old closed-only job guard. The predecessor #2548 integration tree passed 86 focused Draft-control and
+queue tests and 5,273 warnings-fatal repository tests with five optional skips.
+Canonical owner #2537 at `f79c8f2e1d1a7d2e1db94ae3fbfc120aa827e716`
+separately passes 458 focused scheduler and admission tests for bounded central
+dispatch retirement. This merge preserves both source deltas; fresh combined-
+tree local and hosted evidence remains required before protected merge.
 
 The later central-dispatch RED suite reproduced three failures: Draft returned
 before cleanup, no CodeQL central cleanup API existed, and closed-PR runs had no

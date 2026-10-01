@@ -1,17 +1,41 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 stacked required-workflow scope delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@3d2656ba…`에서 이 모순을 잡는 계약 테스트가 RED였고, scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Owner #2537 exact head를 ordinary two-parent merge로 이 후속 #2548에 통합하고 fresh hosted exact-head Checks를 수집한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
+
+## 2026-10-01 bounded Maturin release downloader SAST closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The canonical Maturin asset verifier replaced a suppressed dynamic `urlopen` call with direct `HTTPSConnection`, but Semgrep's low-confidence certificate-validation audit still rejects every use of that low-level API | `.github#2531@e33d97d022e1c1a26b35d51f9fa4b695fe969547`; SAST run `36802256836`; job `110178968784`; rule `python.lang.security.audit.httpsconnection-detected.httpsconnection-detected` | At source-repair head `eede925e71e0f1526560a305f5219a13c6631227`, replace the low-level connection with a standard-library opener whose redirect handler admits one credential-free HTTPS hop only from the fixed GitHub release path to the exact release-assets host; preserve bounded reads and terminal response closure; prohibit scanner suppressions | **Proposed / RED scanner-contract reproduction and 31 tests plus 4 subtests GREEN locally; source-repair exact-head Security, Python Security, SAST, and runtime-quality GREEN; terminal CodeQL and independent approval required** |
+
+## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | Failing predecessor `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`, Python Security run `36799069276`, job `110169140365`; repaired exact head `fe879f7b7f48f729f757e03851bf61149470ccb5`, Python Security run `36800615364`, Security Scan run `36800615435`, SAST run `36800615456`, and runtime-quality run `36800615444` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require authenticated CodeQL verdict evidence plus independent approval | **Proposed / dependency, security, SAST, and runtime-quality Checks GREEN; CodeQL run `36800615319` fail-closed pending authenticated verdicts; independent approval required** |
+
+## 2026-10-01 PyJWT recursion denial-of-service closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix source and hash lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v / CVE-2026-101918 disclosed an unauthenticated recursion DoS | Security Scan run `36741151937`; dependency-review job `109975641239`; OSV job `109975641271`; dependent `.github#2540@612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; canonical owner PR #2531 predecessor `dde3ea7876ceb1569db717975cc74f44cc8d18f9` | In canonical owner PR #2531, advance source and lock to 2.15.0 without unrelated package movement, preserve exact source/lock parity, and merge-forward dependent branches only after owner acceptance | **Proposed / exact-head Checks and independent approval required** |
+
+## 2026-10-01 shared urllib3 security closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| pip-audit and Strix locks retained urllib3 2.7.0 after CVE-2026-97687 and CVE-2026-97689 were published | Python Security run `36733279716`, job `109949358063`; exact predecessor `d1aa3659fca527a6c7330151f3ab4df3d7578391` | In canonical owner PR #2531, pin urllib3 2.8.0 in both source inputs, regenerate both hash locks without unrelated version movement, and bind all four files with one contract | **Proposed / exact-head Checks and independent approval required** |
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
-
-### 2026-10-01 stacked required-workflow scope delta
-
-| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
-|---|---|---|---|
-| CONTROL-STACKED-REQUIRED-WORKFLOW-SCOPE-01 | **Proposed — owner RED reproduced; 94 focused contracts GREEN; hosted acceptance pending** | `ContextualWisdomLab/OpenCode#3@c15dabc5…`가 feature-base stack에서 hosted test만 materialize하고 중앙 Security/SAST/CodeQL은 생성하지 않았다. 활성 ruleset `18156473`의 `ref_name.include=["~DEFAULT_BRANCH"]`와 evaluate-only stacked ruleset `21732164`가 원인이며, base-ref-agnostic workflow trigger가 ruleset injection scope를 넓힌다는 rollout 및 세 workflow 주석은 관측과 모순됐다. `.github#2537@f79c8f2e…`에서 이 모순을 잡는 계약 테스트가 RED였고, scope·ruleset audit·CodeQL·Security·docs-only·Draft admission 묶음은 수정 tree에서 94 passed다. | Canonical owner는 `ContextualWisdomLab/.github`의 rollout 문서와 중앙 workflow 주석이다. Ruleset scope와 native trigger scope를 분리한 ordinary commit을 #2537 exact head에 게시한 뒤 후속 `.github#2548`에 비강제 ordinary merge로 계보를 전달한다. 두 PR은 hosted exact-head Checks와 독립 승인 전까지 Draft/Proposed이며, stacked consumer는 선행 PR 병합 후 default branch로 retarget/synchronize해 fresh required evidence를 받아야 한다. |
 
 ### 2026-10-01 OpenCode approval-order delta
 
@@ -3691,6 +3715,43 @@ verdict-shape acceptance, and qualifying independent approval.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
 
+## 2026-10-01 CodeQL Draft event materialization
+
+**Status:** Proposed owner repair; protected integration, hosted exact-head
+evidence, and qualifying independent approval remain mandatory.
+
+**Context Map / owner.** `ContextualWisdomLab/.github` owns the central CodeQL
+required-workflow and dispatch contract. `ContextualWisdomLab/Orgmetra` is a
+consumer canary and does not copy or override the owner workflow.
+
+**Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
+#448, and #100 produced no new central CodeQL run. Ruleset consumers receive
+opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
+entry job nevertheless skipped Draft event snapshots and claimed Ready would
+re-run the same head. At the owner, `converted_to_draft` must also enter the
+stable per-PR concurrency group to retire stale Ready work without starting a
+replacement scan. A blanket Draft predicate cannot satisfy both obligations.
+
+**Action / evidence.** The integrated contract preserves both valid owner
+deltas. CodeQL runs on Draft consumer heads for `opened`, `synchronize`, and
+`reopened`, while native `ContextualWisdomLab/.github` Draft heads remain
+runner-free. `converted_to_draft` enters the stable per-PR concurrency group
+to retire an older Ready run but skips before runner admission; closed events
+remain excluded. Review workflows stay Draft-gated because Ready is their
+admission boundary. The RED-first contract rejects both missing consumer
+materialization and missing Draft-conversion retirement; GREEN requires the
+explicit repository/event matrix. Authenticated status, exact
+head/base/source/run identity, GHAS, SARIF, and terminal-verdict requirements
+are unchanged. The residual OpenCode, Strix, and Noema unchanged-head Ready
+materialization Gap remains open at the central review owner. Protected
+integration, fresh hosted exact-head evidence, and qualifying independent
+approval remain mandatory. The predecessor #2548 integration tree passed the 86-test focused lifecycle/
+queue suite and 5,273 warnings-fatal repository tests with five optional skips.
+Canonical owner #2537 at `f79c8f2e1d1a7d2e1db94ae3fbfc120aa827e716`
+separately passes 458 focused scheduler/admission tests for bounded central-
+dispatch retirement. Fresh combined-tree local and hosted evidence remains
+mandatory after ordinary integration.
+
 ## 2026-09-30 Repository Metadata Reconcile shallow-ancestry fixture
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2536`; hosted exact-head
@@ -3826,36 +3887,6 @@ fail-closed diagnostic. No coverage exclusion or threshold reduction was used;
 the exact hosted command now covers all 18,252 production statements and 7,498
 branches at 100% locally, with 5,255 passed, 5 optional skips, and 40 subtests.
 Fresh exact-head hosted revalidation is required.
-
-## 2026-10-01 CodeQL Draft event materialization
-
-**Status:** Proposed owner repair; protected integration, hosted exact-head
-evidence, and qualifying independent approval remain mandatory.
-
-**Context Map / owner.** `ContextualWisdomLab/.github` owns the central CodeQL
-required-workflow and dispatch contract. `ContextualWisdomLab/Orgmetra` is a
-consumer canary and does not copy or override the owner workflow.
-
-**Gap / RCA.** Unchanged-head Ready transitions on Orgmetra PRs #235, #259,
-#448, and #100 produced no new central CodeQL run. Ruleset consumers receive
-opened/synchronize/reopened launches but not `ready_for_review`; the CodeQL
-entry job nevertheless skipped every Draft event and claimed Ready would
-re-run the same head. At the same time, native-owner `converted_to_draft`
-events must enter per-PR concurrency to retire stale work without starting a
-replacement scan. A single blanket Draft predicate encoded incompatible
-halves of that lifecycle.
-
-**Action / evidence.** The owner now distinguishes event and repository:
-consumer Draft heads materialize CodeQL evidence, native-owner Draft heads
-remain runner-free, and `converted_to_draft`/`closed` only retire stale work.
-Authenticated status, exact head/base/source/run identity, GHAS, SARIF, and
-terminal-verdict requirements are unchanged. The RED-first matrix produced
-two intended failures; the focused Draft-control plus queue suite passes 86
-tests, and the warnings-fatal repository suite passes 5,261 tests, five
-optional-platform skips, and 40 subtests. The residual OpenCode, Strix, and Noema unchanged-head Ready
-materialization Gap remains open at the central review owner. Full exact-tree
-and hosted evidence remain required and are not inferred from either
-predecessor PR.
 
 ## 2026-10-01 Central dispatch stale-run retirement
 

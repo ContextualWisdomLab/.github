@@ -55,7 +55,7 @@ def test_strix_anyio_security_pin_is_an_explicit_lock_input() -> None:
 
 
 def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
-    """Keep the patched PyJWT version reproducible from the source input."""
+    """Keep PyJWT above the GHSA-42vr-xj54-vc7v parser DoS fix."""
     requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
         encoding="utf-8"
     )

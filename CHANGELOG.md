@@ -1,3 +1,21 @@
+### Shared Strix lock advances beyond the PyJWT recursion DoS
+
+- Advance the explicit Strix source pin and generated hash lock from PyJWT
+  `2.14.0` to `2.15.0`, closing GHSA-42vr-xj54-vc7v / CVE-2026-101918. Exact Security
+  Scan run `36741151937` found the advisory in dependent PR #2540; the
+  canonical owner repair stays in #2531. A source/lock contract, deterministic
+  lock regeneration, and pip-audit evidence keep the dependent branch free of a
+  leaf workaround and prevent a return to `2.14.0`. Exact-head hosted security
+  Checks, independent approval, ordinary protected integration, and immutable
+  consumer-pin advancement remain required before release admission.
+
+### Shared urllib3 locks close proxy and streaming CVEs
+
+- Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
+  Strix security-tooling closures, regenerate their hash locks without unrelated
+  version movement, and add a four-file parity contract. This closes
+  CVE-2026-97687 and CVE-2026-97689 found by exact-head Python Security while
+  preserving hash checking and the existing Strix cryptography override.
 ### Central coverage owner preserves concurrent repairs and restores the 100% gate
 
 - The `.github#2521` coverage owner now carries the complete valid deltas from
