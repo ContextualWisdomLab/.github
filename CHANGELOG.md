@@ -1,3 +1,17 @@
+### OpenCode separatorless invalid wrappers remain fail-closed
+
+- Preserve balanced malformed wrapper identity even when an invalid first
+  token is followed directly by a nested object or array without a comma or
+  colon. RED commit `8b1bd4a43be7604d6aa7b9e524295fea7501334c`
+  proves `[unquoted_token {control}]` and `{unquoted_key {control}}` promoted
+  the nested exact-run control. GREEN commit
+  `5261145a73e7b5a0b53c224317002fe98961f16f` records balanced parent spans in
+  one linear scan, suppresses their nested candidates, and still recovers a
+  complete control after an unclosed prose delimiter. The production
+  normalizer remains executable (`100755`). Focused verification is 120/120;
+  the repository suite passed 5,321 tests plus both pip-dependent cases in a
+  pip-equipped locked environment, with 5 optional skips and 40 subtests.
+
 ### OpenCode invalid-token wrappers remain fail-closed
 
 - Treat a balanced object or array whose first token is invalid JSON as one
