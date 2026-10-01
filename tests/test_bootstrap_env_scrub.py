@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,3 +96,18 @@ print(json.dumps({
     assert evidence["child"]["present"] == []
     assert evidence["child"]["unrelated"] == "preserved"
     assert evidence["procfs_secret_found"] is False
+
+
+def test_linux_scrub_fails_closed_without_procfs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux bootstrap must stop if original-environment proof is unavailable."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Linux procfs contract")
+
+    namespace = runpy.run_path(str(LAUNCHER))
+    erase_environment = namespace["_erase_linux_initial_environment"]
+    monkeypatch.setattr(erase_environment.__globals__["Path"], "exists", lambda self: False)
+
+    with pytest.raises(RuntimeError, match="/proc/self/environ"):
+        erase_environment(frozenset({b"OPENAI_API_KEY"}))
