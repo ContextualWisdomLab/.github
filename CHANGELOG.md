@@ -6,6 +6,9 @@
   look like new PR whitespace, while exact-head checkout and fail-closed diff
   checks remain unchanged. Exact failure evidence is `.github#1678` run
   `36804488453`, job `110185716853`.
+- Refetch the base ref immediately before both merge-base decisions. A base
+  advance during the quality job can no longer revive the same stale-diff
+  failure at the terminal whitespace gate.
 - Preserve the canonical shared-security owner `.github#2531@7900ba4c4` as an
   ordinary second parent of the workflow repair. Its exact-head Security Scan,
   Python Security, SAST, and runtime-quality runs are green, so the dependent

@@ -166,6 +166,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git fetch --no-tags --prune origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           change_base_sha="$(git merge-base "refs/remotes/origin/$BASE_REF" "$HEAD_SHA")"
           test -n "$change_base_sha"
           noema_suite=false
@@ -578,6 +579,7 @@ jobs:
           set -euo pipefail
           python -m pytest -q tests/test_agent_review_runtime_quality_consolidation.py
           python -m compileall -q tests/test_agent_review_runtime_quality_consolidation.py
+          git fetch --no-tags --prune origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           change_base_sha="$(git merge-base "refs/remotes/origin/$BASE_REF" "$HEAD_SHA")"
           test -n "$change_base_sha"
           git diff --check "$change_base_sha...$HEAD_SHA"

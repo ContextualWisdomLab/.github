@@ -23,14 +23,19 @@ identity defect and duplicate the `.github` control-plane responsibility.
 
 ## Repair and verification
 
-The changed-path selector and terminal whitespace gate now compute the
-merge-base of the fetched `refs/remotes/origin/<base-ref>` and exact head. The
-head checkout assertion remains exact, and a missing merge-base fails closed.
+The changed-path selector and terminal whitespace gate refetch the exact base
+ref immediately before computing its merge-base with the exact head. This
+closes the second stale window where the base could advance during a long
+quality job after checkout but before the terminal whitespace gate. The head
+checkout assertion remains exact, and a failed fetch or missing merge-base
+fails closed.
 
-The regression contract was changed first and failed in two cases against the
-event-SHA implementation. After the workflow repair, 35 focused consolidation,
-single-runner, autofix-context, and runtime-budget tests pass. Applying the same
-command to the real #1678 graph resolves the live change base to
+The original regression contract was changed first and failed in two cases
+against the event-SHA implementation. A follow-up RED contract then failed
+because neither merge-base decision refetched the base; the minimal repair adds
+one fail-closed fetch at each decision. After the workflow repair, 36 focused
+consolidation, single-runner, autofix-context, and runtime-budget tests pass.
+Applying the same command to the real #1678 graph resolves the live change base to
 `37b10243cec3d160ecc9c1be75c71428b160a703`; `git diff --check` succeeds.
 
 Completion requires a dedicated owner PR, exact-current-head hosted Checks,

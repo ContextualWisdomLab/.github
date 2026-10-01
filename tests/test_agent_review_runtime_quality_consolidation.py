@@ -166,6 +166,31 @@ def test_whitespace_gate_uses_live_base_merge_base() -> None:
     assert "github.event.pull_request.base.sha" not in self_test_step
 
 
+def test_live_base_is_refetched_before_each_merge_base_decision() -> None:
+    """Prevent a base advance during the job from reviving stale diff evidence."""
+
+    workflow = _workflow_text()
+    live_base_fetch = (
+        'git fetch --no-tags --prune origin '
+        '"refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"'
+    )
+    merge_base = (
+        'change_base_sha="$(git merge-base '
+        '\"refs/remotes/origin/$BASE_REF\" \"$HEAD_SHA\")"'
+    )
+
+    assert workflow.count(live_base_fetch) == 2
+    for workflow_section in (
+        workflow.split("- name: Select affected contract suites", 1)[1].split(
+            "- name: Install exact hash-verified base dependencies", 1
+        )[0],
+        workflow.split("- name: Verify consolidated workflow contract", 1)[1],
+    ):
+        assert workflow_section.index(live_base_fetch) < workflow_section.index(
+            merge_base
+        )
+
+
 def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
     """Run review-repair contracts only when their owned paths change."""
 
