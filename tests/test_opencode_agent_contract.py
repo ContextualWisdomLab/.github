@@ -2572,7 +2572,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     measure_step = coverage_job.index(
         "      - name: Measure test and docstring evidence\n"
     )
-    measure = coverage_job[measure_step:]
+    cleanup_step = coverage_job.index(
+        "      - name: Clean up coverage runner resources\n", measure_step
+    )
+    measure = coverage_job[measure_step:cleanup_step]
     target_start = coverage_end + 1
     target_job = workflow[target_start:]
 
@@ -2592,7 +2595,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
-    assert syntax_step < measure_step
+    assert syntax_step < measure_step < cleanup_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
     assert measure.count("GITHUB_ENV=/dev/null") == 3

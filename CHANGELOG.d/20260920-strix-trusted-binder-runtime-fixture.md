@@ -15,3 +15,8 @@
 - The branch adopts the current central dependency owner, including the
   explicit AnyIO 4.14.2 source-to-hash pin required by the Python security
   gate.
+- The package-description reusable workflow now isolates arbitrary caller build
+  backends in an artifact producer job. A fresh inspector job receives only the
+  staged distribution or README, checks out the exact central workflow source,
+  and runs the gate with Python isolated mode, so caller code cannot rewrite the
+  trusted gate or poison its interpreter before a GREEN verdict.
