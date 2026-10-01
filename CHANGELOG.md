@@ -9,6 +9,10 @@
   authority. A clean Draft publishes an exact-head formal comment with
   `DRAFT_REVIEW_COMPLETE`, never an approval or a merge-authorizing receipt;
   the scheduler recognizes only that source-backed comment as completion.
+  The Ready-only Required producer now sends an explicit boolean `false`, and
+  a Draft completion lease is retired when the same head becomes Ready so the
+  mode-independent admission identity cannot suppress the required approval
+  review.
   Review-only runs never publish Ready status, dispatch Noema, invoke the merge
   scheduler, or wake merge-required OpenCode jobs. This reconnects the
   already-authorized agent-mention/scheduler path without weakening ordinary

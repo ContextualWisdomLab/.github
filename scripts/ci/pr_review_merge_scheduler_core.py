@@ -70,6 +70,34 @@ class SchedulerAdmissionGate:
 
         def lease(state):
             """Apply this request to `state` and record any lease it wins."""
+            prior_record = state.records.get(request.identity)
+            if (
+                component == "opencode"
+                and not bool(pr.get("isDraft"))
+                and prior_record is not None
+                and has_current_head_draft_review_completion(pr)
+                and not has_current_head_approval(pr)
+                and not has_current_head_changes_requested(pr)
+                and (
+                    prior_record.status == "complete"
+                    or (
+                        prior_record.status == "dispatched"
+                        and opencode_progress_state(
+                            pr, stale_after_minutes=DEFAULT_STALE_OPENCODE_MINUTES
+                        )
+                        != "running"
+                    )
+                )
+            ):
+                # The durable identity intentionally omits Draft/Ready mode.
+                # Retire only a terminal prior lease at the moment a Ready
+                # dispatch asks for admission; an in-flight Ready lease keeps
+                # its bounded worker slot on subsequent reconciliations.
+                updated_records = dict(state.records)
+                updated_records[request.identity] = RequestRecord(
+                    prior_record.request, "stale"
+                )
+                state = type(state)(updated_records, dict(state.latest_sequences))
             plan = plan_dispatches(
                 state,
                 [request],
@@ -94,10 +122,12 @@ class SchedulerAdmissionGate:
             records = dict(state.records)
             latest = dict(state.latest_sequences)
             for identity, record in tuple(records.items()):
-                if record.status != "dispatched" or record.request.repository != repository:
+                if record.request.repository != repository:
                     continue
                 pr = live_prs.get(record.request.pull_request)
                 live_head = str((pr or {}).get("headRefOid") or "").lower()
+                if record.status != "dispatched":
+                    continue
                 if live_head != record.request.head_sha:
                     records[identity] = RequestRecord(record.request, "stale")
                     continue

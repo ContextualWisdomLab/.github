@@ -34,6 +34,12 @@ Ready or to weaken ordinary merge admission.
 - A Draft-to-Ready transition invalidates Draft authority before lease access;
   a validated Draft that changes later still publishes only a non-authorizing
   comment.
+- The Ready-only Required producer always sends typed `draft_review_only=false`;
+  omitted and malformed types fail closed at the receiver.
+- Because the durable admission identity intentionally remains
+  repository/PR/head/component, reconciliation retires an exact-head Draft
+  completion lease when that pull request becomes Ready without an approving
+  verdict. The same head can then acquire a fresh Ready review lease.
 
 ## Executable acceptance
 
@@ -44,7 +50,8 @@ the dispatch payload distinguishes Ready and Draft work, and the Required
 workflow wake is structurally disabled for a validated Draft. It also proves
 that the Draft path cannot publish approval authority or start any Ready-only
 follow-up, while its exact-head formal completion comment prevents an unbounded
-same-head redispatch loop. The complete affected scheduler and receiver suite
+same-head redispatch loop. A transition regression proves Draft completion,
+same-head Ready retirement, and fresh Ready redispatch. The complete affected scheduler and receiver suite
 must pass both locally and on the exact published head. Hosted security,
 provenance, and independent semantic review remain required before ordinary
 protected integration.

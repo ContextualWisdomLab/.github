@@ -11084,6 +11084,51 @@ def test_bounded_admission_persists_leases_and_completes_only_current_head(
     assert [record.status for record in persisted.records.values()].count("dispatched") == 1
 
 
+def test_ready_transition_retires_same_head_draft_completion_lease(tmp_path):
+    """A Draft comment cannot permanently suppress Ready review on the same head."""
+    state_path = tmp_path / "admission.json"
+    gate = sched.SchedulerAdmissionGate(state_path, sequence=78, dispatch_budget=1)
+    completion = {
+        **opencode_review("COMMENTED", "a" * 40),
+        "body": (
+            "OpenCode review\n\n"
+            "- Result: DRAFT_REVIEW_COMPLETE\n\n"
+            "Draft review-only request completed without publishing merge approval authority."
+        ),
+    }
+    draft_pr = make_pr(
+        number=7,
+        isDraft=True,
+        headRefOid="a" * 40,
+        reviews={"nodes": [completion]},
+    )
+    assert gate.admit("opencode", "ContextualWisdomLab/example", draft_pr)
+    gate.reconcile("ContextualWisdomLab/example", [draft_pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    completed = next(iter(load_state_file(state_path).records.values()))
+    assert completed.status == "complete"
+
+    ready_pr = {
+        **draft_pr,
+        "isDraft": False,
+        "statusCheckRollup": {
+            "contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}
+        },
+    }
+    ready_gate = sched.SchedulerAdmissionGate(
+        state_path, sequence=79, dispatch_budget=1
+    )
+    assert ready_gate.admit("opencode", "ContextualWisdomLab/example", ready_pr)
+    admitted = next(iter(load_state_file(state_path).records.values()))
+    assert admitted.status == "dispatched"
+
+    ready_gate.reconcile("ContextualWisdomLab/example", [ready_pr])
+    preserved = next(iter(load_state_file(state_path).records.values()))
+    assert preserved.status == "dispatched"
+
+
 def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
     monkeypatch, tmp_path
 ):

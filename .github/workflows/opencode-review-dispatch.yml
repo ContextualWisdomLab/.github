@@ -43,7 +43,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
-          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only) }}
         run: |
           set -euo pipefail
           [ "$EVENT_NAME" = "repository_dispatch" ] || {
@@ -181,7 +181,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
-          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only) }}
         run: |
           set -euo pipefail
           exact_title="OpenCode Review Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}"
@@ -562,7 +562,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
-          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only || false) }}
+          DRAFT_REVIEW_ONLY: ${{ toJSON(github.event.client_payload.draft_review_only) }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then

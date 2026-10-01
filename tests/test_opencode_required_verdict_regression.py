@@ -1008,6 +1008,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
     assert 'event_type:"opencode-review"' in workflow
     assert "required_run_id:$required_run_id" in workflow
+    assert "--argjson draft_review_only false" in workflow
+    assert "draft_review_only:$draft_review_only" in workflow
     dispatch_step = target_job.split(
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
@@ -1652,6 +1654,14 @@ def test_authorized_draft_review_cannot_publish_approval_or_run_merge_followups(
     assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in status_publication
     assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in noema_handoff
     assert "needs.validate-pr-metadata.outputs.is_draft == 'false'" in merge_followup
+
+
+def test_dispatch_preserves_draft_review_authority_type_before_validation() -> None:
+    """Falsy non-booleans cannot be normalized into Ready review authority."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    raw_binding = "toJSON(github.event.client_payload.draft_review_only)"
+    assert dispatched.count(raw_binding) == 3
+    assert "draft_review_only || false" not in dispatched
 
 
 def wake_selector(run: dict[str, object], *, head: str = HEAD) -> str:
