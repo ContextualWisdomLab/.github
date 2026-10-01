@@ -1,3 +1,33 @@
+### Shared Strix lock advances beyond the PyJWT recursion DoS
+
+- Advance the explicit Strix source pin and generated hash lock from PyJWT
+  `2.14.0` to `2.15.0`, closing GHSA-42vr-xj54-vc7v / CVE-2026-101918. Exact Security
+  Scan run `36741151937` found the advisory in dependent PR #2540; the
+  canonical owner repair stays in #2531. A source/lock contract, deterministic
+  lock regeneration, and pip-audit evidence keep the dependent branch free of a
+  leaf workaround and prevent a return to `2.14.0`. Exact-head hosted security
+  Checks, independent approval, ordinary protected integration, and immutable
+  consumer-pin advancement remain required before release admission.
+
+### Shared urllib3 locks close proxy and streaming CVEs
+
+- Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
+  Strix security-tooling closures, regenerate their hash locks without unrelated
+  version movement, and add a four-file parity contract. This closes
+  CVE-2026-97687 and CVE-2026-97689 found by exact-head Python Security while
+  preserving hash checking and the existing Strix cryptography override.
+
+### Shared security fixtures use patched PyJWT and PyO3 releases
+
+- The Strix hash lock now takes PyJWT `2.14.0` as an explicit source input,
+  closing CVE-2026-102274 without hiding the dependency in the cryptography-only
+  override file. The offline Rust coverage fixture advances from PyO3 `0.22.6`
+  to `0.29.2`, beyond the `0.29.0` fixes for GHSA-36hh-v3qg-5jq4 and
+  GHSA-chgr-c6px-7xpp. Source/lock parity tests prevent either generated lock
+  from silently returning to the vulnerable versions. Protected integration,
+  immutable consumer-pin advancement, and fresh exact-head hosted security
+  Checks remain required before release admission.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
