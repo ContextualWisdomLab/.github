@@ -93,12 +93,12 @@ def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
         normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
+            line for line in block.splitlines() if not line.strip().startswith(("if:", "runs-on:"))
         )
         normalized_blocks.add(normalized)
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
-        "from the single 'if:' line"
+        "from the event guard and separately tested runner allocation"
     )
 
 
@@ -128,11 +128,19 @@ def test_gate_job_and_codeql_scope_step_share_one_doc_pattern_line():
     assert "NOTICE" in line
 
 
-def test_gate_jobs_run_on_ubuntu_24_04():
-    """Every `changed-scope` job must use the non-starved pinned image."""
+def test_gate_jobs_use_supported_runner_allocation():
+    """Scope jobs preserve trusted-main routing and a supported hosted fallback."""
     for filename in GATE_WORKFLOWS:
         block = _top_level_job_block(_read(filename), "changed-scope")
-        assert "runs-on: ubuntu-24.04" in block, filename
+        if filename in ("opencode-review.yml", "strix.yml"):
+            assert '"group":"CWL central control"' in block, filename
+            assert f"github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/{filename}@refs/heads/main'" in block, filename
+            assert "fromJSON('[\"ubuntu-24.04\"]')" in block, filename
+        elif filename == "noema-review.yml":
+            assert "endsWith(github.workflow_ref, '@refs/heads/main')" in block, filename
+            assert "fromJSON('[\"ubuntu-24.04\"]')" in block, filename
+        else:
+            assert "runs-on: ubuntu-24.04" in block, filename
         assert "runs-on: ubuntu-latest" not in block, filename
 
 
