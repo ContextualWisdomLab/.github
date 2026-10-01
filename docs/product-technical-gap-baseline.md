@@ -3707,3 +3707,33 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-10-01 OpenCode evidence-label identity boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; fresh exact-head
+hosted Checks and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode response normalization and approval-evidence admission. OpenCode
+is the untrusted evidence producer; repository review workflows consume only
+the normalizer's fail-closed verdict contract.
+
+**Gap / RCA.** The optimized last-label search used an unconstrained
+`rfind("coverage:")`. A response could state that real coverage evidence was
+not measured, then append `uncoverage: ... 100%`; the suffix beginning inside
+`uncoverage:` was accepted as a newer `coverage:` label. The false label could
+therefore replace the genuine fail-closed section and make
+`mentions_full_coverage` return true. The same missing identity boundary also
+affected forward searches for the next section label.
+
+**RED → GREEN / action.** RED
+`af06cf9c87de4ac76db575d087a170746d6ab83d` adds the durable suffix-forgery
+case. GREEN `4d49b8307706ab8d4565cca8b0d9728bcdad2a35` rejects label occurrences whose
+preceding character is alphanumeric, underscore, or hyphen in both backward
+selection and forward section termination. It retains decorated Markdown
+labels, repeated legitimate labels, and the separate `docstring coverage:`
+rule. Local direct behavior cases, Python compilation, and `git diff --check`
+are GREEN; the local environment has no pytest installation, so no full-suite
+claim is made. Completion still requires hosted exact-head tests, terminal
+required Checks, no unresolved actionable thread, qualifying independent
+approval, and ordinary protected integration.
