@@ -1448,7 +1448,6 @@ def valid_control(
 
 def iter_json_objects(text: str) -> list[Any]:
     """Extract top-level JSON values without promoting nested control objects."""
-    decoder = json.JSONDecoder()
     values: list[Any] = []
 
     try:
@@ -1458,26 +1457,39 @@ def iter_json_objects(text: str) -> list[Any]:
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    index = 0
-    while True:
-        index = text.find("{", index)
-        if index == -1:
-            break
-        next_index = index + 1
-        while next_index < len(text) and text[next_index] in " \t\r\n":
-            next_index += 1
-        if next_index < len(text) and text[next_index] not in {'"', "}"}:
-            index += 1
+    start_index: int | None = None
+    container_stack: list[str] = []
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if start_index is None:
+            if character not in "{[":
+                continue
+            start_index = index
+            container_stack.append("}" if character == "{" else "]")
             continue
-        try:
-            value, new_index = decoder.raw_decode(text, index)
-            values.append(value)
-            # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
-            index = new_index
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
             continue
-        except json.JSONDecodeError:
-            pass
-        index += 1
+
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            container_stack.append("}" if character == "{" else "]")
+        elif container_stack and character == container_stack[-1]:
+            container_stack.pop()
+            if not container_stack:
+                try:
+                    values.append(json.loads(text[start_index : index + 1]))
+                except json.JSONDecodeError:
+                    pass
+                start_index = None
 
     return values
 
