@@ -956,7 +956,13 @@ def label_section(text: str, label: str) -> str:
     """Return text after the last admissible label until the next known label."""
     index = text.rfind(label)
     while index != -1:
-        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
+        if (
+            (index > 0 and (text[index - 1].isalnum() or text[index - 1] in "_-"))
+            or (
+                label == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            )
+        ):
             index = text.rfind(label, 0, index)
             continue
         break
@@ -973,8 +979,11 @@ def label_section(text: str, label: str) -> str:
         idx = text.find(candidate, start, end)
         while idx != -1:
             if (
-                candidate == "coverage:"
-                and text[max(0, idx - 10) : idx] == "docstring "
+                (idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"))
+                or (
+                    candidate == "coverage:"
+                    and text[max(0, idx - 10) : idx] == "docstring "
+                )
             ):
                 idx = text.find(candidate, idx + len(candidate), end)
                 continue
