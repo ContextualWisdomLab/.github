@@ -1,3 +1,23 @@
+### Agent runtime quality compares the live base graph
+
+- `Agent Review Runtime Quality CI` now derives changed paths and whitespace
+  checks from the merge-base of the fetched live base ref and the exact PR
+  head. Long-lived PR events can no longer make already-protected-main files
+  look like new PR whitespace, while exact-head checkout and fail-closed diff
+  checks remain unchanged. Exact failure evidence is `.github#1678` run
+  `36804488453`, job `110185716853`.
+- Preserve the canonical shared-security owner `.github#2531@7900ba4c4` as an
+  ordinary second parent of the workflow repair. Its exact-head Security Scan,
+  Python Security, SAST, and runtime-quality runs are green, so the dependent
+  branch consumes patched PyJWT, PyO3, urllib3, LiteLLM, `fast-uri`, and
+  `ip-address` bytes instead of duplicating a leaf lock repair. CodeQL remains
+  fail-closed pending an authenticated verdict; release admission stays HOLD.
+- Stack the verified Draft owner `.github#2547@617212f8` into the affected SBOM
+  inventory consumer `.github#1678` by ordinary two-parent merge. This is
+  pre-integration evidence only: the consumer must pass fresh exact-head hosted
+  Checks, and protected owner integration plus independent review remain
+  mandatory before either PR can leave Draft.
+
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 
 - Advance the explicit Strix source pin and generated hash lock from PyJWT
@@ -27,7 +47,6 @@
   from silently returning to the vulnerable versions. Protected integration,
   immutable consumer-pin advancement, and fresh exact-head hosted security
   Checks remain required before release admission.
-
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

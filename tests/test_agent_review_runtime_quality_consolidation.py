@@ -128,8 +128,8 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         assert required_path in workflow
 
 
-def test_exact_head_is_verified_before_selected_suites_run() -> None:
-    """Reject a checkout that differs from the pull request's current head."""
+def test_exact_head_uses_live_base_merge_base_for_changed_paths() -> None:
+    """Ignore stale event base SHAs while preserving exact-head selection."""
 
     workflow = _workflow_text()
     selector = workflow.split(
@@ -137,7 +137,33 @@ def test_exact_head_is_verified_before_selected_suites_run() -> None:
     )[1].split("- name: Install exact hash-verified base dependencies", 1)[0]
 
     assert 'test "$(git rev-parse HEAD)" = "$HEAD_SHA"' in selector
-    assert 'git diff --name-only "$BASE_SHA...$HEAD_SHA"' in selector
+    assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in selector
+    assert (
+        'change_base_sha="$(git merge-base '
+        '\"refs/remotes/origin/$BASE_REF\" \"$HEAD_SHA\")"'
+        in selector
+    )
+    assert 'git diff --name-only "$change_base_sha...$HEAD_SHA"' in selector
+    assert "github.event.pull_request.base.sha" not in selector
+
+
+def test_whitespace_gate_uses_live_base_merge_base() -> None:
+    """Check only the current PR delta when an old event base is stale."""
+
+    workflow = _workflow_text()
+    self_test_step = workflow.split(
+        "- name: Verify consolidated workflow contract", 1
+    )[1]
+
+    assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in self_test_step
+    assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in self_test_step
+    assert (
+        'change_base_sha="$(git merge-base '
+        '\"refs/remotes/origin/$BASE_REF\" \"$HEAD_SHA\")"'
+        in self_test_step
+    )
+    assert 'git diff --check "$change_base_sha...$HEAD_SHA"' in self_test_step
+    assert "github.event.pull_request.base.sha" not in self_test_step
 
 
 def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
