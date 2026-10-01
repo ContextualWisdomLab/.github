@@ -3870,4 +3870,3 @@ run passed 5,321 tests, skipped 5 optional cases, and passed 40 subtests; its
 only two initial failures were direct `python -m pip` calls in a verification
 venv without pip, and both passed in the pip-equipped locked venv (2/2). The
 source mode remains `100755`.
-
