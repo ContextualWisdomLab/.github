@@ -338,6 +338,12 @@ def test_maturin_main_reads_an_explicit_asset_root(tmp_path, monkeypatch):
     assert captured["raw"] == b"asset"
 
 
+def test_maturin_verifier_has_complete_docstrings():
+    """Every production entry point explains its trust-boundary responsibility."""
+    assert verifier._binary.__doc__
+    assert verifier.main.__doc__
+
+
 def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):
     archives, assets, _, evidence = _asset_case()
     from scripts.ci import scan_release_native_links as scanner

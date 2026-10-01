@@ -1720,6 +1720,32 @@ def test_scheduler_cleanup_second_inventory_pass_catches_state_transition(
     assert "/actions/runs/100/force-cancel" in calls
 
 
+def test_scheduler_cleanup_inventory_covers_review_event_runs(tmp_path: Path) -> None:
+    """A new head must retire predecessor runs triggered by PR reviews too."""
+    review_inventory = {
+        "total_count": 1,
+        "workflow_runs": [
+            {
+                "id": 100,
+                "event": "pull_request_review",
+                "status": "queued",
+                "pull_requests": [
+                    {"number": 7, "head": {"sha": "b" * 40}},
+                ],
+            }
+        ],
+    }
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "completed", "conclusion": "cancelled"}],
+        [review_inventory] * 10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "event=pull_request_target" not in calls
+    assert "/actions/runs/100/force-cancel" in calls
+
+
 def test_scheduler_cleanup_fails_closed_on_truncated_inventory(
     tmp_path: Path,
 ) -> None:

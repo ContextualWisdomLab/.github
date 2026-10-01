@@ -93,9 +93,11 @@ concurrency:
     github.event_name == 'pull_request_review' && format('head-{0}', github.event.pull_request.head.sha) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' && format('head-{0}', github.event.client_payload.pr_head_sha) ||
     'no-head' }}
-  # Preserve every same-head admission in GitHub's bounded FIFO queue. A new
-  # head receives a distinct group; the metadata-only cleanup job below retires
-  # only revalidated predecessor work and proves terminal cancellation.
+  # Preserve same-head admissions up to GitHub's documented pending limit
+  # without single-pending replacement; dispatch ordering remains
+  # platform-controlled. A new head receives a distinct group; the metadata-only
+  # cleanup job below retires only revalidated predecessor work and proves
+  # terminal cancellation.
   queue: max
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
@@ -165,7 +167,7 @@ jobs:
             for active_status in requested waiting pending queued in_progress; do
               inventory_path="$inventory_dir/${inventory_pass}-${active_status}.json"
               gh api --paginate --slurp \
-                "repos/${TARGET_REPOSITORY}/actions/workflows/pr-review-merge-scheduler.yml/runs?event=pull_request_target&status=${active_status}&per_page=100" \
+                "repos/${TARGET_REPOSITORY}/actions/workflows/pr-review-merge-scheduler.yml/runs?status=${active_status}&per_page=100" \
                 >"$inventory_path"
               if ! inventory_counts="$(jq -er '
                 if type == "array" and length > 0

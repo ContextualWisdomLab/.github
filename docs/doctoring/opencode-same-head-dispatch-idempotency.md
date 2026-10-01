@@ -59,7 +59,10 @@ PR/head immediately before each mutation, cancels only predecessor-head work
 reports `completed/cancelled`. Two complete status passes prevent a state
 transition from escaping between filtered queries; every response reconciles
 the collected row count with `total_count` and fails closed if GitHub's
-filtered-search ceiling truncates the inventory.
+filtered-search ceiling truncates the inventory. The inventory spans every
+event for this workflow and then binds candidates through PR association and
+head SHA; filtering the API to `pull_request_target` would strand predecessor
+`pull_request_review` runs in their old exact-head group.
 
 Producer observation and POST are not atomic, so the receiver first authorizes
 the exact actor/sender pair, repository allowlist membership, and complete
@@ -119,8 +122,9 @@ cancellation, deduplication, asynchronous cancellation continuation, and
 fail-closure when a cancellation is refused, remains active, returns an invalid
 state, or terminates with a non-cancelled conclusion. Scheduler cleanup
 fixtures also prove concurrent-head-movement preservation, transition-safe
-two-pass discovery, inventory-completeness rejection, and bounded terminal
-cancellation verification.
+two-pass discovery, review-event predecessor discovery,
+inventory-completeness rejection, and bounded terminal cancellation
+verification.
 Receiver fixtures execute absent, active-owner, terminal-owner, self-rerun,
 different-head takeover, and branch-initialization-race lease paths.
 A two-process fixture starts simultaneous cache misses against an atomic fake

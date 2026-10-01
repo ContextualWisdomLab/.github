@@ -5,9 +5,11 @@
   run. The required wake now inventories all five active states twice, retires
   only identity-validated older-head runs after live authority checks, and
   fails closed until every accepted cancellation is proven
-  `completed/cancelled`. The merge scheduler now preserves all exact-head
-  admissions with `queue: max` and retires predecessor heads only through a
-  metadata-only, live-head-revalidated cleanup job. The receiver atomically compare-and-swaps one
+  `completed/cancelled`. The merge scheduler now preserves exact-head
+  admissions within GitHub's documented `queue: max` bound and retires
+  predecessor heads from every PR-associated scheduler trigger only through a
+  metadata-only,
+  live-head-revalidated cleanup job. The receiver atomically compare-and-swaps one
   repository/PR lease file on a dedicated central branch before source
   materialization, coverage, or model execution, closing the cross-producer
   check-then-POST race without lossy native concurrency. A dedicated minimal
@@ -37,7 +39,9 @@
   and its focused test, so a future lifecycle change cannot omit the repository
   coverage gate that detected this regression. The pull-request trigger admits
   stacked canonical-owner bases as well as `main`; the protected-branch push
-  trigger remains restricted to `main`.
+  trigger remains restricted to `main`. Document the archive extractor and CLI
+  entry point, and expand the trusted docstring gate from one materializer file
+  to all `scripts/ci` production modules.
 
 ### Shared Strix lock advances beyond the PyJWT recursion DoS
 

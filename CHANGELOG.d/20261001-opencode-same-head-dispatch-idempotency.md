@@ -8,8 +8,9 @@
   acquires the exact-PR lease, revalidate live authority and the formal
   exact-head review receipt again so a completed prior receiver cannot trigger
   duplicate coverage or model execution.
-  Preserve every exact-head merge-scheduler admission with `queue: max`; a
-  dedicated metadata-only cleanup inventories every active state twice,
+  Preserve exact-head merge-scheduler admissions within GitHub's documented
+  `queue: max` bound; a dedicated metadata-only cleanup inventories every
+  active state twice across all PR-associated scheduler triggers,
   rejects incomplete GitHub search results, retires only
   live-head-revalidated predecessor runs, and proves each accepted
   cancellation reaches `completed/cancelled`.

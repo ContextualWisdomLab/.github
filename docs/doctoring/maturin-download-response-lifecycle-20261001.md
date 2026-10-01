@@ -37,14 +37,20 @@ while the push trigger remains restricted to protected `main`. The repair does
 not change admitted hosts, the one-hop redirect
 contract, credentials, request timeout, byte bounds, digests, or error mapping.
 
+Exact-tree verification then found that the verifier's archive extractor and
+CLI entry point lacked docstrings even though the PR claimed complete
+production docstring coverage. A RED regression now binds both symbols, the
+two trust-boundary docstrings close the omission, and Trusted uv measures all
+of `scripts/ci` instead of only the materializer module.
+
 ## Evidence and remaining gates
 
 - Hosted RED: 5,314 passed, 5 skipped, 40 subtests; 18,775 statements with 5
   missing, 7,652 branches with 2 partial; total 99%.
 - Local integrated GREEN: 18 lifecycle/prescreen tests; complete warnings-fatal
-  suite 5,362 passed, 5 skipped, 40 subtests; 18,767/18,767 statements and
+  suite 5,363 passed, 5 skipped, 40 subtests; 18,767/18,767 statements and
   7,648/7,648 branches; verifier 107/107 statements and 34/34 branches;
-  `git diff --check` clean.
+  production docstrings 1,456/1,456; `git diff --check` clean.
 - Required before acceptance: complete exact-head hosted suite, security and
   CodeQL verdicts, qualifying independent approval, ordinary owner integration,
   then ordinary merge-forward into #1653 and fresh consumer Checks.
