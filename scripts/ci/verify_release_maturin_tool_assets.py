@@ -94,7 +94,9 @@ def _download(filename: str) -> bytes:
         headers={"User-Agent": "cwl-release-gate"},
         method="GET",
     )
-    opener = urllib.request.build_opener(_ExactReleaseRedirect())
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _ExactReleaseRedirect()
+    )
     response = None
     try:
         response = opener.open(request, timeout=60)
