@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -29,6 +30,7 @@ from typing import Any, Iterable, Mapping, Sequence
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
 GITHUB_API_AUTHORITY = "api.github.com"
+MAX_ANALYSES_PAGES = 1000
 
 
 class ConfigurationIdentityError(RuntimeError):
@@ -182,8 +184,11 @@ def _require_github_api_url(url: str) -> str:
     return url
 
 
-def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one canonical GitHub REST URL without redirects, or fail closed."""
+def _request_json(
+    url: str, *, token: str, timeout_seconds: int,
+    response_headers: dict[str, str] | None = None,
+) -> Any:
+    """GET canonical REST JSON; optionally expose Link without changing the result."""
     url = _require_github_api_url(url)
     request = urllib.request.Request(
         url,
@@ -198,6 +203,14 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     try:
         with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
+            if response_headers is not None:
+                headers: Any = getattr(response, "headers", {})
+                if hasattr(headers, "get_all"):
+                    response_headers["Link"] = ", ".join(headers.get_all("Link", []))
+                else:
+                    response_headers["Link"] = headers.get("Link", "")
+    except UnicodeDecodeError as exc:
+        raise ConfigurationIdentityError("GitHub API returned invalid UTF-8") from exc
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
         raise ConfigurationIdentityError(
@@ -208,11 +221,68 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
             f"GitHub API transport failed: {type(exc).__name__}"
         ) from exc
     if not payload.strip():
+        if response_headers is not None:
+            raise ConfigurationIdentityError("GitHub analyses API returned an empty body; evidence incomplete")
         return []
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
         raise ConfigurationIdentityError("GitHub API returned invalid JSON") from exc
+
+
+def _next_analyses_page(
+    link: str, *, endpoint: str, params: Mapping[str, str], page: int,
+    token: str, timeout_seconds: int, repository_ids: dict[str, int],
+) -> str:
+    """Validate GitHub's Link grammar and bind next to the same sequential query.
+
+    Only canonical HTTPS, this repository's analyses endpoint, and unchanged
+    ref/tool/per_page filters may receive the bearer header. A terminal last
+    relation must name the current page and preserve those same invariants.
+    Unknown, duplicate, malformed or non-sequential relations abort rather
+    than prove completeness.
+    """
+    if not link:
+        return ""
+    relations: dict[str, str] = {}
+    for part in link.split(","):
+        match = re.fullmatch(r'\s*<([^<>\s]+)>\s*;\s*rel="(next|prev|first|last)"\s*', part)
+        if match is None or match.group(2) in relations:
+            raise ConfigurationIdentityError("malformed or duplicate analyses pagination Link")
+        relations[match.group(2)] = match.group(1)
+    target = relations.get("next", "") or relations.get("last", "")
+    if not target:
+        return ""
+    _require_github_api_url(target)
+    parsed = urllib.parse.urlsplit(target)
+    try:
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError as exc:
+        raise ConfigurationIdentityError("malformed analyses pagination query") from exc
+    expected = {key: [value] for key, value in params.items()}
+    expected["page"] = [str(page + 1 if "next" in relations else page)]
+    if query != expected:
+        raise ConfigurationIdentityError("analyses pagination changed filters or page sequence")
+    if parsed.path != urllib.parse.urlsplit(endpoint).path:
+        alias = re.fullmatch(r"/repositories/([1-9][0-9]*)/code-scanning/analyses", parsed.path)
+        if alias is None:
+            raise ConfigurationIdentityError("analyses pagination changed endpoint")
+        if "id" not in repository_ids:
+            metadata = _request_json(
+                endpoint.removesuffix("/code-scanning/analyses"),
+                token=token, timeout_seconds=timeout_seconds,
+            )
+            repo_id = metadata.get("id") if isinstance(metadata, dict) else None
+            if type(repo_id) is not int or repo_id <= 0:
+                raise ConfigurationIdentityError("analyses pagination repository ID could not be verified")
+            repository_ids["id"] = repo_id
+        if alias.group(1) != str(repository_ids["id"]):
+            raise ConfigurationIdentityError("analyses pagination changed repository ID")
+    if "next" not in relations:
+        return ""
+    if page >= MAX_ANALYSES_PAGES:
+        raise ConfigurationIdentityError("analyses pagination page limit exceeded; evidence incomplete")
+    return target
 
 
 def list_codeql_analyses(
@@ -223,20 +293,43 @@ def list_codeql_analyses(
     per_page: int = 100,
     timeout_seconds: int = 30,
 ) -> list[dict[str, Any]]:
-    """List code-scanning analyses for a repository, optionally filtered by ref."""
-    if not repository or "/" not in repository:
+    """Collect complete CodeQL history (at most 1000 pages), optionally by ref.
+
+    Follow only sequential Link targets bound to the original repository and
+    ref/tool/page-size query. Transport, malformed links or the page budget
+    abort the collection: callers never receive partial identity evidence.
+    """
+    if not repository or re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise ConfigurationIdentityError("repository must be owner/name")
+    if repository.split("/")[1] in {".", ".."}:
+        raise ConfigurationIdentityError("repository must be owner/name")
+    if type(per_page) is not int or not 1 <= per_page <= 100:
+        raise ConfigurationIdentityError("per_page must be an integer from 1 to 100")
     if not token:
         raise ConfigurationIdentityError("token is required to list analyses")
     params: dict[str, str] = {"per_page": str(per_page), "tool_name": CODEQL_TOOL_NAME}
     if ref:
         params["ref"] = ref
     query = urllib.parse.urlencode(params)
-    url = f"https://api.github.com/repos/{repository}/code-scanning/analyses?{query}"
-    payload = _request_json(url, token=token, timeout_seconds=timeout_seconds)
-    if not isinstance(payload, list):
-        raise ConfigurationIdentityError("code-scanning analyses response was not a list")
-    return [row for row in payload if isinstance(row, dict)]
+    endpoint = f"https://api.github.com/repos/{repository}/code-scanning/analyses"
+    url = f"{endpoint}?{query}"
+    rows: list[dict[str, Any]] = []
+    page = 1
+    repository_ids: dict[str, int] = {}
+    while url:
+        headers: dict[str, str] = {}
+        payload = _request_json(
+            url, token=token, timeout_seconds=timeout_seconds, response_headers=headers,
+        )
+        if not isinstance(payload, list):
+            raise ConfigurationIdentityError("code-scanning analyses response was not a list")
+        rows.extend(row for row in payload if isinstance(row, dict))
+        url = _next_analyses_page(
+            headers["Link"], endpoint=endpoint, params=params, page=page,
+            token=token, timeout_seconds=timeout_seconds, repository_ids=repository_ids,
+        )
+        page += 1
+    return rows
 
 
 def wait_for_language_pairing(
