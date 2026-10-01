@@ -51,10 +51,12 @@ def named_packages(report: str) -> set[str]:
 
 
 def _is_requirements(name: str) -> bool:
+    """Recognize requirements input and lock filenames."""
     return name.startswith("requirements") and name.endswith((".txt", ".in"))
 
 
 def _manifest_text(repo_root: Path) -> str:
+    """Read bounded regular manifests while excluding generated directories."""
     chunks = []
     for path in repo_root.rglob("*"):
         if any(part in SKIP_DIRS for part in path.relative_to(repo_root).parts[:-1]):
@@ -82,6 +84,7 @@ def unverified_dependency_finding(report: str, repo_root: Path) -> bool:
 
 
 def main(argv: list[str]) -> int:
+    """Classify the report against local manifests with explicit exit statuses."""
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2

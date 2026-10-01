@@ -38,6 +38,7 @@ TITLE_RE = re.compile(r"ContextualWisdomLab/([A-Za-z0-9_.-]+)#(\d+)@([0-9a-f]{7,
 
 @dataclass(frozen=True)
 class QueuedRun:
+    """One queued review run bound to its target PR and head."""
     run_id: int
     created_at: datetime
     repo: str
@@ -47,6 +48,7 @@ class QueuedRun:
 
 @dataclass(frozen=True)
 class PrState:
+    """Live PR identity and maintainer-attested priority."""
     state: str
     head: str
     priority: bool
@@ -54,6 +56,7 @@ class PrState:
 
 @dataclass(frozen=True)
 class Plan:
+    """Immutable keep and cancellation groups with queue ordering."""
     keep: tuple[QueuedRun, ...]
     cancel_current: tuple[QueuedRun, ...]
     cancel_stale: tuple[QueuedRun, ...]
@@ -94,10 +97,12 @@ def metrics(p: Plan, *, now: datetime) -> dict:
 
 
 def _gh(*args: str, stdin: str | None = None) -> str:
+    """Run one GitHub CLI command and propagate command failures."""
     return subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=True).stdout
 
 
 def fetch_queued() -> list[QueuedRun]:
+    """Parse queued review runs carrying the expected target identity."""
     out = _gh("api", "--paginate", f"repos/{CENTRAL}/actions/workflows/{WORKFLOW}/runs?status=queued&per_page=100",
               "--jq", ".workflow_runs[]|[.id,.created_at,.display_title]|@json")
     runs = []
@@ -111,6 +116,7 @@ def fetch_queued() -> list[QueuedRun]:
 
 
 def fetch_live(keys: set[tuple[str, int]], label: str) -> dict[tuple[str, int], PrState]:
+    """Read live PR states and cache maintainer label permissions."""
     live: dict[tuple[str, int], PrState] = {}
     perms: dict[tuple[str, str], str] = {}
     keys_sorted = sorted(keys)
@@ -144,6 +150,7 @@ def fetch_live(keys: set[tuple[str, int]], label: str) -> dict[tuple[str, int], 
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Report the plan and apply only recorded, still-queued cancellations."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--label", default="review-priority")
     ap.add_argument("--include-current", action="store_true", help="also cancel non-priority current-head runs")
