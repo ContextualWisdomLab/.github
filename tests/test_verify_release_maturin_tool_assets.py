@@ -396,3 +396,35 @@ def test_maturin_response_lifetime_across_acquisition_and_read_failures(monkeypa
     assert response.closed is (stage != "acquire")
     if stream is not None:
         assert stream.closed
+
+
+def test_read_http_error_stream_closes_even_if_response_cleanup_fails(monkeypatch):
+    """A response cleanup failure must not leave the earlier HTTP error stream open."""
+    import io
+    import urllib.error
+
+    stream = io.BytesIO(b"private error body")
+    error = urllib.error.HTTPError("https://github.com/asset", 503, "unavailable", {}, stream)
+
+    class Response:
+        status = 200
+
+        def read(self, _limit):
+            raise error
+
+        def close(self):
+            raise OSError("response cleanup failed")
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 60
+            return Response()
+
+    monkeypatch.setattr(verifier.urllib.request, "build_opener", lambda *_: Opener())
+    try:
+        with pytest.raises(OSError, match="response cleanup failed") as result:
+            verifier._download("maturin-x86_64-pc-windows-msvc.zip")
+        assert stream.closed
+        assert result.value.__context__ is error
+    finally:
+        error.close()
