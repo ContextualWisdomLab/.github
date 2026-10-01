@@ -65,3 +65,17 @@ project. https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html
 
 MITRE. (2026). *CWE-526: Cleartext storage of sensitive information in an
 environment variable* (Version 4.20). https://cwe.mitre.org/data/definitions/526.html
+
+
+## Exact-head dependency-scan RCA
+
+Security Scan run `36921642491` at head
+`8009e029ef5b17cee543e58920194038294c54a1` failed only its Trivy gate.
+The five findings were already present on protected `main`: `fast-uri`
+3.1.7 (CVE-2026-86472), `ip-address` 10.7.0 (CVE-2026-101911 and
+CVE-2026-101912), and `pyo3` 0.22.6 (GHSA-36hh-v3qg-5jq4 and
+GHSA-chgr-c6px-7xpp). Test-only commit
+`dc35812edcb5e900920264375c088d64acd8cab4` pins the patched target versions before the lock repair. The
+ordinary child replaces those inputs with `fast-uri` 3.1.8, `ip-address`
+10.7.1, and `pyo3` 0.29.0; it does not exclude fixtures, lower severities,
+or weaken the Trivy gate.

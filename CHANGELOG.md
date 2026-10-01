@@ -1,3 +1,11 @@
+### Security-scanned dependency fixtures use patched releases
+
+- Exact-head Security Scan run `36921642491` exposed five protected-base
+  findings in the reviewed Noema reader lock and Cargo coverage fixture:
+  `fast-uri` is pinned to 3.1.8, `ip-address` to 10.7.1, and `pyo3` to
+  0.29.0. Regression contracts bind those patched versions so refreshed
+  vulnerability databases cannot silently reintroduce the causal patterns.
+
 ### Review sidecar erases one-shot provider bootstrap secrets
 
 - After the five provider credentials enter the process-local KV, the launcher now
