@@ -955,7 +955,7 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
     # ⚡ Bolt: Fast path starts using native find, avoiding nested O(N) regex evaluation
-    # ⚡ Bolt: Start from the last occurrence to avoid Python-loop and list-allocation overhead.
+    # ⚡ Bolt: Use rfind to locate the last occurrence immediately, avoiding O(N) forward scanning
     start_index = -1
     index = text.rfind(label)
     while index != -1:
