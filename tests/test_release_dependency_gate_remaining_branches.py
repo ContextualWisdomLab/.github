@@ -7,7 +7,6 @@ import importlib
 import json
 import runpy
 import subprocess
-import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -52,7 +51,7 @@ def test_python_310_toml_fallback_loads_the_declared_compatibility_module(
     """A Python 3.10 runtime without ``tomllib`` must use the declared fallback."""
 
     real_import_module = importlib.import_module
-    fallback = SimpleNamespace(loads=tomllib.loads)
+    fallback = SimpleNamespace(loads=lambda text: {"parsed": text})
 
     def import_without_tomllib(name: str, package: str | None = None) -> Any:
         if name == "tomllib":
