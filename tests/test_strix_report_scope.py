@@ -194,6 +194,88 @@ def test_bare_repository_directory_or_scope_root_is_rejected(
         )
 
 
+def test_validate_accepts_directory_scoped_file_name(tmp_path: Path) -> None:
+    """A standalone file token within its reported directory is accepted."""
+    _write_report(
+        tmp_path,
+        report_text=(
+            "Scope: `/workspace/strix-pr-scope.v6Wilu/scripts/ci/`.\n"
+            "Reviewed `strix_quick_gate.sh`; no vulnerabilities found.\n"
+        ),
+    )
+    report_scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
+
+
+@pytest.mark.parametrize(
+    "report_text",
+    [
+        "Reviewed `strix_quick_gate.sh` without naming its directory.\n",
+        "Scope: scripts/ci/. Reviewed `my_strix_quick_gate.sh`.\n",
+        "Scope: scripts/ci/. Reviewed `strix_quick_gate.sh.bak`.\n",
+        "Scope: other/scripts/ci-tools/. Reviewed strix_quick_gate.sh.\n",
+    ],
+)
+def test_validate_rejects_bare_or_partial_file_names(
+    tmp_path: Path, report_text: str
+) -> None:
+    """Bare, prefixed, suffixed, and wrong-directory identities fail closed."""
+    _write_report(tmp_path, report_text=report_text)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        report_scope.validate(tmp_path, ["scripts/ci/strix_quick_gate.sh"])
+
+
+@pytest.mark.parametrize(
+    "report_text",
+    [
+        "Reviewed scripts/ci/strix_quick_gate.sh.bak.\n",
+        "Reviewed scripts/ci/strix_quick_gate.sh/notes.\n",
+        "Scope: other/scripts/ci/. Reviewed other/strix_quick_gate.sh.\n",
+    ],
+)
+def test_names_changed_path_rejects_longer_or_unrelated_paths(
+    report_text: str,
+) -> None:
+    """A suffix or same-named file elsewhere is not the changed file."""
+    assert not report_scope.names_changed_path(
+        report_text, "scripts/ci/strix_quick_gate.sh"
+    )
+
+
+def test_validate_accepts_file_within_reported_ancestor(tmp_path: Path) -> None:
+    """A two-segment ancestor plus standalone file token binds the source."""
+    _write_report(
+        tmp_path,
+        report_text=(
+            "**Scope:** `/workspace/strix-pr-scope.4eyzTL` including "
+            "`crates/mlsirm-core`.\n"
+            "Reviewed `two_tier_recursion.rs`; no vulnerabilities found.\n"
+        ),
+    )
+    report_scope.validate(
+        tmp_path, ["crates/mlsirm-core/src/two_tier_recursion.rs"]
+    )
+
+
+@pytest.mark.parametrize(
+    "report_text",
+    [
+        "Scope: crates/ only. Reviewed two_tier_recursion.rs.\n",
+        "Scope: crates/mlsirm-core-extra. Reviewed two_tier_recursion.rs.\n",
+        "Scope: crates/mlsirm-core. Reviewed two_tier_recursion.rs/notes.\n",
+        "Scope: crates/mlsirm-core. Reviewed other_recursion.rs.\n",
+    ],
+)
+def test_validate_rejects_generic_or_mismatched_ancestors(
+    tmp_path: Path, report_text: str
+) -> None:
+    """Generic, partial, child-suffixed, and wrong-file scopes are rejected."""
+    _write_report(tmp_path, report_text=report_text)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        report_scope.validate(
+            tmp_path, ["crates/mlsirm-core/src/two_tier_recursion.rs"]
+        )
+
+
 def test_cli_reports_validation_error_and_accepts_scoped_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
