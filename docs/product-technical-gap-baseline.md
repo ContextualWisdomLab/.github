@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 review-transport credential character boundary
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The proposed Strix/Noema exchange accepted NUL and other C0 controls; Bash then removed NUL and used a mutated credential | #2540 review on predecessor `612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; direct reproduction accepted `abc\\u0000def` as `abcdef` with status 0 | Enforce the exact ASCII token alphabet inside jq and execute NUL/SOH/BEL actual-shell cases for both OIDC and App-token fields before any Authorization, mask, or output use | **Proposed / Draft; Noema #735/#736 release, exact-head Checks, and independent approval required** |
+
 ## 2026-10-01 Maturin response-lifecycle coverage closure
 
 | Gap | Exact evidence | Action | Status |
@@ -54,6 +60,12 @@
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-09-30 review-transport continuation incident delta
+
+| Gap ID | Status | Exact-head evidence | Causal owner / next gate |
+|---|---|---|---|
+| CONTROL-REVIEW-TRANSPORT-DISPATCH-01 | **Proposed / blocked — known 403 remains; owner release required** | `wardnet#134@b1758bb838c7b315cdf4e55064985c3626f52e5e` Strix run `36387392997`, continuation job `109439414934` completed its bounded wait and then failed `POST repos/ContextualWisdomLab/.github/dispatches` with `Resource not accessible by integration (HTTP 403)`. The current recurrence is `contextual-orchestrator#1349@832291c11da301e919d9dc20fda99f0847142dd8`: Noema job `109737701886` emitted typed `provider_capacity_unavailable` after gateway HTTP 429, then continuation job `109778469161` waited 93 seconds and failed the central dispatch with HTTP 403. Retained `late-life-anxiety-reanalysis@34032cff52e8522db6ea0aad9f68ae0217e86ee3` evidence (`local/supervisor-audit-20260912/current-ci/103571810868.log`, blob `cb91b0c0bfe1ff9001cab9e1675d97b00cfcef32`, lines 141/158/173) proves the existing consumer OIDC exchange followed by central dispatch also fails HTTP 403. | Canonical capability owner is Noema issue `ContextualWisdomLab/noema#735`; `.github` owns only the Strix/Noema consumer adapter. The Draft adapter removes the consumer-token fallback, keeps consumer permissions read-only plus `id-token: write`, and rejects typed, multi-object, whitespace-bearing, multiline, C0-control-bearing, or DEL-bearing credential responses before altered bytes reach Bash. Actual-shell NUL/SOH/BEL RED fixtures cover OIDC and App-token fields, forbid the malformed-OIDC POST, and require zero mask/output emission; directly affected tests are `52 passed`, the four-file warning-fatal contract suite is `124 passed`, and the combined warning-fatal suite is `5300 passed, 5 skipped, 40 subtests passed`. It must not claim transport repair or merge until Noema publishes an immutable versioned least-privilege target/action-bound capability, `.github` pins it, and a consumer exact-head run proves central dispatch plus a fresh model verdict. |
 
 ### 2026-09-30 central coverage owner stack delta
 

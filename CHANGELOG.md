@@ -23,6 +23,26 @@
   Checks, independent approval, ordinary protected integration, and immutable
   consumer-pin advancement remain required before release admission.
 
+### Proposed review transport continuation fails closed pending owner capability
+
+- The proposed Strix and Noema capacity-continuation adapter removes the
+  consumer-scoped `github.token` fallback and strictly accepts only nonempty
+  ASCII alphanumeric, dot, underscore, and hyphen
+  credentials, rejecting every control-bearing, whitespace-bearing, multiline,
+  typed, or multi-object OIDC/App-token response. The same boundary covers the
+  existing Strix metadata exchange.
+  The continuation jobs retain only read access to consumer contents and pull
+  requests. A retained run proves that a consumer-origin exchanged token still
+  receives HTTP 403 when posting to `ContextualWisdomLab/.github`; therefore
+  this is not a completed transport repair. The versioned least-privilege
+  capability is owned by `ContextualWisdomLab/noema#735`, and this consumer
+  adapter remains Draft until an immutable owner release is pinned. The
+  stacked validation also found and repaired Noema's unclosed file-like
+  `HTTPError` response after bounded telemetry extraction. The combined
+  warning-fatal suite is `5300 passed, 5 skipped, 40 subtests passed`. Hosted
+  exact-head dispatch and a fresh model verdict remain required after owner
+  adoption.
+
 ### Shared urllib3 locks close proxy and streaming CVEs
 
 - Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and

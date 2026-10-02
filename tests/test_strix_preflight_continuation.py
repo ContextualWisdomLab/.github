@@ -5,6 +5,96 @@ import subprocess
 from pathlib import Path
 
 from scripts.ci import strix_runtime_capacity
+from tests.test_required_workflow_queue_contract import workflow_step
+
+
+def test_transport_continuation_uses_oidc_app_token_for_central_dispatch():
+    """Consumer-scoped ``github.token`` must never dispatch to central ``.github``."""
+    source = Path('.github/workflows/strix.yml').read_text()
+    continuation = source.split('\n  continue-strix-transport:\n', 1)[1]
+
+    assert '      id-token: write' in continuation
+    assert '      - name: Exchange OpenCode app token for central Strix continuation' in continuation
+    assert '/exchange_github_app_token' in continuation
+    assert 'GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}' in continuation
+    assert 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}' not in continuation
+
+
+def test_transport_continuation_rejects_malformed_exchange_credentials(tmp_path: Path):
+    """The actual shell must reject typed, control-bearing, and multiline credentials."""
+    workflow = Path(".github/workflows/strix.yml").read_text()
+    shell = workflow_step(
+        workflow,
+        "Exchange OpenCode app token for central Strix continuation",
+    ).split("        run: |\n", 1)[1]
+    fake_curl = tmp_path / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$CURL_LOG"\n'
+        'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$APP_RESPONSE"; '
+        'else printf "%s" "$OIDC_RESPONSE"; fi\n'
+    )
+    fake_curl.chmod(0o755)
+    base_env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "synthetic-request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://fixture.invalid/oidc",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://fixture.invalid",
+    }
+    malformed_pairs = (
+        ('{"value":7}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}', 2),
+        ('{"value":"bad\\u0000oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0001oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0007oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0000app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0001app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0007app"}', 2),
+    )
+    valid_output = tmp_path / "output-valid"
+    valid_curl_log = tmp_path / "curl-valid"
+    valid_result = subprocess.run(
+        ["bash", "-c", shell],
+        env=base_env
+        | {
+            "GITHUB_OUTPUT": str(valid_output),
+            "CURL_LOG": str(valid_curl_log),
+            "OIDC_RESPONSE": '{"value":"valid-oidc"}',
+            "APP_RESPONSE": '{"token":"valid-app"}',
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid_result.returncode == 0
+    assert valid_result.stdout.splitlines() == ["::add-mask::valid-app"]
+    assert valid_output.read_text().splitlines() == ["token=valid-app"]
+    assert len(valid_curl_log.read_text().splitlines()) == 2
+    for case_number, (oidc_response, app_response, expected_calls) in enumerate(
+        malformed_pairs
+    ):
+        output = tmp_path / f"output-{case_number}"
+        curl_log = tmp_path / f"curl-{case_number}"
+        result = subprocess.run(
+            ["bash", "-c", shell],
+            env=base_env
+            | {
+                "GITHUB_OUTPUT": str(output),
+                "CURL_LOG": str(curl_log),
+                "OIDC_RESPONSE": oidc_response,
+                "APP_RESPONSE": app_response,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "::add-mask::" not in result.stdout
+        assert not output.exists()
+        assert len(curl_log.read_text().splitlines()) == expected_calls
 
 
 def test_dispatch_binds_live_head_base_and_ready_state(tmp_path):

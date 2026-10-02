@@ -27,10 +27,14 @@ WORKFLOW = REPO_ROOT / ".github/workflows/strix.yml"
         ("multiple-oidc", '{"token":"synthetic-app"}', False),
         ("valid", '{"token":"one"} {"token":"two"}', False),
         ("malformed-oidc", '{"token":"synthetic-app"}', False),
+        ("nul-oidc", '{"token":"synthetic-app"}', False),
+        ("soh-oidc", '{"token":"synthetic-app"}', False),
         ("valid", '{"token":[]}', False),
         ("valid", "not-json", False),
         ("valid", "{}", False),
         ("valid", '{"token":"bad\\noutput=value"}', False),
+        ("valid", '{"token":"bad\\u0000token"}', False),
+        ("valid", '{"token":"bad\\u0001token"}', False),
     ],
 )
 def test_strix_metadata_exchange_masks_only_valid_job_local_tokens(
@@ -49,6 +53,8 @@ def test_strix_metadata_exchange_masks_only_valid_job_local_tokens(
         '[[ "$FAKE_MODE" != curl-failure ]] || exit 22\n'
         'if [[ "$FAKE_MODE" == multiple-oidc ]]; then printf \'{"value":"one"} {"value":"two"}\'; exit 0; fi\n'
         'if [[ "$FAKE_MODE" == malformed-oidc ]]; then printf \'{"value":[]}\'; exit 0; fi\n'
+        'if [[ "$FAKE_MODE" == nul-oidc ]]; then printf \'{"value":"bad\\u0000token"}\'; exit 0; fi\n'
+        'if [[ "$FAKE_MODE" == soh-oidc ]]; then printf \'{"value":"bad\\u0001token"}\'; exit 0; fi\n'
         'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$FAKE_RESPONSE"; '
         'else printf \'{"value":"synthetic-oidc"}\'; fi\n'
     )

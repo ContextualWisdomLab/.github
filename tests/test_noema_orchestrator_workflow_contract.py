@@ -212,9 +212,20 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "      - name: Schedule bounded Noema transport re-dispatch" not in review_job
     assert "    needs: [admit-current-head, noema-review]" in continuation_job
     assert "needs.noema-review.result == 'failure'" in continuation_job
-    assert "      contents: write" in continuation_job
+    assert "      contents: read" in continuation_job
+    assert "      contents: write" not in continuation_job
     assert "      pull-requests: read" in continuation_job
-    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}" in continuation_job
+    assert "      id-token: write" in continuation_job
+    assert (
+        "      - name: Exchange OpenCode app token for central Noema continuation"
+        in continuation_job
+    )
+    assert "/exchange_github_app_token" in continuation_job
+    assert (
+        "GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}"
+        in continuation_job
+    )
+    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}" not in continuation_job
     assert "${TARGET_REPOSITORY}" in continuation_job
     assert '"$GITHUB_REPOSITORY"' in continuation_job
     assert "uses: actions/checkout" not in continuation_job
@@ -229,6 +240,83 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+
+
+def test_noema_continuation_rejects_malformed_exchange_credentials(tmp_path: Path) -> None:
+    """The actual shell must reject typed, control-bearing, and multiline credentials."""
+    shell = workflow_step(
+        workflow_text("noema-review.yml"),
+        "Exchange OpenCode app token for central Noema continuation",
+    ).split("        run: |\n", 1)[1]
+    fake_curl = tmp_path / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$CURL_LOG"\n'
+        'if [[ "$*" == *"-X POST"* ]]; then printf "%s" "$APP_RESPONSE"; '
+        'else printf "%s" "$OIDC_RESPONSE"; fi\n',
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    base_env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "synthetic-request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://fixture.invalid/oidc",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://fixture.invalid",
+    }
+    malformed_pairs = (
+        ('{"value":7}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":{"nested":"value"}}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"first\\ninjected=value"}', 2),
+        ('{"value":"bad\\u0000oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0001oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"bad\\u0007oidc"}', '{"token":"valid-app"}', 1),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0000app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0001app"}', 2),
+        ('{"value":"valid-oidc"}', '{"token":"bad\\u0007app"}', 2),
+    )
+    valid_output = tmp_path / "output-valid"
+    valid_curl_log = tmp_path / "curl-valid"
+    valid_result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", shell],
+        env=base_env
+        | {
+            "GITHUB_OUTPUT": str(valid_output),
+            "CURL_LOG": str(valid_curl_log),
+            "OIDC_RESPONSE": '{"value":"valid-oidc"}',
+            "APP_RESPONSE": '{"token":"valid-app"}',
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid_result.returncode == 0
+    assert valid_result.stdout.splitlines() == ["::add-mask::valid-app"]
+    assert valid_output.read_text().splitlines() == ["token=valid-app"]
+    assert len(valid_curl_log.read_text().splitlines()) == 2
+    for case_number, (oidc_response, app_response, expected_calls) in enumerate(
+        malformed_pairs
+    ):
+        output = tmp_path / f"output-{case_number}"
+        curl_log = tmp_path / f"curl-{case_number}"
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", shell],
+            env=base_env
+            | {
+                "GITHUB_OUTPUT": str(output),
+                "CURL_LOG": str(curl_log),
+                "OIDC_RESPONSE": oidc_response,
+                "APP_RESPONSE": app_response,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "::add-mask::" not in result.stdout
+        assert not output.exists()
+        assert len(curl_log.read_text().splitlines()) == expected_calls
 
 
 def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_path: Path) -> None:

@@ -1011,12 +1011,10 @@ jobs:
     runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
+      id-token: write
       pull-requests: read
     env:
-      # Consumer required workflows need the existing central dispatch credential.
-      # The central handler can use its repository-scoped token as fallback.
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
@@ -1026,7 +1024,41 @@ jobs:
       PROVIDER_ATTEMPT_COUNT: ${{ needs.noema-review.outputs.provider_attempt_count }}
       TRANSPORT_HTTP_STATUS: ${{ needs.noema-review.outputs.transport_http_status }}
     steps:
+      - name: Exchange OpenCode app token for central Noema continuation
+        id: central_dispatch_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::Noema continuation dispatch requires GitHub OIDC."
+            exit 1
+          fi
+          separator='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+          if ! oidc_response="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}")"; then
+            echo "::error::Noema continuation dispatch could not obtain its OIDC response."
+            exit 1
+          fi
+          if ! oidc_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].value | select(type == "string" and test("^[A-Za-z0-9._-]+$"))' <<<"$oidc_response")"; then
+            echo "::error::Noema continuation dispatch received a malformed OIDC response."
+            exit 1
+          fi
+          if ! token_response="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token")"; then
+            echo "::error::Noema continuation dispatch could not obtain its app token response."
+            exit 1
+          fi
+          if ! app_token="$(jq -ser 'select(length == 1 and (.[0] | type == "object")) | .[0].token | select(type == "string" and test("^[A-Za-z0-9._-]+$"))' <<<"$token_response")"; then
+            echo "::error::Noema continuation dispatch received a malformed repository-scoped app token response."
+            exit 1
+          fi
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
       - name: Schedule bounded Noema transport re-dispatch
+        env:
+          GH_TOKEN: ${{ steps.central_dispatch_app_token.outputs.token }}
         run: |
           set -euo pipefail
           if { [ "$GITHUB_REPOSITORY" != "ContextualWisdomLab/.github" ] &&
