@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from packaging.version import Version
+
 LOCK_FILE = (
     Path(__file__).resolve().parents[1]
     / "scripts"
@@ -50,6 +52,20 @@ def test_nested_vulnerable_transitive_is_detected() -> None:
         }
     }
     assert _locked_versions(lock_data, "ip-address") == [(10, 7, 1), (10, 7, 0)]
+
+
+def test_prerelease_does_not_satisfy_final_security_minimum() -> None:
+    """Treat a prerelease of the fixed version as older than the final release."""
+    lock_data = {
+        "packages": {
+            "node_modules/fast-uri": {"version": "3.1.8-beta.1"},
+        }
+    }
+
+    locked_versions = _locked_versions(lock_data, "fast-uri")
+
+    assert locked_versions == [Version("3.1.8-beta.1")]
+    assert not all(version >= Version("3.1.8") for version in locked_versions)
 
 
 def test_document_reader_source_owns_transitive_security_fixes() -> None:
