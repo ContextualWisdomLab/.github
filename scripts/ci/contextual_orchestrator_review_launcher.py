@@ -267,6 +267,7 @@ def _report_rows(
                 "base_url": base_url,
                 "credential_key": credential_key,
                 "auth_scheme": auth_scheme,
+                "input_modalities": getattr(model, "input_modalities", None),
             }
         )
     return rows
