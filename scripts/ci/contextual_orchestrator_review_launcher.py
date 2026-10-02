@@ -1191,6 +1191,17 @@ def _load_temporary_agents(
         catalog_path.unlink(missing_ok=True)
 
 
+def _review_security_config(factory: Callable[..., Any], auth_token: str) -> Any:
+    """Build the loopback review server's bounded request security contract."""
+    return factory(
+        auth_token=auth_token,
+        max_body_bytes=REVIEW_MAX_BODY_BYTES,
+        # Strix exhausted the generic eight-slot limit on PR #1227 while
+        # its parallel agents were still making successful provider calls.
+        max_concurrent_runs=16,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Bootstrap the KV, discover and preflight free models, then serve.
 
@@ -1392,10 +1403,7 @@ def main(argv: list[str] | None = None) -> int:
         orchestrator,
         host=args.host,
         port=args.port,
-        security=SecurityConfig(
-            auth_token=auth_token,
-            max_body_bytes=REVIEW_MAX_BODY_BYTES,
-        ),
+        security=_review_security_config(SecurityConfig, auth_token),
     )
     return 0
 

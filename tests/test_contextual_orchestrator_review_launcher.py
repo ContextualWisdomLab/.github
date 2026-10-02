@@ -149,9 +149,16 @@ def _install_owner_runtime(
     class SecurityConfig:
         """Retain the authentication boundary passed to the server."""
 
-        def __init__(self, *, auth_token: str, max_body_bytes: int) -> None:
+        def __init__(
+            self,
+            *,
+            auth_token: str,
+            max_body_bytes: int,
+            max_concurrent_runs: int,
+        ) -> None:
             self.auth_token = auth_token
             self.max_body_bytes = max_body_bytes
+            self.max_concurrent_runs = max_concurrent_runs
 
     def serve(
         orchestrator: object,
@@ -234,6 +241,7 @@ def test_main_serves_a_discovered_free_route(
     assert served_request.port == 18080
     assert served_request.security.auth_token == "gateway-token"
     assert served_request.security.max_body_bytes == launcher.REVIEW_MAX_BODY_BYTES
+    assert served_request.security.max_concurrent_runs == 16
     assert [agent.id for agent in served_request.orchestrator.agents] == [
         "bytez_free"
     ]
