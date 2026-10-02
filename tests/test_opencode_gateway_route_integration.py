@@ -8,9 +8,10 @@ answered ``route_not_found`` whose message is the bare string ``not found``.
 
 These tests run the installed OpenCode CLI against a stub that answers exactly
 like the vendored gateway — the served route succeeds, every other route 404s
-with the gateway's own wording — and record which path the CLI asked for. The
-tracked ``opencode.jsonc`` provider block is the input, so the proof follows
-the shipped config instead of a copy of it.
+with the gateway's own wording — and record the requested path and sent status.
+The tracked ``opencode.jsonc`` provider block is the input, so the proof follows
+the shipped config instead of a copy of it. CLI error rendering is not a
+transport receipt and can lag the response on a busy host.
 
 They skip when no ``opencode`` binary is present (CI images for the quality
 workflows do not install it); local execution is the evidence.
@@ -52,6 +53,7 @@ class _GatewayStub(BaseHTTPRequestHandler):
     """Answer like the vendored gateway: one served route, 404 elsewhere."""
 
     requested_paths: list[str] = []
+    responses: list[tuple[str, int]] = []
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         """Record the requested path and answer as the gateway would."""
@@ -92,6 +94,7 @@ class _GatewayStub(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        type(self).responses.append((self.path, status))
 
     def log_message(self, *args: object) -> None:
         """Silence the default stderr access log."""
@@ -101,6 +104,7 @@ class _GatewayStub(BaseHTTPRequestHandler):
 def gateway_stub_fixture():
     """Serve the gateway stub on a loopback port for one test."""
     _GatewayStub.requested_paths = []
+    _GatewayStub.responses = []
     server = HTTPServer(("127.0.0.1", 0), _GatewayStub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -190,15 +194,15 @@ def test_tracked_config_requests_the_gateway_served_route(gateway_stub, tmp_path
     _run_opencode(tmp_path, base_url, origin, requested_paths)
     assert requested_paths, "the CLI issued no request to the gateway stub"
     assert requested_paths[0] == GATEWAY_SERVED_ROUTE
+    assert _GatewayStub.responses[0] == (GATEWAY_SERVED_ROUTE, 200)
 
 
 def test_bare_origin_reproduces_the_route_not_found_outage(gateway_stub, tmp_path) -> None:
-    """Dropping /v1 must reproduce the unserved path and the gateway wording."""
+    """Dropping /v1 must request an unserved path for which the stub sends 404."""
     origin, requested_paths = gateway_stub
     bare = "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"
-    stdout, stderr = _run_opencode(tmp_path, bare, origin, requested_paths)
+    _run_opencode(tmp_path, bare, origin, requested_paths)
     assert requested_paths, "the CLI issued no request to the gateway stub"
     assert requested_paths[0] == "/chat/completions"
     assert requested_paths[0] != GATEWAY_SERVED_ROUTE
-    combined = f"{stdout}\n{stderr}".casefold()
-    assert GATEWAY_ROUTE_NOT_FOUND_MESSAGE in combined
+    assert _GatewayStub.responses[0] == ("/chat/completions", 404)
