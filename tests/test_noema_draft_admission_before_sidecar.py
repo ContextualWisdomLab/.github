@@ -99,8 +99,10 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
     assert "needs.noema-review.result == 'failure'" in continuation
     assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in continuation
     assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in continuation
-    assert "if: always() && env.PR_NUMBER != ''" in workflow_step(
-        workflow, "Upload contextual-orchestrator sidecar evidence"
+    upload = workflow_step(workflow, "Upload contextual-orchestrator sidecar evidence")
+    assert (
+        "if: always() && env.PR_NUMBER != '' && "
+        "steps.live_draft.outputs.live_draft != 'true'" in upload
     )
 
 
