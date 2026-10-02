@@ -6,8 +6,10 @@ from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
 
+import os
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -126,6 +128,116 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_exact_artifact_quality_single_runner.py",
     ):
         assert required_path in workflow
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    (
+        "scripts/ci/codeql_ghas_configuration_identity.py",
+        "tests/test_codeql_ghas_configuration_identity.py",
+        "tests/test_codeql_ghas_analyses_pagination.py",
+        "tests/test_github_api_url_boundary.py",
+    ),
+)
+def test_ghas_runtime_changes_start_the_quality_runner(changed_path: str) -> None:
+    """Admit the helper and each focused GHAS regression independently."""
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "expected_suites"),
+    (
+        ("scripts/ci/codeql_ghas_configuration_identity.py", {"ghas"}),
+        ("tests/test_codeql_ghas_configuration_identity.py", {"ghas"}),
+        ("tests/test_codeql_ghas_analyses_pagination.py", {"ghas"}),
+        ("tests/test_github_api_url_boundary.py", {"ghas"}),
+        ("tests/test_agent_review_runtime_quality_consolidation.py", {"ghas"}),
+        (
+            ".github/workflows/agent-review-runtime-quality-ci.yml",
+            {"noema", "opencode", "strix", "queue", "review_repair",
+             "commercial_readiness", "exact_artifact", "ghas"},
+        ),
+        ("docs/doctoring/codeql-ghas-analyses-pagination.md", set()),
+    ),
+)
+def test_ghas_runtime_selector_executes_the_actual_shell(
+    changed_path: str, expected_suites: set[str], tmp_path: Path
+) -> None:
+    """Execute the full selector with a synthetic diff and a real HEAD guard."""
+    selector_step = _workflow_text().split(
+        "- name: Select affected contract suites", 1
+    )[1].split("      - name:", 1)[0]
+    script = textwrap.dedent(selector_step.split("        run: |\n", 1)[1])
+    output = tmp_path / "suites.txt"
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True
+    ).strip()
+    # Only changed-path input is synthetic; HEAD verification uses actual Git.
+    diff_fixture = (
+        'git() {\n'
+        '  if [[ "$1" == diff ]]; then\n'
+        '    printf "%s\\n" "$CHANGED_PATH"\n'
+        '  else\n'
+        '    command git "$@"\n'
+        '  fi\n'
+        '}\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         diff_fixture + script],
+        cwd=REPOSITORY_ROOT,
+        env={**os.environ, "HEAD_SHA": head, "BASE_SHA": head,
+             "CHANGED_PATH": changed_path, "GITHUB_OUTPUT": str(output)},
+        text=True, capture_output=True, check=True,
+    )
+    suites = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert suites == {
+        name: str(name in expected_suites).lower()
+        for name in ("noema", "opencode", "strix", "queue", "review_repair",
+                     "commercial_readiness", "exact_artifact", "ghas")
+    }
+    assert result.stdout == result.stderr == ""
+
+
+@pytest.mark.parametrize("pytest_exit", (0, 42))
+def test_ghas_runtime_step_runs_exact_tests_and_fails_closed(
+    pytest_exit: int, tmp_path: Path
+) -> None:
+    """Run the actual step shell and capture its argv without invoking providers."""
+    workflow = _workflow_text()
+    step_name = "      - name: Verify GHAS identity, pagination, and API boundary contracts\n"
+    assert step_name in workflow, "focused GHAS test-command step is missing"
+    step = workflow.split(step_name, 1)[1].split("      - name:", 1)[0]
+    assert "if: steps.affected_suites.outputs.ghas == 'true'" in step
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    calls = tmp_path / "python-calls.txt"
+    recorder = (
+        'python() {\n'
+        '  printf "%s\\n" "$*" >> "$CALLS"\n'
+        '  if [[ "$*" == *pytest* ]]; then return "$PYTEST_EXIT"; fi\n'
+        '}\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         recorder + script],
+        cwd=REPOSITORY_ROOT,
+        env={**os.environ, "CALLS": str(calls), "PYTEST_EXIT": str(pytest_exit)},
+        text=True, capture_output=True, check=False,
+    )
+    tests = (
+        "tests/test_codeql_ghas_configuration_identity.py "
+        "tests/test_codeql_ghas_analyses_pagination.py "
+        "tests/test_github_api_url_boundary.py"
+    )
+    expected = [f"-m pytest -q {tests}"]
+    if pytest_exit == 0:
+        expected.append(
+            "-m compileall -q scripts/ci/codeql_ghas_configuration_identity.py " + tests
+        )
+    assert calls.read_text().splitlines() == expected
+    assert result.returncode == pytest_exit
+    assert result.stdout == result.stderr == ""
 
 
 def test_exact_head_is_verified_before_selected_suites_run() -> None:

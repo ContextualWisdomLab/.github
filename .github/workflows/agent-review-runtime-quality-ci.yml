@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
+      - "scripts/ci/codeql_ghas_configuration_identity.py"
+      - "tests/test_codeql_ghas_configuration_identity.py"
+      - "tests/test_codeql_ghas_analyses_pagination.py"
+      - "tests/test_github_api_url_boundary.py"
       - ".github/workflows/noema-review.yml"
       - ".github/actions/noema-review/two_phase.py"
       - "tests/test_noema_reviewer_token_lifetime.py"
@@ -173,6 +177,7 @@ jobs:
           review_repair_suite=false
           commercial_readiness_suite=false
           exact_artifact_suite=false
+          ghas_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
@@ -184,6 +189,14 @@ jobs:
                 review_repair_suite=true
                 commercial_readiness_suite=true
                 exact_artifact_suite=true
+                ghas_suite=true
+                ;;
+              scripts/ci/codeql_ghas_configuration_identity.py|\
+              tests/test_codeql_ghas_configuration_identity.py|\
+              tests/test_codeql_ghas_analyses_pagination.py|\
+              tests/test_github_api_url_boundary.py|\
+              tests/test_agent_review_runtime_quality_consolidation.py)
+                ghas_suite=true
                 ;;
               tests/test_pr_review_autofix_nvidia_nim_contract.py)
                 opencode_suite=true
@@ -336,6 +349,7 @@ jobs:
             echo "review_repair=$review_repair_suite"
             echo "commercial_readiness=$commercial_readiness_suite"
             echo "exact_artifact=$exact_artifact_suite"
+            echo "ghas=$ghas_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -567,6 +581,21 @@ jobs:
             tests/test_exact_artifact_sbom_review_regressions.py \
             tests/test_verify_exact_artifact_sbom_handoff.py \
             tests/test_exact_artifact_quality_single_runner.py
+
+      - name: Verify GHAS identity, pagination, and API boundary contracts
+        if: steps.affected_suites.outputs.ghas == 'true'
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_analyses_pagination.py \
+            tests/test_github_api_url_boundary.py
+          python -m compileall -q \
+            scripts/ci/codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_analyses_pagination.py \
+            tests/test_github_api_url_boundary.py
 
       - name: Verify consolidated workflow contract
         run: |
