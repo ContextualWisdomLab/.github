@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-01 Maturin response-lifecycle coverage closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#1653@5cd141ec2c33b631d164af936cd1c9de70e4c9a4` passed all 5,314 tests but failed the complete branch gate because the canonical Maturin downloader left five error-path statements and two branches unexecuted; the owner workflow omitted both verifier paths and stacked PR bases | Trusted uv Materializer run `36811202519`, job `110206427182`; `verify_release_maturin_tool_assets.py` 95%, missing lines 104 and 106-112 plus branch 114→116; no owner run at #2530 predecessor `8cf2ea5f73976d47b2267fb52ac28284323404b7` because its base was #2531 rather than `main` | Repair canonical successor `.github#2530`: exercise non-200 and opener-raised `HTTPError` closure, replace the impossible nullable-response finalizer with one unconditional response-owned close scope, add source/test and stacked-PR trigger contracts to the complete gate while retaining protected-main push scope, preserve all network and fail-closed boundaries, then ordinary-merge the accepted owner head into #1653 | **Proposed / hosted RED reproduced; focused verifier coverage GREEN locally; path and stacked-admission contracts RED→GREEN; exact-head hosted full-suite, security, CodeQL, and independent approval required** |
+
 ## 2026-10-01 bounded Maturin release downloader SAST closure
 
 | Gap | Exact evidence | Action | Status |
@@ -3841,3 +3847,64 @@ published-commit ancestry test because the isolated `git archive` intentionally
 has no `.git` directory. Warnings-fatal compilation and diff whitespace checks
 are GREEN. Exact Git tree `dccb57a152c21600305c0eabac06cb29de2e0cf7`
 preserves source mode `100755`.
+
+## 2026-10-03 separatorless invalid-wrapper evidence regression
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; local focused
+RED→GREEN is complete. Fresh exact-head hosted Checks, no unresolved actionable
+thread, and qualifying independent approval remain mandatory before ordinary
+merge.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output framing and exact-run evidence identity. Model output
+is untrusted; only controls that are top-level in the producer output may enter
+the approval contract.
+
+**Gap / RCA.** Exact head
+`24efc99bb0aad3f4c0d76b00b173b6d9a5be34ee` preserved comma/colon invalid-token
+tests but lost the separatorless regression cases and their span-ownership
+implementation during concurrent branch restoration. Consequently
+`[undefined {control}]`, `[unquoted_token {control}]`, and
+`{unquoted_key {control}}` promoted the nested control. The parser skipped the
+invalid outer opener when its token reached another opener, even when the outer
+container later closed.
+
+**RED → GREEN / action.** RED
+`4752398da1aef77ab8172126e2d3668870f628aa` binds the three real-parser
+failures. GREEN `f6d6e255ed479150dbbd48490f0a527ce06e0917` records matched parent/child
+spans and decodes only spans without a matched or JSON-shaped enclosing parent.
+Balanced malformed wrappers therefore retain outer ownership, while an
+unclosed prose delimiter such as `Diagnostic: [pending` still cannot hide a
+later independent control. Focused framing verification is 10/10 GREEN;
+complete repository verification and fresh hosted exact-head evidence remain
+required.
+
+## 2026-10-01 separatorless invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. Balanced malformed
+wrappers remain evidence boundaries even when the malformed token and nested
+container have no JSON separator; unclosed prose delimiters must still permit a
+later complete top-level control.
+
+**Gap / RCA.** Exact-head CodeRabbit review of
+`a5fddfa7c46ff68eea593a4dd71bc6196bc640ba` found that the invalid-token scan
+stopped at a nested `{` or `[` and discarded the outer opener. Inputs
+`[unquoted_token {control}]` and `{unquoted_key {control}}` therefore promoted
+the nested exact-run control despite their balanced outer wrappers.
+
+**RED → GREEN / action.** RED
+`8b1bd4a43be7604d6aa7b9e524295fea7501334c` binds both separatorless attacks.
+GREEN `5261145a73e7b5a0b53c224317002fe98961f16f` records matched container spans,
+their immediate parents, and JSON-like blocking depth in one linear scan.
+Nested candidates are rejected when a balanced parent exists or a JSON-like
+ancestor remains open; candidates after unmatched prose delimiters remain
+recoverable. Focused normalizer verification is 120/120 GREEN. The repository
+run passed 5,321 tests, skipped 5 optional cases, and passed 40 subtests; its
+only two initial failures were direct `python -m pip` calls in a verification
+venv without pip, and both passed in the pip-equipped locked venv (2/2). The
+source mode remains `100755`.
