@@ -952,7 +952,12 @@ jobs:
           fi
 
       - name: Upload contextual-orchestrator sidecar evidence
-        if: always() && env.PR_NUMBER != ''
+        # A live draft never provisions the sidecar, so it has no sidecar
+        # evidence to retain.  Skipping the upload also prevents an exhausted
+        # repository artifact quota from turning the intentional draft skip
+        # into a failed required review.  Non-draft evidence remains
+        # fail-closed: an upload failure still fails the review job.
+        if: always() && env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: noema-sidecar-evidence
