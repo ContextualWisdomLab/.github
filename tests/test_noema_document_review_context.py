@@ -98,7 +98,7 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' in workflow
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in workflow
     assert "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" in workflow
-    assert package["dependencies"] == {"@rhwp/core": "0.7.7", "hwp-mcp": "0.3.0", "fast-uri": "^4.2.1", "ip-address": "^10.7.3"}
+    assert package["dependencies"] == {"@rhwp/core": "0.7.7", "hwp-mcp": "0.3.0"}
     assert lock["packages"]["node_modules/hwp-mcp"]["version"] == "0.3.0"
     assert lock["packages"]["node_modules/@rhwp/core"]["version"] == "0.7.7"
     assert "requirements-noema-document-ci-hashes.txt" in workflow
