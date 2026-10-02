@@ -2,6 +2,7 @@
 
 import runpy
 import threading
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -63,12 +64,17 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
     """Concurrent completion does not enlarge the committed probe budget."""
     namespace = runpy.run_path(str(LAUNCHER))
     calls = []
+    provider_errors = []
 
     class Client:
         """Return explicit provider rate-limit responses."""
         def proxy_send_once(self, agent, endpoint, payload):
             calls.append(agent.id)
-            raise HTTPError('https://provider.invalid', 429, 'private body', {}, None)
+            provider_error = HTTPError(
+                'https://provider.invalid', 429, 'private body', {}, None
+            )
+            provider_errors.append(provider_error)
+            raise provider_error
 
     with pytest.raises(namespace['ReviewPreflightError']) as error:
         namespace['_preflight_review_agents_concurrently'](agents(24), client=Client())
@@ -77,6 +83,57 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
     assert report['ready_count'] == report['pending_count'] == 0
     assert all(row['status'] == 'rejected' and row['http_status'] == 429 for row in report['routes'])
     assert 'private body' not in str(report)
+    assert all(provider_error.closed for provider_error in provider_errors)
+
+
+def test_hostile_retry_after_is_rejected_and_http_error_is_closed():
+    """Unbounded optional telemetry cannot abort preflight or leak its response."""
+
+    namespace = runpy.run_path(str(LAUNCHER))
+    error_body = BytesIO(b"private body")
+    provider_error = HTTPError(
+        "https://provider.invalid",
+        429,
+        "private body",
+        {"Retry-After": "9" * 5000},
+        error_body,
+    )
+
+    class Client:
+        """Return one rate-limit response with hostile optional telemetry."""
+
+        def proxy_send_once(self, agent, endpoint, payload):
+            raise provider_error
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as error:
+        namespace["_preflight_review_agents_concurrently"](agents(1), client=Client())
+
+    route = error.value.report["routes"][0]
+    assert route["status"] == "rejected"
+    assert route["http_status"] == 429
+    assert "retry_after_s" not in route
+    assert "private body" not in str(error.value.report)
+    assert error_body.closed
+
+
+def test_http_error_is_closed_when_optional_telemetry_raises():
+    """Cleanup remains mandatory if later telemetry classification regresses."""
+    namespace = runpy.run_path(str(LAUNCHER))
+    error_body = BytesIO(b"private body")
+    provider_error = HTTPError(
+        "https://provider.invalid", 503, "private body", {}, error_body
+    )
+
+    def broken_telemetry(exc):
+        raise ValueError("telemetry parser failed")
+
+    record_exception = namespace["_record_provider_exception"]
+    record_exception.__globals__["_safe_retry_after_seconds"] = broken_telemetry
+
+    with pytest.raises(ValueError, match="telemetry parser failed"):
+        record_exception({}, provider_error)
+
+    assert error_body.closed
 
 
 def test_parallel_escalations_share_one_budget():

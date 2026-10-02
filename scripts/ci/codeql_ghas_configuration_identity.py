@@ -31,6 +31,7 @@ DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
 GITHUB_API_AUTHORITY = "api.github.com"
 MAX_ANALYSES_PAGES = 1000
+MAX_HTTP_ERROR_DIAGNOSTIC_BYTES = 400
 
 
 class ConfigurationIdentityError(RuntimeError):
@@ -212,7 +213,12 @@ def _request_json(
     except UnicodeDecodeError as exc:
         raise ConfigurationIdentityError("GitHub API returned invalid UTF-8") from exc
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[-400:]
+        try:
+            body = exc.read(MAX_HTTP_ERROR_DIAGNOSTIC_BYTES).decode(
+                "utf-8", errors="replace"
+            )
+        finally:
+            exc.close()
         raise ConfigurationIdentityError(
             f"GitHub API GET failed with HTTP {exc.code}: {body}"
         ) from exc
