@@ -8,11 +8,15 @@ unrelated to lodash. With no file location the gate failed closed as unmapped.
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci.strix_unverified_dependency import (
+    main,
     named_packages,
     unverified_dependency_finding,
 )
@@ -87,6 +91,54 @@ def test_findings_without_a_package_name_are_never_dropped(tmp_path: Path) -> No
     repo = _rust_python_repo(tmp_path / "repo")
     report = "# VULN-0003: SQL injection\n\n**Severity:** HIGH\n**Endpoint:** /api/login\n"
     assert not unverified_dependency_finding(report, repo)
+
+
+def test_requirements_files_are_dependency_manifests(tmp_path: Path) -> None:
+    repo = _rust_python_repo(tmp_path / "repo")
+    (repo / "requirements-production.in").write_text("orjson==3.10.15\n")
+    report = "**Target:** orjson 3.10.15\n"
+
+    assert not unverified_dependency_finding(report, repo)
+
+
+def test_dependency_names_outside_regular_manifests_are_ignored(tmp_path: Path) -> None:
+    repo = _rust_python_repo(tmp_path / "repo")
+    (repo / "README.md").write_text("lodash\n")
+    git_dir = repo / ".git"
+    git_dir.mkdir()
+    (git_dir / "Cargo.lock").write_text('[[package]]\nname = "lodash"\n')
+    source = repo / "symlink-source.txt"
+    source.write_text("lodash\n")
+    (repo / "requirements-symlink.txt").symlink_to(source)
+    oversized = repo / "requirements-oversized.txt"
+    oversized.write_text("lodash\n")
+    with oversized.open("ab") as handle:
+        handle.truncate(9 * 1024 * 1024)
+
+    assert unverified_dependency_finding(LODASH_REPORT, repo)
+
+
+def test_main_returns_usage_error_without_both_paths(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([str(HELPER)]) == 2
+    assert "Usage: strix_unverified_dependency.py REPORT REPO_ROOT" in capsys.readouterr().err
+
+
+def test_main_classifies_report_and_emits_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _rust_python_repo(tmp_path / "repo")
+    report = tmp_path / "vuln-0001.md"
+    report.write_text(LODASH_REPORT)
+
+    assert main([str(HELPER), str(report), str(repo)]) == 0
+    assert "lodash" in capsys.readouterr().err
+    (repo / "yarn.lock").write_text('lodash@^4.17.20:\n  version "4.17.20"\n')
+    assert main([str(HELPER), str(report), str(repo)]) == 1
+
+
+def test_script_entrypoint_exits_with_main_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", [str(HELPER)])
+
+    with pytest.raises(SystemExit, match="2"):
+        runpy.run_path(str(HELPER), run_name="__main__")
 
 
 def test_cli_exit_status_and_message(tmp_path: Path) -> None:

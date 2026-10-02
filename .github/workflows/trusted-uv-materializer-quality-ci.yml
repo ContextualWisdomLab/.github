@@ -2,28 +2,37 @@ name: Trusted uv Materializer Quality CI
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/verify_release_maturin_tool_assets.py"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "tests/test_verify_release_maturin_tool_assets.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
       - "pyproject.toml"
   push:
     branches: [main]
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/verify_release_maturin_tool_assets.py"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "tests/test_verify_release_maturin_tool_assets.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
       - "pyproject.toml"
 
 concurrency:
@@ -98,6 +107,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
