@@ -407,31 +407,98 @@ def _parse_timestamp(value: Any, *, field: str) -> datetime:
         raise RulesetGovernanceError(f"{field} timestamp is malformed") from exc
 
 
-def _latest_base_retarget(pr_number: int) -> datetime:
-    """Return the latest base-ref change and reject later source commits."""
+def _canary_synchronize_time(
+    *,
+    pr_number: int,
+    head_sha: str,
+    pr_created_at: datetime,
+) -> datetime:
+    """Prove one substantive current-head synchronize commit and return its time."""
 
     timeline = _gh_api_list(
         "GET",
         f"repos/{TARGET_FULL_NAME}/issues/{pr_number}/timeline?per_page=100",
     )
-    retargets: list[tuple[int, datetime]] = []
-    for index, item in enumerate(timeline):
-        event = _plain_dict(item, field="Product canary timeline event")
-        if event.get("event") == "base_ref_changed":
-            retargets.append(
-                (index, _parse_timestamp(event.get("created_at"), field="base retarget"))
+    committed_entries: list[tuple[int, str]] = []
+    for index, raw in enumerate(timeline):
+        event = _plain_dict(raw, field="Product canary timeline event")
+        if event.get("event") != "committed":
+            continue
+        committed_sha = str(event.get("sha") or "").lower()
+        if not GIT_SHA_RE.fullmatch(committed_sha):
+            raise RulesetGovernanceError(
+                "Product canary timeline has a malformed commit SHA"
             )
-    if not retargets:
-        raise RulesetGovernanceError("Product canary lacks a base_ref_changed event")
-    latest_index, latest = max(retargets, key=lambda entry: entry[1])
+        committed_entries.append((index, committed_sha))
+    if not committed_entries or committed_entries[-1][1] != head_sha:
+        raise RulesetGovernanceError(
+            "Product canary lacks a final exact current-head synchronize commit"
+        )
+    final_commit_index = committed_entries[-1][0]
+    unsupported_followups = {
+        "base_ref_changed",
+        "converted_to_draft",
+        "ready_for_review",
+        "reopened",
+    }
     if any(
-        _plain_dict(item, field="Product canary timeline event").get("event") == "committed"
-        for item in timeline[latest_index + 1 :]
+        _plain_dict(raw, field="Product canary timeline event").get("event")
+        in unsupported_followups
+        for raw in timeline[final_commit_index + 1 :]
     ):
         raise RulesetGovernanceError(
-            "Product canary has a source commit after its base retarget"
+            "Product canary has an unsupported PR-state transition after synchronize"
         )
-    return latest
+
+    commit = _plain_dict(
+        _gh_api("GET", f"repos/{TARGET_FULL_NAME}/commits/{head_sha}"),
+        field="Product canary head commit",
+    )
+    if str(commit.get("sha") or "").lower() != head_sha:
+        raise RulesetGovernanceError("Product canary head commit identity drifted")
+    files = _plain_list(commit.get("files"), field="Product canary head commit files")
+    stats = _plain_dict(commit.get("stats"), field="Product canary head commit stats")
+    changed_lines = stats.get("total")
+    if not files or type(changed_lines) is not int or changed_lines <= 0:
+        raise RulesetGovernanceError(
+            "Product canary synchronize commit is not substantive"
+        )
+    commit_record = _plain_dict(
+        commit.get("commit"), field="Product canary head commit record"
+    )
+    committer = _plain_dict(
+        commit_record.get("committer"), field="Product canary head committer"
+    )
+    synchronized_at = _parse_timestamp(
+        committer.get("date"), field="Product canary synchronize commit"
+    )
+    if synchronized_at <= pr_created_at:
+        raise RulesetGovernanceError(
+            "Product canary synchronize commit does not postdate PR creation"
+        )
+    return synchronized_at
+
+
+def _assert_canary_pr_unchanged(
+    *,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+) -> None:
+    """Require the open canary to retain its exact protected-base coordinate."""
+
+    current_pr = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/pulls/{pr_number}")
+    current_head = _plain_dict(current_pr.get("head"), field="current Product canary head")
+    current_base = _plain_dict(current_pr.get("base"), field="current Product canary base")
+    if (
+        current_pr.get("state") != "open"
+        or current_head.get("sha") != head_sha
+        or current_base.get("sha") != base_sha
+        or current_base.get("ref") != TARGET_BRANCH
+    ):
+        raise RulesetGovernanceError(
+            "Product canary PR changed after synchronize evidence"
+        )
 
 
 def _canary_evidence(
@@ -439,14 +506,14 @@ def _canary_evidence(
     pr_number: int,
     run_id: int,
     expected_blob_sha: str | None = None,
-) -> tuple[str, str]:
-    """Prove exact current-base Product success after a source-neutral base retarget."""
+) -> tuple[str, str, datetime]:
+    """Prove exact current-base Product success after a substantive synchronize."""
 
     if pr_number <= 0 or run_id <= 0:
         raise RulesetGovernanceError("canary identities must be positive")
     pr = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/pulls/{pr_number}")
-    if pr.get("state") != "open" or pr.get("draft") is True:
-        raise RulesetGovernanceError("Product canary PR must be open and non-draft")
+    if pr.get("state") != "open":
+        raise RulesetGovernanceError("Product canary PR must be open")
     head = _plain_dict(pr.get("head"), field="Product canary head")
     base = _plain_dict(pr.get("base"), field="Product canary base")
     head_sha = str(head.get("sha") or "").lower()
@@ -461,7 +528,14 @@ def _canary_evidence(
         expected_blob_sha=expected_blob_sha,
     )
 
-    retargeted_at = _latest_base_retarget(pr_number)
+    pr_created_at = _parse_timestamp(
+        pr.get("created_at"), field="Product canary PR creation"
+    )
+    synchronized_at = _canary_synchronize_time(
+        pr_number=pr_number,
+        head_sha=head_sha,
+        pr_created_at=pr_created_at,
+    )
     run = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/actions/runs/{run_id}")
     if (
         run.get("name") != PRODUCT_WORKFLOW_NAME
@@ -475,8 +549,8 @@ def _canary_evidence(
         raise RulesetGovernanceError(
             "canary run is not exact first-attempt terminal Product success"
         )
-    if _parse_timestamp(run.get("created_at"), field="Product canary run") <= retargeted_at:
-        raise RulesetGovernanceError("Product canary run predates the base retarget")
+    if _parse_timestamp(run.get("created_at"), field="Product canary run") <= synchronized_at:
+        raise RulesetGovernanceError("Product canary run predates the synchronize commit")
 
     run_prs = _plain_list(run.get("pull_requests"), field="Product canary run pull_requests")
     if not any(
@@ -506,7 +580,13 @@ def _canary_evidence(
         or acceptance[0].get("conclusion") != "success"
     ):
         raise RulesetGovernanceError("Product acceptance canary job is not uniquely successful")
-    return base_sha, head_sha
+
+    _assert_canary_pr_unchanged(
+        pr_number=pr_number,
+        head_sha=head_sha,
+        base_sha=base_sha,
+    )
+    return base_sha, head_sha, synchronized_at
 
 
 def _assert_evaluate_rule_suite(
@@ -516,7 +596,7 @@ def _assert_evaluate_rule_suite(
     head_sha: str,
     not_before: datetime,
 ) -> None:
-    """Require exact evaluate-mode workflow-rule PASS for the retarget canary."""
+    """Require exact evaluate-mode workflow-rule PASS for the synchronize canary."""
 
     suites = _gh_api_list(
         "GET",
@@ -575,7 +655,7 @@ def activate_product_ruleset(
     canary_pr: int,
     canary_run_id: int,
 ) -> str:
-    """Promote evaluate to active only after exact retarget and rule-suite evidence."""
+    """Promote evaluate to active only after exact synchronize and rule-suite evidence."""
 
     _assert_current_main(expected_main_sha)
     pinned_id = manifest["ruleset_id"]
@@ -591,8 +671,7 @@ def activate_product_ruleset(
     _assert_shape(first, target, enforcement="evaluate")
     reviewed_blob_sha = _reviewed_product_workflow_blob(manifest)
 
-    retargeted_at = _latest_base_retarget(canary_pr)
-    base_sha, head_sha = _canary_evidence(
+    base_sha, head_sha, synchronized_at = _canary_evidence(
         pr_number=canary_pr,
         run_id=canary_run_id,
         expected_blob_sha=reviewed_blob_sha,
@@ -601,7 +680,7 @@ def activate_product_ruleset(
         ruleset_id=pinned_id,
         base_sha=base_sha,
         head_sha=head_sha,
-        not_before=retargeted_at,
+        not_before=synchronized_at,
     )
     desired = _desired(enforcement="active")
     baseline_version = _latest_history_version(target)
@@ -621,6 +700,11 @@ def activate_product_ruleset(
     )
     _assert_current_main(expected_main_sha)
     _assert_target_main(base_sha)
+    _assert_canary_pr_unchanged(
+        pr_number=canary_pr,
+        head_sha=head_sha,
+        base_sha=base_sha,
+    )
 
     history_verified = False
     try:

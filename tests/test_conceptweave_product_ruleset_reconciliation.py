@@ -264,25 +264,6 @@ def test_parse_timestamp():
         p._parse_timestamp("no", field="x")
 
 
-def test_latest_base_retarget(monkeypatch):
-    timeline = [
-        {"event": "base_ref_changed", "created_at": "2026-09-23T00:00:00Z"},
-        {"event": "commented", "created_at": "2026-09-23T00:01:00Z"},
-    ]
-    monkeypatch.setattr(p, "_gh_api_list", lambda *a: timeline)
-    assert p._latest_base_retarget(5) == datetime(2026, 9, 23, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(p, "_gh_api_list", lambda *a: [])
-    with pytest.raises(RulesetGovernanceError, match="lacks"):
-        p._latest_base_retarget(5)
-
-    monkeypatch.setattr(p, "_gh_api_list", lambda *a: timeline + [
-        {"event": "committed", "created_at": "2026-09-23T00:02:00Z"}
-    ])
-    with pytest.raises(RulesetGovernanceError, match="source commit"):
-        p._latest_base_retarget(5)
-
-
 def canary_api(**overrides):
     head_sha = overrides.get("head_sha", "b" * 40)
     base_sha = overrides.get("base_sha", "a" * 40)
@@ -300,22 +281,37 @@ def canary_api(**overrides):
         "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}, "base": {"sha": base_sha}}],
     }
     run.update(overrides.get("run_overrides", {}))
+    pr_reads = 0
+
     def api(method, endpoint, **kwargs):
+        nonlocal pr_reads
         if endpoint.endswith(f"pulls/{pr_number}"):
+            pr_reads += 1
+            current = overrides.get("current_pr_overrides", {}) if pr_reads > 1 else {}
             return {
-                "state": overrides.get("pr_state", "open"),
-                "draft": overrides.get("draft", False),
-                "created_at": overrides.get("pr_created_at", "2026-09-22T23:00:00Z"),
-                "head": {"sha": head_sha},
-                "base": {"ref": overrides.get("base_ref", "main"), "sha": base_sha},
+                "state": current.get("state", overrides.get("pr_state", "open")),
+                "draft": current.get("draft", overrides.get("draft", False)),
+                "created_at": current.get(
+                    "created_at",
+                    overrides.get("pr_created_at", "2026-09-22T23:00:00Z"),
+                ),
+                "head": {"sha": current.get("head_sha", head_sha)},
+                "base": {
+                    "ref": current.get(
+                        "base_ref", overrides.get("base_ref", "main")
+                    ),
+                    "sha": current.get("base_sha", base_sha),
+                },
             }
         if endpoint.endswith(f"commits/{head_sha}"):
-            return {
+            commit = {
                 "sha": head_sha,
                 "files": [{"filename": "src/lib.rs"}],
                 "stats": {"total": 1},
                 "commit": {"committer": {"date": "2026-09-23T00:00:30Z"}},
             }
+            commit.update(overrides.get("commit_overrides", {}))
+            return commit
         if endpoint.endswith(f"actions/runs/{run_id}"):
             return run
         if f"actions/runs/{run_id}/jobs" in endpoint:
@@ -330,45 +326,50 @@ def setup_canary(monkeypatch, **kwargs):
     monkeypatch.setattr(
         p,
         "_gh_api_list",
-        lambda *a: [
-            {"event": "committed", "sha": head_sha},
-            {"event": "commented"},
-        ],
+        lambda *a: kwargs.get(
+            "timeline",
+            [
+                {"event": "committed", "sha": head_sha},
+                {"event": "commented"},
+            ],
+        ),
     )
     monkeypatch.setattr(p, "_assert_target_main", lambda sha: None)
     monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha, **kwargs: None)
-    monkeypatch.setattr(
-        p,
-        "_latest_base_retarget",
-        lambda pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
-    )
 
 
 def test_canary_supported_synchronize_accepts_open_draft(monkeypatch):
     setup_canary(monkeypatch, draft=True)
-    assert p._canary_evidence(pr_number=5, run_id=77) == ("a" * 40, "b" * 40)
+    assert p._canary_evidence(pr_number=5, run_id=77) == (
+        "a" * 40,
+        "b" * 40,
+        datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
+    )
 
 
 def test_canary_supported_synchronize_does_not_require_base_retarget(monkeypatch):
     setup_canary(monkeypatch)
-    monkeypatch.setattr(
-        p,
-        "_latest_base_retarget",
-        lambda pr: (_ for _ in ()).throw(AssertionError("base retarget is not supported canary evidence")),
+    assert not hasattr(p, "_latest_base_retarget")
+    assert p._canary_evidence(pr_number=5, run_id=77) == (
+        "a" * 40,
+        "b" * 40,
+        datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
     )
-    assert p._canary_evidence(pr_number=5, run_id=77) == ("a" * 40, "b" * 40)
 
 
 def test_canary_success(monkeypatch):
     setup_canary(monkeypatch)
-    assert p._canary_evidence(pr_number=5, run_id=77) == ("a" * 40, "b" * 40)
+    assert p._canary_evidence(pr_number=5, run_id=77) == (
+        "a" * 40,
+        "b" * 40,
+        datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
+    )
 
 
 @pytest.mark.parametrize(
     "kwargs,match",
     [
         ({"pr_state": "closed"}, "open"),
-        ({"draft": True}, "open"),
         ({"head_sha": "bad"}, "malformed"),
         ({"base_ref": "dev"}, "protected main"),
         ({"run_overrides": {"name": "Other"}}, "terminal Product"),
@@ -378,9 +379,38 @@ def test_canary_success(monkeypatch):
         ({"run_overrides": {"conclusion": "failure"}}, "terminal Product"),
         ({"run_overrides": {"run_attempt": 2}}, "terminal Product"),
         ({"run_overrides": {"created_at": "2026-09-22T23:59:00Z"}}, "predates"),
+        ({"timeline": []}, "final exact current-head"),
+        ({"timeline": [{"event": "committed", "sha": "bad"}]}, "malformed"),
+        (
+            {
+                "timeline": [
+                    {"event": "committed", "sha": "b" * 40},
+                    {"event": "committed", "sha": "c" * 40},
+                ]
+            },
+            "final exact current-head",
+        ),
+        (
+            {
+                "timeline": [
+                    {"event": "committed", "sha": "b" * 40},
+                    {"event": "ready_for_review"},
+                ]
+            },
+            "unsupported PR-state transition",
+        ),
+        ({"commit_overrides": {"sha": "c" * 40}}, "identity drifted"),
+        ({"commit_overrides": {"files": []}}, "not substantive"),
+        ({"commit_overrides": {"stats": {"total": 0}}}, "not substantive"),
+        (
+            {"pr_created_at": "2026-09-23T00:00:31Z"},
+            "does not postdate",
+        ),
         ({"run_overrides": {"pull_requests": []}}, "bound"),
         ({"jobs": []}, "uniquely successful"),
         ({"jobs": [{"name": p.PRODUCT_CHECK, "status": "completed", "conclusion": "failure"}]}, "uniquely successful"),
+        ({"current_pr_overrides": {"state": "closed"}}, "changed"),
+        ({"current_pr_overrides": {"head_sha": "c" * 40}}, "changed"),
     ],
 )
 def test_canary_rejects(monkeypatch, kwargs, match):
@@ -441,10 +471,14 @@ def setup_activate(monkeypatch, *, ruleset_id=30, active=False):
     monkeypatch.setattr(p, "_assert_shape", lambda *a, **k: None)
     monkeypatch.setattr(
         p,
-        "_latest_base_retarget",
-        lambda pr: datetime(2026, 9, 23, tzinfo=timezone.utc),
+        "_canary_evidence",
+        lambda **k: (
+            "a" * 40,
+            "b" * 40,
+            datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
+        ),
     )
-    monkeypatch.setattr(p, "_canary_evidence", lambda **k: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(p, "_assert_canary_pr_unchanged", lambda **k: None)
     monkeypatch.setattr(p, "_assert_evaluate_rule_suite", lambda **k: None)
     monkeypatch.setattr(p, "_latest_history_version", lambda target: 4)
     return before
@@ -559,14 +593,6 @@ def test_bootstrap_rejects_unsupported_pinned_stage(monkeypatch):
     monkeypatch.setattr(p, "_live", lambda t: bad)
     with pytest.raises(RulesetGovernanceError, match="unsupported"):
         p.bootstrap_product_ruleset(manifest(20), expected_main_sha="a"*40)
-
-
-def test_latest_base_retarget_ignores_earlier_commit(monkeypatch):
-    monkeypatch.setattr(p, "_gh_api_list", lambda *a: [
-        {"event": "committed", "created_at": "2026-09-22T23:59:00Z"},
-        {"event": "base_ref_changed", "created_at": "2026-09-23T00:00:00Z"},
-    ])
-    assert p._latest_base_retarget(5) == datetime(2026, 9, 23, tzinfo=timezone.utc)
 
 
 def test_evaluate_rule_suite_skips_unrelated_suite_and_evaluation(monkeypatch):

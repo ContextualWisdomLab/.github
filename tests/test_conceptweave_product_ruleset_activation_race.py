@@ -48,18 +48,18 @@ def _prepare_activation(
         "_live",
         lambda _target: _live(ruleset_id, enforcement=state["enforcement"]),
     )
-    monkeypatch.setattr(
-        p,
-        "_latest_base_retarget",
-        lambda _pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
-    )
-
-    def canary_evidence(**_kwargs: object) -> tuple[str, str]:
+    def canary_evidence(**_kwargs: object) -> tuple[str, str, datetime]:
         canary_called[0] = True
-        return "a" * 40, "b" * 40
+        return (
+            "a" * 40,
+            "b" * 40,
+            datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
+        )
 
     monkeypatch.setattr(p, "_canary_evidence", canary_evidence)
+    monkeypatch.setattr(p, "_assert_canary_pr_unchanged", lambda **_kwargs: None)
     monkeypatch.setattr(p, "_assert_evaluate_rule_suite", lambda **_kwargs: None)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(p, "_latest_history_version", lambda _target: 4)
     monkeypatch.setattr(p, "_verify_ruleset_history_transition", lambda *_args, **_kwargs: None)
 
@@ -106,13 +106,12 @@ def test_activation_aborts_when_conceptweave_main_advances_after_canary(
     monkeypatch.setattr(p, "_live", lambda _target: current)
     monkeypatch.setattr(
         p,
-        "_latest_base_retarget",
-        lambda _pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
-    )
-    monkeypatch.setattr(
-        p,
         "_canary_evidence",
-        lambda **_kwargs: (base_sha, head_sha),
+        lambda **_kwargs: (
+            base_sha,
+            head_sha,
+            datetime(2026, 9, 23, 0, 0, 30, tzinfo=timezone.utc),
+        ),
     )
     monkeypatch.setattr(p, "_assert_evaluate_rule_suite", lambda **_kwargs: None)
     monkeypatch.setattr(p, "_latest_history_version", lambda _target: 4)
@@ -188,12 +187,6 @@ def test_canary_admission_rejects_marker_compatible_product_blob_drift(
 
     monkeypatch.setattr(p, "_gh_api", api)
     monkeypatch.setattr(p, "_assert_target_main", lambda _sha: None)
-    monkeypatch.setattr(
-        p,
-        "_latest_base_retarget",
-        lambda _pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
-    )
-
     with pytest.raises(RulesetGovernanceError, match="blob"):
         p._canary_evidence(
             pr_number=5,
@@ -234,28 +227,32 @@ def test_activation_revalidates_product_blob_immediately_before_put(
     assert put_called == [False]
 
 
-def test_retarget_provenance_rejects_later_commit_without_created_at(
+def test_activation_revalidates_exact_canary_head_immediately_before_put(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Committed timeline events have no common created_at field; sequence is authoritative."""
+    """A canary head move after rule-suite proof must abort before active PUT."""
 
-    monkeypatch.setattr(
-        p,
-        "_gh_api_list",
-        lambda *_args, **_kwargs: [
-            {
-                "event": "base_ref_changed",
-                "created_at": "2026-09-23T00:00:00Z",
-            },
-            {
-                "event": "committed",
-                "sha": "c" * 40,
-            },
-        ],
-    )
+    _canary_called, put_called = _prepare_activation(monkeypatch, ruleset_id=34)
+    checks: list[tuple[int, str, str]] = []
 
-    with pytest.raises(RulesetGovernanceError, match="source commit"):
-        p._latest_base_retarget(5)
+    def assert_canary_pr_unchanged(
+        *, pr_number: int, head_sha: str, base_sha: str
+    ) -> None:
+        checks.append((pr_number, head_sha, base_sha))
+        raise RulesetGovernanceError("Product canary PR changed after evidence")
+
+    monkeypatch.setattr(p, "_assert_canary_pr_unchanged", assert_canary_pr_unchanged)
+
+    with pytest.raises(RulesetGovernanceError, match="changed"):
+        p.activate_product_ruleset(
+            _manifest(34),
+            expected_main_sha="d" * 40,
+            canary_pr=5,
+            canary_run_id=77,
+        )
+
+    assert checks == [(5, "b" * 40, "a" * 40)]
+    assert put_called == [False]
 
 
 @pytest.mark.parametrize("drifted_ref", ["owner", "target"])

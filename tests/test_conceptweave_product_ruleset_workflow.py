@@ -6,18 +6,22 @@ MANIFEST = Path("config/conceptweave-product-ruleset.json")
 RECONCILER = Path("scripts/ci/reconcile_conceptweave_product_ruleset.py")
 
 
-def test_product_ruleset_workflow_keeps_mutation_manual_and_serialized() -> None:
-    """Require privileged Product ruleset changes to stay manual and non-cancellable."""
+def test_product_ruleset_workflow_keeps_mutation_default_branch_and_serialized() -> None:
+    """Require privileged Product changes to use trusted default-branch dispatch."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "workflow_dispatch:" in text
-    assert "github.event_name == 'workflow_dispatch'" in text
+    assert "workflow_dispatch:" not in text
+    assert "repository_dispatch:" in text
+    assert "types: [conceptweave-product-ruleset-reconcile]" in text
+    assert "github.event_name == 'repository_dispatch'" in text
+    assert "github.event.client_payload.expected_main_sha == github.sha" in text
     assert "github.ref == 'refs/heads/main'" in text
     assert "vars.CWL_RULESET_RECONCILE_ENABLED == 'true'" in text
     assert "environment: ruleset-governance-maintenance" in text
     assert "GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}" in text
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
-    assert "if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify'" in text
+    assert "github.event.client_payload.mode == 'verify'" in text
+    assert 'test "$EXPECTED_MAIN_SHA" = "$GITHUB_SHA"' in text
     assert "github.event_name == 'push' ||" not in text
 
 
@@ -25,7 +29,8 @@ def test_product_ruleset_workflow_binds_admin_token_jobs_to_trusted_main_and_har
     """Never expose the ruleset admin credential from an arbitrary ref or unsupported runner."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify' && github.ref == 'refs/heads/main'" in text
+    assert "github.event.client_payload.expected_main_sha == github.sha" in text
+    assert "github.ref == 'refs/heads/main'" in text
     assert "runs-on: ubuntu-slim" not in text
     assert text.count("runs-on: ubuntu-24.04") == 3
 
@@ -57,7 +62,7 @@ def test_product_ruleset_workflow_keeps_bootstrap_and_activation_distinct() -> N
     assert "--mode activate" in text
     assert "--canary-pr \"$CANARY_PR\"" in text
     assert "--canary-run-id \"$CANARY_RUN_ID\"" in text
-    assert "- name: Verify active post-change live state\n        if: inputs.mode == 'activate'" in text
+    assert "- name: Verify active post-change live state\n        if: github.event.client_payload.mode == 'activate'" in text
     assert "- name: Verify post-change live state" not in text
 
 
@@ -88,15 +93,17 @@ def test_product_gate_is_workflow_bound_and_conceptweave_scoped() -> None:
     assert "integration_id" not in text
 
 
-def test_activation_requires_exact_evaluate_rule_suite_after_base_retarget() -> None:
+def test_activation_requires_exact_evaluate_rule_suite_after_synchronize() -> None:
     """Never promote merely because a local Product run happened to succeed."""
 
     text = RECONCILER.read_text(encoding="utf-8")
     required = (
         "rulesets/rule-suites",
         "evaluate_status=evaluate",
-        '"base_ref_changed"',
         '"committed"',
+        "final exact current-head synchronize commit",
+        "Product canary synchronize commit is not substantive",
+        "Product canary PR changed after synchronize evidence",
         'evaluation.get("rule_type") == "workflows"',
         'source.get("id") == ruleset_id',
         'evaluation.get("enforcement") == "evaluate"',
