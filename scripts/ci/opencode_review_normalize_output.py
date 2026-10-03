@@ -953,23 +953,25 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 
 def label_section(text: str, label: str) -> str:
-    """Return text after a verification label until the next known label."""
-    # ⚡ Bolt: Fast path starts using native find, avoiding nested O(N) regex evaluation
-    starts: list[int] = []
-    index = text.find(label)
+    """Return text after the last admissible label until the next known label."""
+    index = text.rfind(label)
     while index != -1:
-        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
-            index = text.find(label, index + len(label))
+        if (
+            (index > 0 and (text[index - 1].isalnum() or text[index - 1] in "_-"))
+            or (
+                label == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            )
+        ):
+            index = text.rfind(label, 0, index)
             continue
-        starts.append(index)
-        index = text.find(label, index + len(label))
+        break
 
-    if not starts:
+    if index == -1:
         return ""
-    start = starts[-1] + len(label)
+    start = index + len(label)
 
     end = len(text)
-    # ⚡ Bolt: Dynamically shrink the search window to prevent O(N) redundant scanning overhead
     for candidate in APPROVAL_VERIFICATION_LABELS:
         if candidate == label:
             continue
@@ -977,8 +979,11 @@ def label_section(text: str, label: str) -> str:
         idx = text.find(candidate, start, end)
         while idx != -1:
             if (
-                candidate == "coverage:"
-                and text[max(0, idx - 10) : idx] == "docstring "
+                (idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"))
+                or (
+                    candidate == "coverage:"
+                    and text[max(0, idx - 10) : idx] == "docstring "
+                )
             ):
                 idx = text.find(candidate, idx + len(candidate), end)
                 continue
@@ -1443,7 +1448,6 @@ def valid_control(
 
 def iter_json_objects(text: str) -> list[Any]:
     """Extract top-level JSON values without promoting nested control objects."""
-    decoder = json.JSONDecoder()
     values: list[Any] = []
 
     try:
@@ -1453,26 +1457,77 @@ def iter_json_objects(text: str) -> list[Any]:
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    index = 0
-    while True:
-        index = text.find("{", index)
-        if index == -1:
-            break
+    def blocks_nested_container(index: int, character: str) -> bool:
+        """Return whether an unmatched opener still resembles JSON syntax."""
         next_index = index + 1
         while next_index < len(text) and text[next_index] in " \t\r\n":
             next_index += 1
-        if next_index < len(text) and text[next_index] not in {'"', "}"}:
-            index += 1
+        next_character = text[next_index] if next_index < len(text) else ""
+        return (character == "{" and next_character in {'"', "}"}) or (
+            character == "["
+            and (
+                next_character in '\"{[-0123456789]'
+                or any(
+                    text.startswith(literal, next_index)
+                    for literal in (
+                        "true",
+                        "false",
+                        "null",
+                        "NaN",
+                        "Infinity",
+                    )
+                )
+            )
+        )
+
+    matched_spans: list[tuple[int, int, int | None, bool]] = []
+    container_stack: list[tuple[str, int, bool]] = []
+    blocking_depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if not container_stack:
+            if character in "{[":
+                blocks_nested = blocks_nested_container(index, character)
+                container_stack.append(
+                    ("}" if character == "{" else "]", index, blocks_nested)
+                )
+                blocking_depth += int(blocks_nested)
+            continue
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            blocks_nested = blocks_nested_container(index, character)
+            container_stack.append(
+                ("}" if character == "{" else "]", index, blocks_nested)
+            )
+            blocking_depth += int(blocks_nested)
+        elif character in "}]" and character == container_stack[-1][0]:
+            _, start_index, blocks_nested = container_stack.pop()
+            blocking_depth -= int(blocks_nested)
+            parent_start = container_stack[-1][1] if container_stack else None
+            matched_spans.append(
+                (start_index, index + 1, parent_start, blocking_depth > 0)
+            )
+
+    matched_starts = {start for start, _, _, _ in matched_spans}
+    for start_index, end_index, parent_start, blocked in matched_spans:
+        if blocked or parent_start in matched_starts:
             continue
         try:
-            value, new_index = decoder.raw_decode(text, index)
-            values.append(value)
-            # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
-            index = new_index
-            continue
+            values.append(json.loads(text[start_index:end_index]))
         except json.JSONDecodeError:
             pass
-        index += 1
 
     return values
 

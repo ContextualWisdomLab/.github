@@ -3731,3 +3731,186 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-10-01 OpenCode evidence-label identity boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; fresh exact-head
+hosted Checks and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode response normalization and approval-evidence admission. OpenCode
+is the untrusted evidence producer; repository review workflows consume only
+the normalizer's fail-closed verdict contract.
+
+**Gap / RCA.** The optimized last-label search used an unconstrained
+`rfind("coverage:")`. A response could state that real coverage evidence was
+not measured, then append `uncoverage: ... 100%`; the suffix beginning inside
+`uncoverage:` was accepted as a newer `coverage:` label. The false label could
+therefore replace the genuine fail-closed section and make
+`mentions_full_coverage` return true. The same missing identity boundary also
+affected forward searches for the next section label.
+
+**RED → GREEN / action.** RED
+`af06cf9c87de4ac76db575d087a170746d6ab83d` adds the durable suffix-forgery
+case. GREEN `4d49b8307706ab8d4565cca8b0d9728bcdad2a35` rejects label occurrences whose
+preceding character is alphanumeric, underscore, or hyphen in both backward
+selection and forward section termination. It retains decorated Markdown
+labels, repeated legitimate labels, and the separate `docstring coverage:`
+rule. Local direct behavior cases, Python compilation, and `git diff --check`
+are GREEN; the local environment has no pytest installation, so no full-suite
+claim is made. Completion still requires hosted exact-head tests, terminal
+required Checks, no unresolved actionable thread, qualifying independent
+approval, and ordinary protected integration.
+
+## 2026-10-01 OpenCode outermost JSON evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable repair
+and local focused verification are GREEN, while fresh exact-head hosted Checks
+and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode response normalization and exact-run evidence admission. The
+model response is untrusted input; downstream required-review workflows may
+consume only top-level controls accepted by this owner contract.
+
+**Gap / RCA.** Exact-head Strix run
+[36794394865](https://github.com/ContextualWisdomLab/.github/actions/runs/36794394865)
+reported repeated JSON decoding in `iter_json_objects`. Direct reproduction
+confirmed two effects from the same retry-at-every-`{` loop: a malformed outer
+object could promote its valid nested exact-run control into top-level evidence,
+and doubling an unclosed nested prefix increased processing time by roughly
+four times. The first effect is an identity-boundary false admission; the
+second permits model-controlled quadratic work.
+
+**RED → GREEN / action.** RED
+`d05f67f6c5f164309d3cbf15f4858c5fa3d176cd` records the malformed-object
+promotion. GREEN `86f52f320e8eb5ac56efdf9a3e2552b20bf409de`
+tracks one outermost container at a time, handles quoted strings and escapes,
+and decodes only a completed outermost span. Follow-up test commit
+`1a00c73a752b45d9d2a808d9bc96baae51ea8402` binds the same rule to malformed
+array nesting. The existing embedded-object cases and both new adversarial
+cases pass; Python compilation and `git diff --check` are GREEN. A direct
+3,200-level measurement completed in 0.001236 seconds, while the prior
+1,600-level case required 0.065367 seconds. These are local diagnostic values,
+not a hosted performance claim. Pytest is unavailable in the local runner, so
+the complete suite remains an exact-head hosted acceptance requirement.
+
+
+## 2026-10-01 OpenCode mixed-output JSON framing boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN complete, fresh exact-head hosted Checks and a qualifying independent
+approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. OpenCode output is
+untrusted: prose delimiters must not block a later complete top-level control,
+while actual malformed outer containers must continue to suppress nested
+controls.
+
+**Gap / RCA.** CodeRabbit review on prior exact head
+`2ee8ddad072fe59bbe33c99994fa1e8c9cb5387c` showed that
+`Diagnostic: [pending` was treated as an unclosed JSON array and hid a later
+valid control. Direct reproduction showed the same regression for
+`Diagnostic: {pending`. The outermost single-pass repair had dropped the
+predecessor's candidate-start grammar gate.
+
+**RED → GREEN / action.** RED
+`42099a359cdfb8126ea4e3d9118c60f6d98af1fa` binds both prose delimiters.
+GREEN `07baba20259c9061fbb647963f09745a9ca6931b` admits an object start only
+before `"` or `}`, and an array start only before a JSON value starter.
+Existing malformed object/array nested-control cases remain fail-closed.
+Direct focused cases 8/8, Python compilation, and `git diff --check` are GREEN;
+pytest is unavailable locally, so the full hosted suite remains required.
+
+
+## 2026-10-01 balanced invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output normalization and exact-run evidence admission.
+OpenCode model output is untrusted. A nested control inside any balanced outer
+container—including a syntactically invalid one—must never acquire top-level
+identity.
+
+**Gap / RCA.** The candidate-start allowlist skipped balanced wrappers whose
+first token was invalid JSON. Inputs such as `[undefined, {control}]`,
+`[unquoted_token, {control}]`, and `{unquoted_key: {control}}` therefore
+promoted the nested exact-run control. The earlier `NaN`/`Infinity` repair
+covered Python JSON extensions but not the general invalid-token boundary.
+
+**RED → GREEN / action.** RED
+`b5a0507b8ee4ec70cc5fca751f34df98719f219b` reproduces all three promotions.
+GREEN `443c29aa6f56735f7fcf0ee6a550b6bad5f7e2f8` treats an invalid starter as a
+malformed outer container when its token reaches a structural separator before
+another opener; the proven unclosed prose-delimiter recovery remains intact.
+Focused parser verification is 118/118 GREEN. Full repository verification
+reached 5,318 passed, 7 skipped, and 40 subtests; its sole failure was the
+published-commit ancestry test because the isolated `git archive` intentionally
+has no `.git` directory. Warnings-fatal compilation and diff whitespace checks
+are GREEN. Exact Git tree `dccb57a152c21600305c0eabac06cb29de2e0cf7`
+preserves source mode `100755`.
+
+## 2026-10-03 separatorless invalid-wrapper evidence regression
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; local focused
+RED→GREEN is complete. Fresh exact-head hosted Checks, no unresolved actionable
+thread, and qualifying independent approval remain mandatory before ordinary
+merge.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output framing and exact-run evidence identity. Model output
+is untrusted; only controls that are top-level in the producer output may enter
+the approval contract.
+
+**Gap / RCA.** Exact head
+`24efc99bb0aad3f4c0d76b00b173b6d9a5be34ee` preserved comma/colon invalid-token
+tests but lost the separatorless regression cases and their span-ownership
+implementation during concurrent branch restoration. Consequently
+`[undefined {control}]`, `[unquoted_token {control}]`, and
+`{unquoted_key {control}}` promoted the nested control. The parser skipped the
+invalid outer opener when its token reached another opener, even when the outer
+container later closed.
+
+**RED → GREEN / action.** RED
+`4752398da1aef77ab8172126e2d3668870f628aa` binds the three real-parser
+failures. GREEN `f6d6e255ed479150dbbd48490f0a527ce06e0917` records matched parent/child
+spans and decodes only spans without a matched or JSON-shaped enclosing parent.
+Balanced malformed wrappers therefore retain outer ownership, while an
+unclosed prose delimiter such as `Diagnostic: [pending` still cannot hide a
+later independent control. Focused framing verification is 10/10 GREEN;
+complete repository verification and fresh hosted exact-head evidence remain
+required.
+
+## 2026-10-01 separatorless invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. Balanced malformed
+wrappers remain evidence boundaries even when the malformed token and nested
+container have no JSON separator; unclosed prose delimiters must still permit a
+later complete top-level control.
+
+**Gap / RCA.** Exact-head CodeRabbit review of
+`a5fddfa7c46ff68eea593a4dd71bc6196bc640ba` found that the invalid-token scan
+stopped at a nested `{` or `[` and discarded the outer opener. Inputs
+`[unquoted_token {control}]` and `{unquoted_key {control}}` therefore promoted
+the nested exact-run control despite their balanced outer wrappers.
+
+**RED → GREEN / action.** RED
+`8b1bd4a43be7604d6aa7b9e524295fea7501334c` binds both separatorless attacks.
+GREEN `5261145a73e7b5a0b53c224317002fe98961f16f` records matched container spans,
+their immediate parents, and JSON-like blocking depth in one linear scan.
+Nested candidates are rejected when a balanced parent exists or a JSON-like
+ancestor remains open; candidates after unmatched prose delimiters remain
+recoverable. Focused normalizer verification is 120/120 GREEN. The repository
+run passed 5,321 tests, skipped 5 optional cases, and passed 40 subtests; its
+only two initial failures were direct `python -m pip` calls in a verification
+venv without pip, and both passed in the pip-equipped locked venv (2/2). The
+source mode remains `100755`.
