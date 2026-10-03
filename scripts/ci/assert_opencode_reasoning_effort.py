@@ -25,6 +25,7 @@ _JSONC_COMMENT_PATTERN = re.compile(
     r'("(?:\\.|[^\\"])*")|(//[^\r\n]*|/\*.*?\*/)', re.DOTALL
 )
 
+
 def strip_jsonc_comments(text: str) -> str:
     """Return ``text`` with ``//`` and ``/* */`` comments removed outside strings.
 
@@ -33,12 +34,20 @@ def strip_jsonc_comments(text: str) -> str:
     :func:`json.loads` rejects it. Comment markers are only recognized outside
     JSON string literals, so a string value that itself contains ``//`` (the
     ``"$schema": "https://opencode.ai/config.json"`` line) is preserved
-    unchanged. Newlines inside removed content are kept so any remaining
-    ``json.JSONDecodeError`` still reports an accurate line number.
+    unchanged. Every CR and LF character inside removed content is retained in
+    order so any remaining ``json.JSONDecodeError`` keeps accurate line data.
     """
+
     def _replacer(match: re.Match[str]) -> str:
-        """Preserve string literals or replace comments with empty newlines."""
-        return match.group(1) or ("\n" * match.group(2).count("\n"))
+        """Preserve strings or retain only a comment's original line endings."""
+        string_literal = match.group(1)
+        if string_literal is not None:
+            return string_literal
+        return "".join(
+            character
+            for character in (match.group(2) or "")
+            if character in "\r\n"
+        )
 
     return _JSONC_COMMENT_PATTERN.sub(_replacer, text)
 
