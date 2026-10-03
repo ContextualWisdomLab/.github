@@ -1,3 +1,75 @@
+### OpenCode separatorless invalid wrappers remain fail-closed
+
+- Preserve balanced malformed wrapper identity even when an invalid first
+  token is followed directly by a nested object or array without a comma or
+  colon. RED commit `8b1bd4a43be7604d6aa7b9e524295fea7501334c`
+  proves `[unquoted_token {control}]` and `{unquoted_key {control}}` promoted
+  the nested exact-run control. GREEN commit
+  `5261145a73e7b5a0b53c224317002fe98961f16f` records balanced parent spans in
+  one linear scan, suppresses their nested candidates, and still recovers a
+  complete control after an unclosed prose delimiter. The production
+  normalizer remains executable (`100755`). Focused verification is 120/120;
+  the repository suite passed 5,321 tests plus both pip-dependent cases in a
+  pip-equipped locked environment, with 5 optional skips and 40 subtests.
+
+### OpenCode invalid-token wrappers remain fail-closed
+
+- Preserve the outer-container identity boundary when an invalid token reaches
+  a nested opener without a comma or colon. RED commit
+  `4752398da1aef77ab8172126e2d3668870f628aa` reproduces nested-control
+  promotion from separatorless array and object wrappers; GREEN commit
+  `f6d6e255ed479150dbbd48490f0a527ce06e0917` records matched container spans
+  before decoding, so balanced malformed parents suppress nested controls while
+  unclosed prose delimiters still permit a later independent control.
+
+- Treat a balanced object or array whose first token is invalid JSON as one
+  outer evidence container instead of skipping its opener and promoting a
+  nested exact-run control. RED commit
+  `b5a0507b8ee4ec70cc5fca751f34df98719f219b` binds `undefined`, arbitrary
+  unquoted array tokens, and unquoted object keys; GREEN commit
+  `443c29aa6f56735f7fcf0ee6a550b6bad5f7e2f8` preserves the proven prose
+  delimiter recovery while keeping balanced malformed wrappers fail-closed.
+  The production normalizer remains executable (`100755`).
+
+### OpenCode mixed-output framing preserves later controls
+
+- Ignore prose `{` or `[` delimiters whose next non-whitespace token cannot
+  start the corresponding JSON container. This preserves a later complete
+  exact-run control after diagnostics such as `Diagnostic: [pending` without
+  weakening the existing fail-closed rule for malformed outer objects or
+  arrays. RED commit `42099a359cdfb8126ea4e3d9118c60f6d98af1fa`
+  records the lost-control case; GREEN commit
+  `07baba20259c9061fbb647963f09745a9ca6931b` restores the framing boundary.
+  Fresh exact-head hosted Checks and a qualifying independent approval remain
+  required before ordinary merge.
+
+### OpenCode embedded JSON evidence is outermost and linear-time
+
+- Parse prose-wrapped JSON by scanning each outermost object or array once,
+  with string and escape awareness, instead of retrying `raw_decode` at every
+  nested `{`. A malformed outer container can no longer promote a nested
+  exact-run control object into top-level approval evidence, and adversarial
+  nested prefixes no longer cause quadratic decoding work. RED commit
+  `d05f67f6c5f164309d3cbf15f4858c5fa3d176cd` preserves the malformed-object
+  exploit; GREEN commit `86f52f320e8eb5ac56efdf9a3e2552b20bf409de`
+  replaces the retry loop, and `1a00c73a752b45d9d2a808d9bc96baae51ea8402`
+  extends the same invariant to malformed array nesting. Fresh exact-head
+  hosted Checks and a qualifying independent approval remain required before
+  ordinary merge.
+
+### OpenCode evidence labels require standalone identity boundaries
+
+- Reject a purported verification label when it is only the suffix of an
+  identifier-like token such as `uncoverage:`. The OpenCode normalizer now
+  applies the same boundary rule while selecting the last admissible label and
+  while finding the next label that terminates its section. RED commit
+  `af06cf9c87de4ac76db575d087a170746d6ab83d` proves that a forged suffix could
+  override an earlier fail-closed coverage statement; GREEN commit
+  `4d49b8307706ab8d4565cca8b0d9728bcdad2a35` preserves repeated labels,
+  Markdown decoration, and the distinct `docstring coverage:` label while
+  rejecting the identity-confused form. Fresh exact-head hosted Checks and a
+  qualifying independent approval remain required before ordinary merge.
+
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected

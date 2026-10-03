@@ -1367,6 +1367,29 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
+def test_label_section_uses_last_non_docstring_coverage_label() -> None:
+    """Ignore embedded docstring labels while selecting the last test label."""
+    combined = (
+        "coverage: stale evidence "
+        "docstring coverage: 100% documentation evidence "
+        "coverage: 100% current evidence "
+        "performance: measured"
+    )
+
+    assert norm.label_section(combined, "coverage:") == " 100% current evidence "
+
+
+def test_coverage_label_rejects_identifier_suffix_override() -> None:
+    """Do not let an identifier suffix override failed coverage evidence."""
+    combined = (
+        "coverage: coverage execution evidence not measured\n"
+        "uncoverage: coverage execution evidence 100%\n"
+        "docstring coverage: coverage execution evidence 100%"
+    )
+
+    assert not norm.mentions_full_coverage(combined, "")
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
@@ -1375,6 +1398,19 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section(
+            "coverage: stale\ncoverage: current\nperformance: measured", "coverage:"
+        )
+        == " current\n"
+    )
+    assert (
+        norm.label_section(
+            "coverage: direct\ndocstring coverage: docs\nperformance: measured",
+            "coverage:",
+        )
+        == " direct\n"
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
@@ -2480,6 +2516,83 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects("prefix {not json}") == []
     assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+
+
+def test_iter_json_objects_skips_non_json_prose_delimiters():
+    """Unclosed prose delimiters cannot hide a later complete control object."""
+    control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(control)
+
+    assert norm.iter_json_objects("Diagnostic: [pending\n" + encoded_control) == [
+        control
+    ]
+    assert norm.iter_json_objects("Diagnostic: {pending\n" + encoded_control) == [
+        control
+    ]
+
+
+def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
+    """A malformed outer container cannot promote nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    malformed_object = '{"outer":' * 2_000 + json.dumps(nested_control) + " trailing"
+    malformed_array = "[" * 2_000 + json.dumps(nested_control) + " trailing"
+
+    assert norm.iter_json_objects(malformed_object) == []
+    assert norm.iter_json_objects(malformed_array) == []
+
+
+@pytest.mark.parametrize("non_finite_value", ["NaN", "Infinity"])
+def test_iter_json_objects_does_not_promote_control_from_non_finite_array(
+    non_finite_value,
+):
+    """Python JSON extensions cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"review prose [{non_finite_value}, {json.dumps(nested_control)}]"
+
+    values = norm.iter_json_objects(text)
+
+    assert len(values) == 1
+    assert isinstance(values[0], list)
+    assert values[0][1] == nested_control
+
+
+@pytest.mark.parametrize(
+    "malformed_outer",
+    [
+        "[undefined, <control>]",
+        "[unquoted_token, <control>]",
+        "{unquoted_key: <control>}",
+        "[undefined <control>]",
+        "[unquoted_token <control>]",
+        "{unquoted_key <control>}",
+    ],
+)
+def test_iter_json_objects_does_not_promote_control_from_invalid_outer_token(
+    malformed_outer,
+):
+    """A balanced invalid outer token cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "review prose " + malformed_outer.replace(
+        "<control>", json.dumps(nested_control)
+    )
+
+    assert norm.iter_json_objects(text) == []
 
 
 @pytest.mark.parametrize("approve_first", [True, False])
