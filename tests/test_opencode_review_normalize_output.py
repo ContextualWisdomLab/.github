@@ -2535,6 +2535,35 @@ def test_iter_json_objects_skips_non_json_prose_delimiters():
     ]
 
 
+def test_iter_json_objects_skips_quoted_prose_delimiters():
+    """Bounded prose quotes cannot consume a later independent control object."""
+    control_data = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(control_data)
+
+    assert norm.iter_json_objects(
+        'Review noted a literal "{" in the log.\n' + encoded_control
+    ) == [control_data]
+    assert norm.iter_json_objects(
+        'Diagnostic: "pending\n' + encoded_control
+    ) == [control_data]
+
+
+def test_main_normalizes_control_after_quoted_prose_delimiter(tmp_path):
+    """The CLI preserves a current-run control after a quoted prose brace."""
+    output = tmp_path / "quoted-prose-control.txt"
+    output.write_text(
+        'Review noted a literal "{" in the log.\n' + json.dumps(control()),
+        encoding="utf-8",
+    )
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 0
+    assert "opencode-review-control-v1" in output.read_text(encoding="utf-8")
+
+
 def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
     """A malformed outer container cannot promote nested control evidence."""
     nested_control = {
