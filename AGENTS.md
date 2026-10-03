@@ -46,18 +46,23 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   and use `github-robot-review-gate` plus `babysit-pr` when diagnosing or
   monitoring a protected PR. If a named skill is unavailable, preserve its
   fail-closed trust boundary and exact-current-head evidence rules manually.
-- PR-triggered workflow concurrency must be trigger-aware. Group by workflow,
-  target repository, and pull request number with `cancel-in-progress: true`;
-  do not include the head SHA, because that prevents a new head from cancelling
-  its predecessor. Non-PR triggers need an explicit collision-safe fallback.
+- PR-triggered workflow concurrency must be trigger-aware. For replaceable
+  current-state checks, group by workflow, target repository, and pull request
+  number with `cancel-in-progress: true`. When every same-head admission carries
+  distinct work that must survive, include the exact head SHA and use bounded
+  `queue: max`; retire predecessor heads only through a metadata-only cleanup
+  that inventories every PR-associated trigger, revalidates live authority,
+  and proves terminal cancellation. Non-PR triggers need an explicit
+  collision-safe fallback.
 - Put concurrency at workflow scope when queued jobs must be coalesced before a
   runner is admitted. Job-level concurrency cannot relieve a saturated runner
   queue because it is evaluated only after job admission.
 - Keep cleanup repository-local and event-driven. Do not restore an
-  organization-wide queue sweep, polling `sleep`, or another scheduled scan to
-  compensate for incorrect concurrency. Cancel only runs proven to belong to a
-  superseded head of the same PR, then verify each accepted cancellation
-  reaches `completed/cancelled`.
+  organization-wide queue sweep, long-lived polling wait, or another scheduled
+  scan to compensate for incorrect concurrency. A metadata-only cleanup may use
+  a few bounded status reads to prove an accepted cancellation reached
+  `completed/cancelled`; it must fail closed rather than hold a model or review
+  runner. Cancel only runs proven to belong to a superseded head of the same PR.
 - Classify a run's PR head by event-specific evidence before cancellation.
   `pull_request` may use the run's top-level `head_sha`, but
   `pull_request_target` records the trusted base there; use its PR association
