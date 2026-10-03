@@ -1418,7 +1418,7 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
     )
     assert "client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}" in workflow
     assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in workflow
-    assert "owner: ContextualWisdomLab" in workflow
+    assert "owner: ${{ steps.noema_credential.outputs.owner }}" in workflow
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in workflow
     for permission in (
         "permission-actions: read",
