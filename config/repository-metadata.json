@@ -120,6 +120,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "korean-writing-skills": {
+      "description": "Korean Writing Skills — draft agent skills for Korean editing and APA 7 manuscript workflows with bounded source traceability and evaluation evidence.",
+      "topics": [
+        "korean-language",
+        "korean-writing",
+        "writing-assistant",
+        "editing",
+        "apa7",
+        "academic-writing",
+        "agent-skills",
+        "evaluation",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
       "topics": [
