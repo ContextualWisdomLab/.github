@@ -69,7 +69,10 @@ def _reader() -> dict[str, str]:
 
 
 def _links(binary: bytes, target: str, reader: str, *, allow_subset: bool = False) -> list[dict]:
+<<<<<<< HEAD
+=======
     """Inspect native bytes and return the target's declared dynamic links."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("release native extension exceeds inspection limit")
     with tempfile.NamedTemporaryFile() as temporary:
@@ -102,7 +105,10 @@ def _links(binary: bytes, target: str, reader: str, *, allow_subset: bool = Fals
 
 
 def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) -> dict:
+<<<<<<< HEAD
+=======
     """Build a link inventory for every exact verified release wheel."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     rows = verified.get("verified_distributions") if isinstance(verified, dict) else None
     if (not re.fullmatch(r"[0-9a-f]{40}", source_sha)
             or not isinstance(rows, list) or len(rows) != 13
@@ -170,7 +176,10 @@ def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) ->
 
 
 def main() -> None:
+<<<<<<< HEAD
+=======
     """Run the native-link inventory command."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     parser = argparse.ArgumentParser()
     parser.add_argument("--verified-distributions", required=True)
     parser.add_argument("--distribution-root", required=True)

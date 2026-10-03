@@ -68,7 +68,10 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     changed_files.chmod(0o600)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+<<<<<<< HEAD
+=======
     monkeypatch.setenv("COVERAGE_EVIDENCE_SUMMARY", "- Result: PASS")
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     monkeypatch.setenv(
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
@@ -134,6 +137,8 @@ def review(**overrides):
     return value
 
 
+<<<<<<< HEAD
+=======
 @pytest.mark.parametrize(
     "summary",
     (
@@ -179,6 +184,7 @@ def test_coverage_decision_accepts_one_exact_pass_line():
     assert gate.coverage_decision_is_pass("detail\n- Result: PASS\n") is True
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 @pytest.mark.parametrize("payload", [[review()], [[review()]]])
 def test_flatten_reviews_and_accept_real_model_approval(payload):
     reviews = gate.flatten_reviews(payload)
@@ -346,9 +352,16 @@ def test_has_reusable_real_model_approval_logs_rejected_candidates():
     log = io.StringIO()
     assert not gate.has_reusable_real_model_approval(
         [
+<<<<<<< HEAD
+            review(state="COMMENTED"),
+            review(commit_id="b" * 40),
+            review(user={"login": "unknown"}),
+            fallback,
+=======
             fallback,
             review(commit_id="b" * 40),
             review(user={"login": "unknown"}),
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         ],
         HEAD,
         log=log,
@@ -387,6 +400,8 @@ def test_opencode_app_only_mode_accepts_app_approval():
     assert "author=opencode-agent[bot]" in log.getvalue()
 
 
+<<<<<<< HEAD
+=======
 def test_newer_same_head_changes_requested_revokes_reusable_approval():
     """The latest exact-head OpenCode decision supersedes historical approval."""
     log = io.StringIO()
@@ -401,6 +416,7 @@ def test_newer_same_head_changes_requested_revokes_reusable_approval():
     assert "latest same-head review" in log.getvalue()
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_adversarial_validation_rejects_circular_or_unanchored_evidence():
     weak = {
         "status": "passed",
@@ -472,6 +488,28 @@ def test_adversarial_validation_rejects_forged_traversal_receipt():
 
 
 def test_parse_args_and_main(monkeypatch, capsys):
+<<<<<<< HEAD
+    args = gate.parse_args(["--head", HEAD])
+    assert args.head == HEAD
+    assert not args.require_opencode_app
+
+    strict_args = gate.parse_args(["--head", HEAD, "--require-opencode-app"])
+    assert strict_args.require_opencode_app
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([[review()]])))
+    assert gate.main(["--head", HEAD]) == 0
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
+    assert gate.main(["--head", HEAD]) == 2
+    assert "could not parse reviews" in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+    assert gate.main(["--head", "short"]) == 2
+    assert "40-character" in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+    assert gate.main(["--head", HEAD]) == 1
+=======
     coverage_args = ["--coverage-summary", "- Result: PASS"]
     args = gate.parse_args(["--head", HEAD, *coverage_args])
     assert args.head == HEAD
@@ -501,12 +539,17 @@ def test_parse_args_and_main(monkeypatch, capsys):
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
     assert gate.main(["--head", HEAD, *coverage_args]) == 1
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     monkeypatch.setattr(
         sys,
         "stdin",
         io.StringIO(json.dumps([[review(user={"login": "github-actions[bot]"})]])),
     )
+<<<<<<< HEAD
+    assert gate.main(["--head", HEAD, "--require-opencode-app"]) == 1
+=======
     assert gate.main(
         ["--head", HEAD, *coverage_args, "--require-opencode-app"]
     ) == 1
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

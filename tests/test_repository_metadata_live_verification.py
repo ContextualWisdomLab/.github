@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+<<<<<<< HEAD
+=======
 import io
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import importlib.util
 import json
 from pathlib import Path
@@ -146,11 +149,18 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
     assert len(handlers) == 1
     assert isinstance(handlers[0], RECONCILER._NoPagesRedirects)
     from urllib.error import HTTPError
+<<<<<<< HEAD
+    with pytest.raises(HTTPError):
+        handlers[0].redirect_request(
+            RECONCILER.Request("https://example.com"), None, 302, "redirect", {}, "http://127.0.0.1/"
+        )
+=======
     with pytest.raises(HTTPError) as exc_info:
         handlers[0].redirect_request(
             RECONCILER.Request("https://example.com"), None, 302, "redirect", {}, "http://127.0.0.1/"
         )
     exc_info.value.close()
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     with pytest.raises(RuntimeError, match="not built"):
         RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
@@ -181,6 +191,8 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
         RECONCILER._pages_publication_ready("Repo", ready)
 
 
+<<<<<<< HEAD
+=======
 def test_pages_publication_ready_closes_mapped_http_error(monkeypatch) -> None:
     """Pages verification closes the response when it maps an HTTP failure."""
     ready = {
@@ -203,6 +215,7 @@ def test_pages_publication_ready_closes_mapped_http_error(monkeypatch) -> None:
     assert error_body.closed
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_verify_repository_accepts_converged_disabled_and_enabled_pages(
     monkeypatch,
 ) -> None:

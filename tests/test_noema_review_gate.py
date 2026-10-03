@@ -1760,12 +1760,19 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
     """A non-transient 400 stays typed transport without authorizing re-dispatch."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+<<<<<<< HEAD
+=======
     error_body = io.BytesIO(b"{}")
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     class Opener:
         def open(self, request):
             raise noema.urllib.error.HTTPError(
+<<<<<<< HEAD
+                request.full_url, 400, "Bad Request", {}, io.BytesIO(b"{}")
+=======
                 request.full_url, 400, "Bad Request", {}, error_body
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
             )
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
@@ -1775,7 +1782,10 @@ def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
 
     assert exc_info.value.capacity_unavailable is False
     assert exc_info.value.http_status == 400
+<<<<<<< HEAD
+=======
     assert error_body.closed
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     assert "outcome=provider_capacity_unavailable" not in capsys.readouterr().out
 
 
@@ -1966,7 +1976,11 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
+<<<<<<< HEAD
+    with pytest.raises(noema.urllib.error.HTTPError):
+=======
     with pytest.raises(noema.urllib.error.HTTPError) as exc_info:
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         handler.redirect_request(
             request,
             fp=None,
@@ -1975,7 +1989,10 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+<<<<<<< HEAD
+=======
     exc_info.value.close()
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
@@ -2882,6 +2899,8 @@ def test_fetch_file_content_at_ref_refuses_malformed_base64(monkeypatch):
         noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
 
 
+<<<<<<< HEAD
+=======
 def test_fetch_file_content_at_ref_refuses_malformed_json(monkeypatch):
     """A malformed GitHub API envelope fails closed before metadata inspection."""
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "{not-json")
@@ -2890,6 +2909,7 @@ def test_fetch_file_content_at_ref_refuses_malformed_json(monkeypatch):
         noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 @pytest.mark.parametrize("payload,reason", [
     ({"content": "", "encoding": "none", "size": 1048577}, "API omitted"),
     ({"content": "", "encoding": "base64", "size": 1}, "nonempty file"),

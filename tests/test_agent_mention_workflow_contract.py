@@ -52,6 +52,8 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "agent_mention_sweep.py" in sweep
 
 
+<<<<<<< HEAD
+=======
 def test_full_suite_tooling_lock_includes_collection_dependencies() -> None:
     """A quality install must provide both parsers imported during suite collection."""
     locks = (
@@ -67,6 +69,7 @@ def test_full_suite_tooling_lock_includes_collection_dependencies() -> None:
     assert {"defusedxml", "pyyaml"} <= requirements
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
     """Coverage includes the two script paths instead of treating paths as modules."""
 

@@ -16,6 +16,8 @@ def test_metadata_apply_uses_dedicated_least_privilege_credential() -> None:
     assert "secrets.PR_REVIEW_MERGE_TOKEN" not in apply_source
     assert "Require dedicated repository settings credential" in apply_source
     assert 'test -n "${GH_TOKEN}"' in apply_source
+<<<<<<< HEAD
+=======
 
 
 def test_metadata_validation_checks_out_published_evidence_ancestry() -> None:
@@ -40,3 +42,4 @@ def test_metadata_full_suite_installs_noema_document_lock() -> None:
     assert "-r requirements-opencode-review-ci-hashes.txt" in install_source
     assert "-r requirements-noema-document-ci-hashes.txt" in install_source
     assert '      - "requirements-noema-document-ci-hashes.txt"' in source
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

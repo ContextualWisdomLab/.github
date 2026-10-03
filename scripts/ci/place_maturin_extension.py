@@ -19,12 +19,18 @@ EXTENSION_SUFFIXES = (".so", ".pyd")
 
 
 def _inside(path: pathlib.Path, root: pathlib.Path) -> bool:
+<<<<<<< HEAD
+=======
     """Return whether a resolved path is confined to the resolved root."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     return path == root or root in path.parents
 
 
 def place(wheel: pathlib.Path, project_dir: pathlib.Path) -> list[pathlib.Path]:
+<<<<<<< HEAD
+=======
     """Copy safe native wheel members into existing source package directories."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     project = project_dir.resolve()
     pyproject = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
     python_source = pyproject.get("tool", {}).get("maturin", {}).get("python-source", ".")
@@ -50,7 +56,10 @@ def place(wheel: pathlib.Path, project_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 def main(argv: list[str]) -> int:
+<<<<<<< HEAD
+=======
     """Parse CLI paths, place extensions, and report bounded failures."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if len(argv) != 2:
         print("usage: place_maturin_extension.py WHEEL PROJECT_DIR", file=sys.stderr)
         return 2

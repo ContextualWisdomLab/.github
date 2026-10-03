@@ -489,6 +489,8 @@ def test_run_cargo_vendor_propagates_missing_binary(tmp_path: Path) -> None:
             materializer.materialize(repo, base_sha, tmp_path / "out")
 
 
+<<<<<<< HEAD
+=======
 def test_materialize_surfaces_cargo_vendor_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -513,6 +515,7 @@ def test_materialize_surfaces_cargo_vendor_timeout(
         materializer.materialize(repo, base_sha, tmp_path / "out")
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_materialize_surfaces_cargo_vendor_failure_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+=======
 import runpy
 import sys
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import zipfile
 from pathlib import Path
 
@@ -67,6 +70,8 @@ def test_python_source_outside_the_project_is_rejected(tmp_path: Path) -> None:
         placer.place(wheel, project)
 
 
+<<<<<<< HEAD
+=======
 def test_non_string_python_source_is_rejected(tmp_path: Path) -> None:
     """A malformed maturin source root cannot be coerced into a filesystem path."""
 
@@ -78,6 +83,7 @@ def test_non_string_python_source_is_rejected(tmp_path: Path) -> None:
         placer.place(tmp_path / "unused.whl", project)
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_traversing_wheel_member_is_rejected(tmp_path: Path) -> None:
     project = _project(tmp_path, "python")
     wheel = _wheel(tmp_path, {f"../../{_SO}": b"ELF"})
@@ -102,6 +108,8 @@ def test_offline_maturin_build_places_the_extension_for_pytest() -> None:
     build = workflow.split("build_maturin_extension_if_needed() {", 1)[1].split("\n          }", 1)[0]
     assert 'python3 "$2" "$dist_dir"/*.whl .' in build
     assert '"${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"' in build
+<<<<<<< HEAD
+=======
 
 
 def test_cli_rejects_wrong_arity_and_reports_placement_failure(
@@ -133,3 +141,4 @@ def test_script_entrypoint_places_and_reports_extension(
     assert exited.value.code == 0
     assert "Placed built extension" in capsys.readouterr().out
     assert (project / "python" / "pkg" / _SO).read_bytes() == b"ELF"
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

@@ -8,7 +8,10 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any
+<<<<<<< HEAD
+=======
 from urllib.error import HTTPError
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from urllib.request import Request
 from urllib.response import addinfourl
 
@@ -45,7 +48,10 @@ class _SyntheticRedirectTransport:
         """Store the redirect target and initialize the observed request ledger."""
         self.target = target
         self.calls: list[tuple[str, str | None]] = []
+<<<<<<< HEAD
+=======
         self.responses: list[Any] = []
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     def https_open(self, request: Request) -> Any:
         """Return a synthetic redirect response without contacting a network target."""
@@ -54,7 +60,10 @@ class _SyntheticRedirectTransport:
         headers["Location"] = self.target
         response = addinfourl(BytesIO(b""), headers, request.full_url, code=302)
         response.msg = "Found"
+<<<<<<< HEAD
+=======
         self.responses.append(response)
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         return response
 
 
@@ -74,6 +83,8 @@ class _JsonResponse:
         return b"[]"
 
 
+<<<<<<< HEAD
+=======
 class _ReadSizeRecordingBody(BytesIO):
     """Record the requested byte limit for one synthetic HTTP error body."""
 
@@ -88,6 +99,7 @@ class _ReadSizeRecordingBody(BytesIO):
         return super().read(size)
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
     """Fail if a rejected authority reaches the network/file opener boundary."""
     pytest.fail("rejected GitHub API authority reached opener")
@@ -182,8 +194,11 @@ def test_production_openers_reject_redirect_without_forwarding_bearer(
     assert transport.calls == [
         (CANONICAL_GITHUB_API_URL, "Bearer test-token"),
     ]
+<<<<<<< HEAD
+=======
     assert len(transport.responses) == 1
     assert transport.responses[0].closed
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 @pytest.mark.parametrize("target", REDIRECT_TARGETS)
@@ -250,6 +265,8 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
 
 
+<<<<<<< HEAD
+=======
 def test_codeql_identity_client_bounds_http_error_diagnostic_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -281,6 +298,7 @@ def test_codeql_identity_client_bounds_http_error_diagnostic_read(
     assert body.closed
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_documented_opener_lineage_references_published_commits() -> None:
     """Owner evidence must name the published commits that carry each repair."""
     doctoring = Path(

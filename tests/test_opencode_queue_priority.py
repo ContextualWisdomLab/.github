@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+from datetime import datetime, timezone
+
+=======
 import json
 import runpy
 import subprocess
@@ -11,6 +15,7 @@ from datetime import datetime, timezone
 import pytest
 
 import scripts.ci.opencode_queue_priority as queue_priority
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from scripts.ci.opencode_queue_priority import (
     PrState,
     QueuedRun,
@@ -70,6 +75,8 @@ def test_metrics_surface_deferred_backlog_and_priority_position() -> None:
     assert m["deferred"] == 2
     assert m["oldest_deferred_hours"] == 9.0
     assert m["priority_positions"] == {"o/a#1": 2}
+<<<<<<< HEAD
+=======
 
 def test_fetch_queued_keeps_only_bound_pull_request_titles(monkeypatch: pytest.MonkeyPatch) -> None:
     """Malformed display titles cannot enter the cancellation plan."""
@@ -209,3 +216,4 @@ def test_subprocess_boundary_and_script_entrypoint(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(sys, "argv", [str(queue_priority.__file__)])
     with pytest.raises(SystemExit, match="0"):
         runpy.run_path(str(queue_priority.__file__), run_name="__main__")
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

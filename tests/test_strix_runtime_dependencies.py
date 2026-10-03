@@ -3,6 +3,8 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+<<<<<<< HEAD
+=======
 def _locked_requirement_versions(
     requirements_text: str, package_name: str
 ) -> list[str]:
@@ -28,6 +30,7 @@ def test_locked_requirement_versions_normalizes_extras() -> None:
     ]
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_strix_installs_openai_httpx2_runtime() -> None:
     requirements = (REPOSITORY_ROOT / "requirements-strix-ci.txt").read_text(
         encoding="utf-8"
@@ -52,6 +55,8 @@ def test_strix_anyio_security_pin_is_an_explicit_lock_input() -> None:
 
     assert "anyio==4.14.2" in requirements.splitlines()
     assert "anyio==4.14.2 \\" in requirements_lock.splitlines()
+<<<<<<< HEAD
+=======
 
 
 def test_strix_pyjwt_security_pin_is_an_explicit_lock_input() -> None:
@@ -93,3 +98,4 @@ def test_python_security_inputs_pin_patched_urllib3() -> None:
 
         assert _locked_requirement_versions(source_text, "urllib3") == ["2.8.0"]
         assert _locked_requirement_versions(lock_text, "urllib3") == ["2.8.0"]
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

@@ -8,15 +8,21 @@ unrelated to lodash. With no file location the gate failed closed as unmapped.
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+=======
 import runpy
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import subprocess
 import sys
 from pathlib import Path
 
+<<<<<<< HEAD
+=======
 import pytest
 
 import scripts.ci.strix_unverified_dependency as unverified_dependency
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from scripts.ci.strix_unverified_dependency import (
     named_packages,
     unverified_dependency_finding,
@@ -103,6 +109,8 @@ def test_cli_exit_status_and_message(tmp_path: Path) -> None:
     assert "lodash" in result.stderr and "unverified" in result.stderr
     (repo / "yarn.lock").write_text('lodash@^4.17.20:\n  version "4.17.20"\n')
     assert subprocess.run([sys.executable, str(HELPER), str(report), str(repo)], check=False).returncode == 1
+<<<<<<< HEAD
+=======
 
 def test_manifest_scan_ignores_nonfiles_links_vendor_and_oversized_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -154,3 +162,4 @@ def test_script_entrypoint_propagates_the_classification_exit(
     monkeypatch.setattr(sys, "argv", [str(HELPER), str(report), str(repo)])
     with pytest.raises(SystemExit, match="0"):
         runpy.run_path(str(HELPER), run_name="__main__")
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

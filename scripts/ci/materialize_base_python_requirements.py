@@ -22,7 +22,10 @@ import tempfile
 import urllib.parse
 import urllib.request
 from typing import Any
+<<<<<<< HEAD
+=======
 from urllib.error import HTTPError
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 try:
     import tomllib
@@ -377,11 +380,16 @@ def _download_trusted_uv_archive() -> bytes:
                     break
                 payload.extend(chunk)
     except OSError as exc:
+<<<<<<< HEAD
+        raise RuntimeError(
+            f"trusted uv archive download failed: {type(exc).__name__}"
+=======
         error_type = type(exc).__name__
         if isinstance(exc, HTTPError):
             exc.close()
         raise RuntimeError(
             f"trusted uv archive download failed: {error_type}"
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         ) from exc
 
     if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:

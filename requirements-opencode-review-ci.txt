@@ -12,5 +12,8 @@ interrogate==1.7.0
 maturin==1.15.0
 pytest==9.1.1
 pytest-cov==7.1.0
+<<<<<<< HEAD
+=======
 pyyaml==6.0.3
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 uv==0.12.7
