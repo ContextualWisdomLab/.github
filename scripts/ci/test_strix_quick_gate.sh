@@ -878,7 +878,9 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" '"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then' "opencode review model steps pass current-run identity to the normalizer"
 	assert_file_contains "$workflow_file" "normalize_opencode_output" "opencode review model steps normalize model control output"
 	assert_file_contains "$workflow_file" "opencode_review_normalize_output.py" "opencode review model steps normalize transcript-embedded JSON output"
-	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "decoder.raw_decode" "opencode review normalizer scans transcript text for JSON objects"
+	if ! PYTHONPATH="$REPO_ROOT" python3 -c 'import json; from scripts.ci import opencode_review_normalize_output as norm; control_data = {"head_sha": "head", "run_id": "run", "run_attempt": "attempt"}; model_output = '"'"'Review noted a literal "{" in the log.\n'"'"' + json.dumps(control_data); assert norm.iter_json_objects(model_output) == [control_data]'; then
+		record_failure "opencode review normalizer must recover a control after a quoted prose delimiter"
+	fi
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "valid_control" "opencode review normalizer accepts only current-run control JSON"
 	assert_file_contains "$workflow_file" "opencode run" "opencode review workflow runs the bounded OpenCode agent path"
 	assert_file_contains "$workflow_file" 'opencode run "$(cat "$prompt_file")"' "opencode review passes the prompt as the positional message before file attachments"
@@ -1675,7 +1677,7 @@ EOF
 	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
-OpenCode transcript text before the review control block.
+OpenCode transcript text quotes a literal "{" before the review control block.
 
 {"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after structural exploration of .github/workflows/opencode-review.yml.","summary":"Approval sufficiency: affirmative evidence supported approval beyond absence of blockers. Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: CodeGraph behavior DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Visual/DOM: non-web workflow and review-comment output was checked. Accessibility/i18n: human-readable workflow and review text was checked. Supply-chain/license: dependency and external-tool risk was checked. Packaging: package and workflow contracts were checked. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF

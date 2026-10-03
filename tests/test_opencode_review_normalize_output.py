@@ -1367,6 +1367,29 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
+def test_label_section_uses_last_non_docstring_coverage_label() -> None:
+    """Ignore embedded docstring labels while selecting the last test label."""
+    combined = (
+        "coverage: stale evidence "
+        "docstring coverage: 100% documentation evidence "
+        "coverage: 100% current evidence "
+        "performance: measured"
+    )
+
+    assert norm.label_section(combined, "coverage:") == " 100% current evidence "
+
+
+def test_coverage_label_rejects_identifier_suffix_override() -> None:
+    """Do not let an identifier suffix override failed coverage evidence."""
+    combined = (
+        "coverage: coverage execution evidence not measured\n"
+        "uncoverage: coverage execution evidence 100%\n"
+        "docstring coverage: coverage execution evidence 100%"
+    )
+
+    assert not norm.mentions_full_coverage(combined, "")
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
@@ -1375,6 +1398,19 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section(
+            "coverage: stale\ncoverage: current\nperformance: measured", "coverage:"
+        )
+        == " current\n"
+    )
+    assert (
+        norm.label_section(
+            "coverage: direct\ndocstring coverage: docs\nperformance: measured",
+            "coverage:",
+        )
+        == " direct\n"
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
@@ -2480,6 +2516,448 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects("prefix {not json}") == []
     assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+
+
+def test_iter_json_objects_skips_non_json_prose_delimiters():
+    """Unclosed prose delimiters cannot hide a later complete control object."""
+    control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(control)
+
+    assert norm.iter_json_objects("Diagnostic: [pending\n" + encoded_control) == [
+        control
+    ]
+    assert norm.iter_json_objects("Diagnostic: {pending\n" + encoded_control) == [
+        control
+    ]
+
+
+class PrefixScanCountingText(str):
+    """Count prefix-wide searches performed on an untrusted transcript."""
+
+    def __new__(cls, value):
+        """Create a string that records every rfind call."""
+
+        instance = super().__new__(cls, value)
+        instance.rfind_call_count = 0
+        return instance
+
+    def rfind(self, substring, start=None, end=None):
+        """Record one reverse search before delegating to str."""
+
+        self.rfind_call_count += 1
+        if start is None:
+            return super().rfind(substring)
+        if end is None:
+            return super().rfind(substring, start)
+        return super().rfind(substring, start, end)
+
+
+class SliceCountingText(str):
+    """Count characters copied by slices of an untrusted transcript."""
+
+    def __new__(cls, value):
+        """Create a string that records cumulative sliced width."""
+
+        instance = super().__new__(cls, value)
+        instance.sliced_character_count = 0
+        return instance
+
+    def __getitem__(self, key):
+        """Record copied slice width before returning the normal string value."""
+
+        result = super().__getitem__(key)
+        if isinstance(key, slice):
+            self.sliced_character_count += len(result)
+        return result
+
+
+def test_iter_json_objects_does_not_rescan_prefix_per_nested_opener():
+    """Nested untrusted delimiters retain the scanner's linear-time contract."""
+
+    nested_transcript = PrefixScanCountingText(
+        "prefix " + "{x" * 64 + '{"head_sha":"head"}'
+    )
+
+    assert norm.iter_json_objects(nested_transcript) == []
+    assert nested_transcript.rfind_call_count <= 2
+
+
+def test_iter_json_objects_does_not_copy_line_prefix_per_backtick_span():
+    """Backtick fence classification retains the scanner's linear contract."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(current_control)
+    transcript = SliceCountingText("prefix " + "`example` " * 400 + encoded_control)
+
+    assert norm.iter_json_objects(transcript) == [current_control]
+    assert transcript.sliced_character_count <= len(encoded_control) + 3
+
+
+def test_iter_json_objects_does_not_copy_nested_container_prefix():
+    """Nested fence classification cannot copy or backtrack over its prefix."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(current_control)
+    transcript = SliceCountingText(
+        "> " * 20 + "not-a-fence ~~~ " + encoded_control
+    )
+
+    assert norm.iter_json_objects(transcript) == [current_control]
+    assert transcript.sliced_character_count <= len(encoded_control) + 3
+
+
+def test_iter_json_objects_fails_closed_on_excessive_json_nesting():
+    """Hostile nesting cannot crash the review-output normalizer."""
+    deeply_nested_json = "[" * 10_000 + "0" + "]" * 10_000
+
+    assert norm.iter_json_objects(deeply_nested_json) == []
+
+
+@pytest.mark.parametrize("quoted_delimiter", ["{", "["])
+def test_iter_json_objects_skips_quoted_prose_delimiters(quoted_delimiter):
+    """Quoted prose punctuation cannot hide a later independent control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = (
+        f'Review noted a literal "{quoted_delimiter}" in the log.\n'
+        + json.dumps(current_control)
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize(
+    ("quote", "quoted_delimiter"),
+    [
+        ("'", "{"),
+        ("'", "["),
+        ("`", "{"),
+        ("`", "["),
+        ("``", "{"),
+        ("``", "["),
+    ],
+)
+def test_iter_json_objects_skips_inline_delimiter_literals(
+    quote, quoted_delimiter
+):
+    """Paired prose literals cannot hide a later independent control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = (
+        f"Review noted a literal {quote}{quoted_delimiter}{quote} in the log.\n"
+        + json.dumps(current_control)
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize("quote", ["'", "`", "``"])
+def test_iter_json_objects_does_not_promote_inline_control_examples(quote):
+    """Quoted examples cannot become authoritative approval controls."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = (
+        f"Previous candidate was {quote}{json.dumps(example_control)}{quote}, "
+        "but reject it."
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_extracts_control_from_markdown_fence():
+    """A fenced final JSON payload remains an eligible embedded control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "```json\n" + json.dumps(current_control) + "\n```"
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize(
+    "fence_line_transcript",
+    [
+        "```json <control>\n```",
+        "```json\nreview prose\n``` <control>",
+        "~~~json <control>\n~~~",
+        "~~~json\nreview prose\n~~~ <control>",
+        "> ~~~json <control>\n> ~~~",
+        "> ~~~json\n> review prose\n> ~~~ <control>",
+        "- ~~~json <control>\n  ~~~",
+        "> - ~~~json <control>\n>   ~~~",
+        "> ```json\n> review prose\n> ``` <control>",
+        "- ```json\n  review prose\n  ``` <control>",
+        "-   review prose\n    ~~~json <control>\n    ~~~",
+        "1.  review prose\n    ~~~json <control>\n    ~~~",
+        "-   review prose\n    ~~~json\n    body\n    ~~~ <control>",
+        "123456789. review prose\n           ~~~json <control>\n           ~~~",
+    ],
+)
+def test_iter_json_objects_ignores_controls_on_markdown_fence_lines(
+    fence_line_transcript,
+):
+    """A fence delimiter line cannot itself publish a control example."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = fence_line_transcript.replace("<control>", json.dumps(example_control))
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize(
+    ("quote", "mixed_run_text"),
+    [("`", "``` text `` "), ("``", "``` text ` ")],
+)
+def test_iter_json_objects_requires_exact_backtick_closing_run(
+    quote, mixed_run_text
+):
+    """A longer backtick run cannot end a shorter quoted example."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"{quote}example {mixed_run_text}" + json.dumps(example_control) + quote
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize("quote", ["`", "``"])
+def test_iter_json_objects_recovers_after_exact_backtick_closing_run(quote):
+    """A mixed longer run cannot hide control after the exact closing run."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"{quote}example ``` text{quote}.\n" + json.dumps(current_control)
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_does_not_promote_inline_triple_backtick_example():
+    """A same-line triple-backtick span is prose, not a Markdown fence."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "Previous ```" + json.dumps(example_control) + "``` was rejected."
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_does_not_treat_contraction_as_prose_quote():
+    """An apostrophe within a word cannot hide a later independent control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "The review doesn't change the parser.\n" + json.dumps(current_control)
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_keeps_contraction_inside_single_quoted_example():
+    """A contraction cannot end a quoted example and promote its control."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "'doesn't accept " + json.dumps(example_control) + "'"
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_preserves_control_after_quoted_contraction():
+    """A contraction cannot keep a completed quote open across real control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "Review said 'it doesn't contain a control'.\n" + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_recognizes_quote_adjacent_to_word():
+    """A quote beside prose still prevents promotion of its example control."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "example'" + json.dumps(example_control) + "'"
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_keeps_unclosed_prose_quote_fail_closed():
+    """A next-line control inside an unfinished quote is not independent."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = 'Review noted an unfinished "{ delimiter.\n' + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_honors_escaped_quotes_in_quoted_prose():
+    """An escaped prose quote cannot end delimiter suppression early."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = 'Review noted "an escaped \\" quote and { delimiter".\n' + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_main_normalizes_control_after_quoted_prose_delimiter(tmp_path):
+    """The CLI preserves a current-run control after a quoted prose brace."""
+    output = tmp_path / "quoted-prose-control.txt"
+    output.write_text(
+        'Review noted a literal "{" in the log.\n' + json.dumps(control()),
+        encoding="utf-8",
+    )
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 0
+    assert "opencode-review-control-v1" in output.read_text(encoding="utf-8")
+
+
+def test_iter_json_objects_does_not_promote_control_nested_in_malformed_outer():
+    """A malformed outer container cannot promote nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    malformed_object = '{"outer":' * 2_000 + json.dumps(nested_control) + " trailing"
+    malformed_array = "[" * 2_000 + json.dumps(nested_control) + " trailing"
+
+    assert norm.iter_json_objects(malformed_object) == []
+    assert norm.iter_json_objects(malformed_array) == []
+
+
+@pytest.mark.parametrize("non_finite_value", ["NaN", "Infinity"])
+def test_iter_json_objects_does_not_promote_control_from_non_finite_array(
+    non_finite_value,
+):
+    """Python JSON extensions cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"review prose [{non_finite_value}, {json.dumps(nested_control)}]"
+
+    values = norm.iter_json_objects(text)
+
+    assert len(values) == 1
+    assert isinstance(values[0], list)
+    assert values[0][1] == nested_control
+
+
+@pytest.mark.parametrize(
+    "malformed_outer",
+    [
+        "[undefined, <control>]",
+        "[unquoted_token, <control>]",
+        "{unquoted_key: <control>}",
+        "[undefined <control>]",
+        "[unquoted_token <control>]",
+        "{unquoted_key <control>}",
+    ],
+)
+def test_iter_json_objects_does_not_promote_control_from_invalid_outer_token(
+    malformed_outer,
+):
+    """A balanced invalid outer token cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "review prose " + malformed_outer.replace(
+        "<control>", json.dumps(nested_control)
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize(
+    "malformed_prefix",
+    [
+        "[undefined, ",
+        "[unquoted_token ",
+        "[unquoted_token\n",
+        "{unquoted_key: ",
+        "{unquoted_key ",
+        "{unquoted_key\n",
+    ],
+)
+def test_iter_json_objects_does_not_promote_control_from_unclosed_invalid_outer(
+    malformed_prefix,
+):
+    """An unfinished invalid wrapper cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "review prose " + malformed_prefix + json.dumps(nested_control)
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize("malformed_prefix", ["Review: [pending\n", "Note: {pending\n"])
+def test_iter_json_objects_requires_diagnostic_label_for_prose_recovery(
+    malformed_prefix,
+):
+    """An arbitrary pending label cannot manufacture top-level evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+
+    assert norm.iter_json_objects(malformed_prefix + json.dumps(nested_control)) == []
 
 
 @pytest.mark.parametrize("approve_first", [True, False])
