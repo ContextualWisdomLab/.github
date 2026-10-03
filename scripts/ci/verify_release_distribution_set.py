@@ -251,6 +251,7 @@ def fetch_artifact(repository: str, artifact_id: int, output: BinaryIO) -> None:
     process = subprocess.Popen(
         ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact_id}/zip"],
         stdout=subprocess.PIPE,
+        shell=False,
     )
     try:
         while block := process.stdout.read(1024 * 1024):
