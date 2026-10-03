@@ -89,6 +89,19 @@
   from silently returning to the vulnerable versions. Protected integration,
   immutable consumer-pin advancement, and fresh exact-head hosted security
   Checks remain required before release admission.
+### Dependency Review requires a completed authenticated comparison
+
+- The reusable Dependency Review preflight now requires both curl exit zero
+  and HTTP 200 before publishing `available=true`. A regression reproduces a
+  partial transfer that prints `200` but exits 18, preserving the fail-closed
+  gate. The bundled Security Scan already enforced both signals and remains
+  unchanged. `.github#2565` now preserves the complete `.github#1725` owner
+  delta through ordinary merge `ec7c1b58ba6a3c61a0d09e02d93ef470f12db98d`
+  while retaining its isolated runner-group selectors. Both PRs remain
+  Proposed until exact-head hosted Checks and qualifying independent review are
+  complete. The carried security decision is ADR-0034, the concurrent owned
+  CodeQL decision is ADR-0033, and a repository-wide executable contract now
+  rejects duplicate numeric ADR identities.
 
 ### Intel macOS native archives are bound to x86_64 bytes
 
