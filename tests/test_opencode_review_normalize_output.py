@@ -2535,21 +2535,48 @@ def test_iter_json_objects_skips_non_json_prose_delimiters():
     ]
 
 
-def test_iter_json_objects_skips_quoted_prose_delimiters():
-    """Bounded prose quotes cannot consume a later independent control object."""
-    control_data = {
+@pytest.mark.parametrize("quoted_delimiter", ["{", "["])
+def test_iter_json_objects_skips_quoted_prose_delimiters(quoted_delimiter):
+    """Quoted prose punctuation cannot hide a later independent control."""
+    current_control = {
         "head_sha": "head",
         "run_id": "run",
         "run_attempt": "attempt",
     }
-    encoded_control = json.dumps(control_data)
+    text = (
+        f'Review noted a literal "{quoted_delimiter}" in the log.\n'
+        + json.dumps(current_control)
+    )
 
-    assert norm.iter_json_objects(
-        'Review noted a literal "{" in the log.\n' + encoded_control
-    ) == [control_data]
-    assert norm.iter_json_objects(
-        'Diagnostic: "pending\n' + encoded_control
-    ) == [control_data]
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_keeps_unclosed_prose_quote_fail_closed():
+    """A next-line control inside an unfinished quote is not independent."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = 'Review noted an unfinished "{ delimiter.\n' + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_honors_escaped_quotes_in_quoted_prose():
+    """An escaped prose quote cannot end delimiter suppression early."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = 'Review noted "an escaped \\" quote and { delimiter".\n' + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
 
 
 def test_main_normalizes_control_after_quoted_prose_delimiter(tmp_path):
@@ -2622,6 +2649,45 @@ def test_iter_json_objects_does_not_promote_control_from_invalid_outer_token(
     )
 
     assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize(
+    "malformed_prefix",
+    [
+        "[undefined, ",
+        "[unquoted_token ",
+        "[unquoted_token\n",
+        "{unquoted_key: ",
+        "{unquoted_key ",
+        "{unquoted_key\n",
+    ],
+)
+def test_iter_json_objects_does_not_promote_control_from_unclosed_invalid_outer(
+    malformed_prefix,
+):
+    """An unfinished invalid wrapper cannot expose nested control evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "review prose " + malformed_prefix + json.dumps(nested_control)
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize("malformed_prefix", ["Review: [pending\n", "Note: {pending\n"])
+def test_iter_json_objects_requires_diagnostic_label_for_prose_recovery(
+    malformed_prefix,
+):
+    """An arbitrary pending label cannot manufacture top-level evidence."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+
+    assert norm.iter_json_objects(malformed_prefix + json.dumps(nested_control)) == []
 
 
 @pytest.mark.parametrize("approve_first", [True, False])

@@ -1,15 +1,26 @@
-### OpenCode quoted prose delimiters preserve later controls
+### OpenCode quoted prose and unfinished wrappers preserve control identity
 
-- Prevent a quoted prose brace from starting a synthetic JSON container that
-  consumes a later independent exact-run control. RED commit
+- Ignore `{` and `[` while they occur inside prose quotation state; an
+  unfinished quote remains fail-closed rather than promoting a quoted
+  multi-line control. Keep unfinished invalid-token wrappers fail-closed unless
+  the nested value follows the exact newline-separated
+  `Diagnostic: [pending` or `Diagnostic: {pending` recovery frame.
+- Replace the Strix runtime-quality self-test's stale `decoder.raw_decode`
+  implementation-string assertion with its executable normalizer CLI contract;
+  that contract now includes a quoted-brace transcript before a valid current-run
+  control. Exact successor head `618471110757c74bcf6b7ac3a5783989dd010213`
+  produced 11 focused RED failures across three test-first cycles plus the
+  expected Strix self-test failures; the repaired focused normalizer suite
+  passes 133/133 with 100% statement,
+  branch, and public-doc coverage for the target module. The complete
+  repository suite passes 5,334 tests with 10 optional skips and 40 subtests.
+- Concurrent RED commit
   `4de4805502e0fa2cae1178919ec31eec9fcd7249` binds parser and CLI
-  regressions; GREEN commit
-  `a16431475a223d213b7e827b274282feda92286c` skips bounded or
-  line-terminated top-level prose quotations while retaining malformed outer
-  wrapper suppression.
-- Replace the stale Strix self-test for removed `decoder.raw_decode` source
-  text with an executable semantic contract against the active matched-span
-  scanner. The normalizer remains executable (`100755`).
+  regressions; concurrent GREEN `a16431475a223d213b7e827b274282feda92286c`
+  first separated top-level prose quotation framing. The integrated repair
+  preserves both commits while superseding their newline-reset behavior with
+  the fail-closed unfinished-quote contract. The normalizer remains executable
+  (`100755`).
 
 ### OpenCode separatorless invalid wrappers remain fail-closed
 

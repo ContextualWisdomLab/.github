@@ -1480,33 +1480,38 @@ def iter_json_objects(text: str) -> list[Any]:
             )
         )
 
-    def bounded_prose_quote_end(index: int) -> int:
-        """Return the boundary of one top-level prose quotation."""
-        escaped_character = False
-        for quote_index in range(index + 1, len(text)):
-            quote_character = text[quote_index]
-            if quote_character in "\r\n":
-                return quote_index
-            if escaped_character:
-                escaped_character = False
-            elif quote_character == "\\":
-                escaped_character = True
-            elif quote_character == '"':
-                return quote_index
-        return len(text) - 1
+    def is_recoverable_prose_container(start_index: int, nested_index: int) -> bool:
+        """Return whether a known diagnostic frame precedes the nested value."""
+        line_start = max(
+            text.rfind("\n", 0, start_index), text.rfind("\r", 0, start_index)
+        )
+        frame_label = text[line_start + 1 : start_index].strip()
+        frame_body = text[start_index + 1 : nested_index]
+        return (
+            frame_label == "Diagnostic:"
+            and frame_body.strip() == "pending"
+            and any(newline in frame_body for newline in "\r\n")
+        )
 
     matched_spans: list[tuple[int, int, int | None, bool]] = []
     container_stack: list[tuple[str, int, bool]] = []
     blocking_depth = 0
     in_string = False
     escaped = False
-    prose_quote_end = -1
+    in_prose_quote = False
+    prose_quote_escaped = False
     for index, character in enumerate(text):
         if not container_stack:
-            if index <= prose_quote_end:
+            if in_prose_quote:
+                if prose_quote_escaped:
+                    prose_quote_escaped = False
+                elif character == "\\":
+                    prose_quote_escaped = True
+                elif character == '"':
+                    in_prose_quote = False
                 continue
             if character == '"':
-                prose_quote_end = bounded_prose_quote_end(index)
+                in_prose_quote = True
                 continue
             if character in "{[":
                 blocks_nested = blocks_nested_container(index, character)
@@ -1528,6 +1533,12 @@ def iter_json_objects(text: str) -> list[Any]:
         if character == '"':
             in_string = True
         elif character in "{[":
+            parent_closer, parent_start, parent_blocks_nested = container_stack[-1]
+            if not parent_blocks_nested and not is_recoverable_prose_container(
+                parent_start, index
+            ):
+                container_stack[-1] = (parent_closer, parent_start, True)
+                blocking_depth += 1
             blocks_nested = blocks_nested_container(index, character)
             container_stack.append(
                 ("}" if character == "{" else "]", index, blocks_nested)
