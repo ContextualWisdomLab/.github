@@ -12,6 +12,19 @@ PR code must execute on disposable, job-isolated machines without production cre
 
 R reusable jobs preserve the caller's entire R-version matrix. The OS image input is translated to a self-hosted OS label (`linux`, `windows`, `macOS`) while retaining x64, the isolation label and the original matrix image as an additional custom label. Unknown OS strings select `unsupported-os`, not Linux. Unsupported or unavailable platforms remain queued rather than silently becoming Linux or GitHub-hosted runs. A self-hosted Linux machine must be provisioned with Ubuntu 24.04-compatible userspace and existing CI dependencies; labels do not install packages.
 
+The first group-scoped R selector encoded its runner object with unescaped
+literal JSON braces inside GitHub's `format()` expression. GitHub requires
+literal braces in a format template to be doubled; the unescaped opening brace
+was parsed as a replacement field and stopped the matrix before runner
+admission. RED `f9211898d83f039cdf7ff82c8f93c72c9c10dceb`
+renders the exact workflow template for Linux, Windows, macOS and an unsupported
+OS and reproduces the failure. GREEN
+`7fc1e2e8ad5091adff6c56b501e93d1d4ac2f211` doubles only the outer braces,
+retains `{0}` and `{1}`, and passes all eight focused contracts both normally
+and with `GITHUB_ACTIONS=true`. This proves selector serialization only; it does
+not prove that the runner group, capacity, cleanup or operating-system images
+exist.
+
 ## Actual admission observation and rollout prerequisite
 
 The complete organization runner inventory read during preparation had 9 runners: 7 online Linux x64 and 2 offline. None carried `cwlab-ci-isolated`; no registered Windows or macOS runners were observed, and no verified `CWL CI isolated` group/capacity record was available. Existing groups contain privileged or workflow-restricted runners. Therefore this configuration is not runtime-ready and must not be enabled or merged before the authorized runner operator creates the dedicated group, limits its repository access, and provides disposable isolated capacity. The OpenCode group's sole runner `cwlab-s1-04` was offline; changing fallback routing does not repair it.
@@ -25,6 +38,8 @@ Permanent regression tests enumerate declarations, reject every GitHub-hosted fa
 ## Primary sources (APA 7)
 
 GitHub. (n.d.). Choosing the runner for a job. GitHub Docs. Retrieved October 3, 2026, from https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job
+
+GitHub. (n.d.). *Expressions: format*. GitHub Docs. Retrieved October 3, 2026, from https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#format
 
 GitHub. (n.d.). Self-hosted runners reference. GitHub Docs. Retrieved October 3, 2026, from https://docs.github.com/en/actions/reference/runners/self-hosted-runners
 

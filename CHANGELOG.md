@@ -4,6 +4,10 @@
   `CWL CI isolated` runner group as well as the existing platform/isolation
   labels. A durable regression rejects label-only isolated selectors, while
   workflow-specific contracts preserve dynamic matrix and trusted-main routing.
+  The reusable R matrix selector now escapes its literal JSON braces for
+  GitHub's `format()` expression, so Linux, Windows, macOS and unsupported OS
+  labels render a valid group-scoped `runs-on` object instead of failing before
+  runner admission.
   The change remains Draft/HOLD until operators provision the group, restrict
   its repository access, demonstrate disposable cleanup, and return exact-head
   canary and required-Check evidence.
