@@ -1480,13 +1480,34 @@ def iter_json_objects(text: str) -> list[Any]:
             )
         )
 
+    def bounded_prose_quote_end(index: int) -> int:
+        """Return the boundary of one top-level prose quotation."""
+        escaped_character = False
+        for quote_index in range(index + 1, len(text)):
+            quote_character = text[quote_index]
+            if quote_character in "\r\n":
+                return quote_index
+            if escaped_character:
+                escaped_character = False
+            elif quote_character == "\\":
+                escaped_character = True
+            elif quote_character == '"':
+                return quote_index
+        return len(text) - 1
+
     matched_spans: list[tuple[int, int, int | None, bool]] = []
     container_stack: list[tuple[str, int, bool]] = []
     blocking_depth = 0
     in_string = False
     escaped = False
+    prose_quote_end = -1
     for index, character in enumerate(text):
         if not container_stack:
+            if index <= prose_quote_end:
+                continue
+            if character == '"':
+                prose_quote_end = bounded_prose_quote_end(index)
+                continue
             if character in "{[":
                 blocks_nested = blocks_nested_container(index, character)
                 container_stack.append(
