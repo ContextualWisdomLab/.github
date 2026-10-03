@@ -28,6 +28,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "EmbedRelay": {
+      "description": "EmbedRelay — governed embedding-space identity, migration evidence, abstention, rollback, and target-native backfill across model changes.",
+      "topics": [
+        "embeddings",
+        "vector-migration",
+        "embedding-models",
+        "vector-search",
+        "model-migration",
+        "data-provenance",
+        "rust",
+        "retrieval",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
