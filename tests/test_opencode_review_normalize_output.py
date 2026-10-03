@@ -2535,6 +2535,38 @@ def test_iter_json_objects_skips_non_json_prose_delimiters():
     ]
 
 
+class PrefixScanCountingText(str):
+    """Count prefix-wide searches performed on an untrusted transcript."""
+
+    def __new__(cls, value):
+        """Create a string that records every rfind call."""
+
+        instance = super().__new__(cls, value)
+        instance.rfind_call_count = 0
+        return instance
+
+    def rfind(self, substring, start=None, end=None):
+        """Record one reverse search before delegating to str."""
+
+        self.rfind_call_count += 1
+        if start is None:
+            return super().rfind(substring)
+        if end is None:
+            return super().rfind(substring, start)
+        return super().rfind(substring, start, end)
+
+
+def test_iter_json_objects_does_not_rescan_prefix_per_nested_opener():
+    """Nested untrusted delimiters retain the scanner's linear-time contract."""
+
+    nested_transcript = PrefixScanCountingText(
+        "prefix " + "{x" * 64 + '{"head_sha":"head"}'
+    )
+
+    assert norm.iter_json_objects(nested_transcript) == []
+    assert nested_transcript.rfind_call_count <= 2
+
+
 @pytest.mark.parametrize("quoted_delimiter", ["{", "["])
 def test_iter_json_objects_skips_quoted_prose_delimiters(quoted_delimiter):
     """Quoted prose punctuation cannot hide a later independent control."""
