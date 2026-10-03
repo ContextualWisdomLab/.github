@@ -1,3 +1,17 @@
+### JSONC guard preserves CR and LF evidence across block comments
+
+- The OpenCode reasoning-effort guard's regex comment stripper now retains
+  every `CR` and `LF` character from removed block comments, matching the
+  protected-branch scanner for CRLF, CR-only, LF, and mixed inputs. Regression
+  contracts also keep unterminated comments and strings fail-closed and bound a
+  one-megabyte adversarial comment to two seconds. Focused normal and
+  `GITHUB_ACTIONS=true` runs each pass 16 tests; the guard and its consuming
+  OpenCode contract suite pass 70 tests with 100% statement and branch coverage.
+  The full tree passes 5,162 tests but retains the exact predecessor's unrelated
+  178 missed statements and 33 partial branches, so the repository-wide 100%
+  gate remains RED. Full-tree interrogate is likewise unchanged at 97.1%; this
+  change remains Draft/HOLD while those canonical owners are repaired.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

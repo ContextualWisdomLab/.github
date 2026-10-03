@@ -7,6 +7,18 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 OpenCode JSONC 의미 보존 delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-LINE-ENDINGS-01` — **Source repaired on `.github#2556` repair commit `8a587038571d2cc6072ad5cf95355bc4215f7170`, tree `4708bd50af971bfde7d1dbd7663a3ad6d3c4331b`; fresh exact-head hosted Checks와 독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자는 주석이 포함된 `opencode.jsonc`에서도 reasoning-effort 정책을 동일하게 검증받아야 하며, 잘못된 구성은 조용히 수용되지 않고 다음 행동이 가능한 오류로 끝나야 한다. |
+| TRD / RCA | 관측된 PR head `42cac70c776d62b40cc0719d839b3c55c2a10ac1`의 정규식 replacer가 블록 주석을 `"\n" * count("\n")`로 바꿔 CRLF를 LF로 변환하고 CR-only 줄 경계를 삭제했다. 문자열·주석 미종결 입력은 계속 `json.loads`에서 거부되므로 해당 경계는 동작 변경 없이 실패-폐쇄 계약으로 고정했다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 thin workflow 호출 계약을 소유한다. OpenCode caller는 이 보호된 owner 구현을 소비하며 자체 JSONC parser를 복사하지 않는다. 외부 DB·ontology·UI 경계는 없으므로 ERD, ontology 변경, Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → comment/string classifier → CR/LF-preserving replacement → json.loads → reasoning-effort validation`. 별도 service·aggregate·database가 없으므로 class UML과 ERD는 N/A이며 이 데이터 흐름이 필요한 기술 경계를 완전하게 표현한다. |
+| RED → GREEN evidence | 새 CRLF/CR/LF 혼합 회귀는 defect head에서 `1 failed, 14 passed`였다. 최소 수정은 제거된 주석에서 CR/LF 문자만 원순서로 유지한다. 이후 focused suite는 normal 및 `GITHUB_ACTIONS=true`에서 각각 `16 passed`; guard+소비 contract는 `70 passed`, 73/73 statements와 24/24 branches다. 보호 브랜치 기준 스캐너와 결정적 2,000-case corpus가 동등했고, 1 MiB 관측은 기존 0.076초/현 구현 0.021초였지만 보편적 배속 주장으로 승격하지 않는다. 전체 tree는 `5,162 passed, 11 skipped, 40 subtests` 뒤 coverage 99%로 멈췄고, predecessor worktree도 `5,158 passed, 11 skipped, 40 subtests` 뒤 동일한 178 missed statements/33 partial branches로 멈췄다. Full-tree interrogate도 두 tree 모두 97.1%다. 따라서 repository-wide coverage/docstring RED는 이 delta가 만든 회귀가 아니며 별도 canonical owners를 우회해 고치지 않는다. |
+| Action / 다음 gate | PR branch를 concurrent update와 대조한 뒤 일반 push하고, PR 설명에서 고정 배속 주장을 제거한다. 새 exact head의 required Checks, unresolved thread, qualifying independent approval을 다시 수집한다. 모든 조건이 GREEN일 때만 ordinary merge/auto-merge한다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
