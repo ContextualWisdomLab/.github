@@ -30,7 +30,8 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         """Require every ordinary job to use isolated self-hosted Linux runners."""
         workflow = path.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow, path)
-        self.assertIn("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]", workflow, path)
+        self.assertIn("group: CWL CI isolated", workflow, path)
+        self.assertIn("labels: [self-hosted, linux, x64, cwlab-ci-isolated]", workflow, path)
 
     def test_pr_review_autofix_uses_explicit_supported_image(self) -> None:
         """Require the PR Review Autofix job to use isolated self-hosted Linux."""
@@ -40,7 +41,7 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         """Require the fix-scheduler's fallback to use isolated self-hosted Linux."""
         workflow = PR_REVIEW_FIX_SCHEDULER.read_text(encoding="utf-8")
         self.assertNotIn("ubuntu-latest", workflow)
-        self.assertIn("fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]')", workflow)
+        self.assertIn('fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')', workflow)
 
     def test_hourly_review_repair_uses_explicit_supported_image(self) -> None:
         """Require hourly control jobs to use the dedicated central group."""
@@ -64,7 +65,7 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
             )
             self.assertIn('"group":"CWL central control"', selector)
             self.assertIn('"labels":["self-hosted","linux","x64"]', selector)
-            self.assertIn("|| '[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]'", selector)
+            self.assertIn("|| '{\"group\":\"CWL CI isolated\",\"labels\":[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]}'", selector)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
         """Require validation, scan, and attempt wake jobs in the dedicated group."""
@@ -77,7 +78,8 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         """Require all three Python Security jobs to select isolated self-hosted Linux."""
         workflow = PYTHON_SECURITY.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]"), 3)
+        self.assertEqual(workflow.count("group: CWL CI isolated"), 3)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]"), 3)
 
 
 if __name__ == "__main__":

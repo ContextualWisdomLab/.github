@@ -41,7 +41,7 @@ jobs:
         && github.event.action != 'converted_to_draft'
         && github.event.pull_request.head.repo.full_name == github.repository
       )
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["self-hosted","linux","x64","cwlab-ci-isolated"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 5
     outputs:
       admitted: ${{ steps.live_head.outputs.admitted }}
@@ -137,7 +137,7 @@ jobs:
     # PR/REPO lookup naturally falls through to "scan everything" for that
     # path, matching strix.yml's identical repository_dispatch behavior.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["self-hosted","linux","x64","cwlab-ci-isolated"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -193,7 +193,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'closed' || github.event.action == 'converted_to_draft')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["self-hosted","linux","x64","cwlab-ci-isolated"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     # Bound this job well short of GitHub's 360-minute platform default. Its
     # only step is a single-repository, status-filtered gh api --paginate
     # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
@@ -371,7 +371,7 @@ jobs:
   noema-review:
     name: noema-review
     needs: [admit-current-head, changed-scope]
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["self-hosted","linux","x64","cwlab-ci-isolated"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own
@@ -1008,7 +1008,7 @@ jobs:
       && needs.noema-review.result == 'failure'
       && needs.noema-review.outputs.transport_capacity_unavailable == 'true'
       && needs.noema-review.outputs.transport_retry_eligible == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["self-hosted","linux","x64","cwlab-ci-isolated"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 10
     permissions:
       contents: write

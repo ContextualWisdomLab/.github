@@ -35,7 +35,7 @@ def test_control_pool_only_for_central_main_caller() -> None:
     runs_on = _job()["runs-on"]
     assert runs_on == (
         f"${{{{ github.workflow_ref == '{CENTRAL_CALLER}' && {CONTROL} "
-        "|| fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]') }}"
+        "|| fromJSON('{\"group\":\"CWL CI isolated\",\"labels\":[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]}') }}"
     )
 
 

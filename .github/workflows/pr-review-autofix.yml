@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   autofix:
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     # No job-level timeout-minutes here, deliberately. This job's dominant
     # cost is `opencode run` (up to two invocations: the main autofix pass,
     # and a base-merge conflict-resolution pass) -- a job-level wall-clock

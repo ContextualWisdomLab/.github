@@ -68,7 +68,9 @@ permissions:
 
 jobs:
   auto-rebase:
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read         # checkout only; force-push uses the app or PR-write token below
       pull-requests: write   # read PR queue and manage labels

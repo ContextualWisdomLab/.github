@@ -21,7 +21,8 @@ class RequiredSecurityRunnerImageContract(unittest.TestCase):
         """
         workflow = SECURITY_SCAN.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]"), 6)
+        self.assertEqual(workflow.count("group: CWL CI isolated"), 6)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]"), 6)
 
     def test_sast_semgrep_uses_explicit_supported_image(self) -> None:
         """Require the SAST Semgrep job to use isolated self-hosted Linux.
@@ -36,7 +37,8 @@ class RequiredSecurityRunnerImageContract(unittest.TestCase):
         """
         workflow = SAST_SEMGREP.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]"), 1)
+        self.assertEqual(workflow.count("group: CWL CI isolated"), 1)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]"), 1)
 
 
 if __name__ == "__main__":

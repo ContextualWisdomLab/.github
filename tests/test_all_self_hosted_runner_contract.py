@@ -36,7 +36,8 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
             if line.strip() == 'runs-on:':
                 group = lines[index + 1]
                 assert any(name in group for name in (
-                    'CWL central control', 'CWL central CodeQL', 'CWL central OpenCode'
+                    'CWL central control', 'CWL central CodeQL',
+                    'CWL central OpenCode', 'CWL CI isolated',
                 )), (path, group)
             else:
                 assert 'cwlab-ci-isolated' in line, (path, line)
@@ -50,3 +51,17 @@ def test_isolated_fallback_never_selects_privileged_group() -> None:
                 fallback = line.rsplit('||', 1)[1]
                 assert 'cwlab-ci-isolated' in fallback, (path, fallback)
                 assert 'CWL central' not in fallback and 'CWL MCP' not in fallback
+
+
+def test_isolated_label_is_scoped_to_dedicated_runner_group() -> None:
+    """A mutable label cannot replace the isolated runner access boundary."""
+    for path in sorted(Path('.github/workflows').glob('*.yml')):
+        lines = path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            if not re.match(r'^    runs-on:', line):
+                continue
+            block = line
+            if line.strip() == 'runs-on:':
+                block += '\n' + '\n'.join(lines[index + 1:index + 3])
+            if 'cwlab-ci-isolated' in block:
+                assert 'CWL CI isolated' in block, (path, block)

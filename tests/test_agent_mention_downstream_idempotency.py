@@ -140,5 +140,5 @@ def test_forwarders_restrict_self_hosted_admission_to_trusted_main() -> None:
         assert "endsWith(github.workflow_ref, '@refs/heads/main')" in selector
         assert '"group":"CWL MCP remediation"' in selector
         assert '"labels":["self-hosted","linux","x64"]' in selector
-        assert "|| fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]')" in selector
+        assert '|| fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')' in selector
         assert "actions/checkout@" not in text

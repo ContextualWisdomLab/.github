@@ -248,7 +248,8 @@ def test_quality_workflow_pins_supported_runner_images() -> None:
     """Keep exact supply-chain evidence on isolated self-hosted Linux."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
-    assert workflow.count("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]") == 1
+    assert workflow.count("group: CWL CI isolated") == 1
+    assert workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]") == 1
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:

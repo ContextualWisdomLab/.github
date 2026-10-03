@@ -71,7 +71,9 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -126,7 +128,9 @@ jobs:
   osv-scan:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     permissions:
       actions: read
@@ -352,7 +356,9 @@ jobs:
   dependency-review:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       pull-requests: read
@@ -436,7 +442,9 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -526,7 +534,9 @@ jobs:
   trivy-fs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -633,7 +643,9 @@ jobs:
   scorecard:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:

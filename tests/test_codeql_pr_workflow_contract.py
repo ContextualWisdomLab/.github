@@ -1158,7 +1158,10 @@ def test_codeql_control_routing_keeps_pr_workflows_hosted() -> None:
         choices = re.findall(r"'([^']*)'", selector)
         assert choices[0] == trusted
         assert json.loads(choices[1]) == {"group": "CWL central control", "labels": ["self-hosted", "linux", "x64"]}
-        assert json.loads(choices[2]) == ["self-hosted", "linux", "x64", "cwlab-ci-isolated"]
+        assert json.loads(choices[2]) == {
+            "group": "CWL CI isolated",
+            "labels": ["self-hosted", "linux", "x64", "cwlab-ci-isolated"],
+        }
 
 
 def test_codeql_pr_rejects_invalid_required_run_time(tmp_path: Path) -> None:

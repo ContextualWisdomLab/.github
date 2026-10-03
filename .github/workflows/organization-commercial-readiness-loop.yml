@@ -16,7 +16,9 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     permissions:
       contents: read

@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 isolated self-hosted runner authority boundary
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#2565@d6ba56d04e22476b2ea41bfe7bb26e2cbc98f98f` routed ordinary jobs and non-main fallbacks by the mutable `cwlab-ci-isolated` label alone, although the PR's own doctoring stated that a generic label does not attest separation; GitHub does not validate OS/architecture label truth, so a privileged or persistent runner with matching labels and repository access could receive untrusted work | RED contract `test_isolated_label_is_scoped_to_dedicated_runner_group` failed first at `.github/workflows/actions-queue-health.yml`; the reviewed tree contained 63 affected `runs-on` declarations across direct, conditional, CodeQL and R-matrix selectors | At the central `.github` owner, require both the dedicated `CWL CI isolated` runner group and existing labels for every isolated selector; preserve trusted-main groups and repository predicates; update exact workflow oracles and rollout doctoring; keep Draft/HOLD until the group, access policy, disposable capacity, cleanup proof, canary and exact-head Checks exist | **Proposed / local RED→GREEN complete; operator capacity, exact-head hosted Checks and qualifying independent approval required** |
+
 ## 2026-10-01 Maturin response-lifecycle coverage closure
 
 | Gap | Exact evidence | Action | Status |

@@ -29,7 +29,9 @@ permissions: read-all
 jobs:
   analysis:
     name: Scorecard analysis
-    runs-on: ["self-hosted", "linux", "x64", "cwlab-ci-isolated"]
+    runs-on:
+      group: CWL CI isolated
+      labels: ["self-hosted", "linux", "x64", "cwlab-ci-isolated"]
     permissions:
       security-events: write
       id-token: write

@@ -15,7 +15,9 @@ permissions:
 jobs:
   collect:
     name: Collect exact-head queue evidence
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 30
     permissions:
       contents: read

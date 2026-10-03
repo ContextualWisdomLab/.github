@@ -50,7 +50,9 @@ jobs:
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
     if: github.event.action != 'closed'
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       pull-requests: read

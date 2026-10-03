@@ -43,7 +43,9 @@ permissions:
 
 jobs:
   generate-sbom:
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       # write is needed for release-asset upload and dependency submission.
       contents: write

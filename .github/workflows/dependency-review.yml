@@ -86,7 +86,9 @@ permissions:
 
 jobs:
   dependency-review:
-    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     env:
       # Opts every JS action this job runs (checkout, dependency-review-action)
       # into the Node 24 actions runtime ahead of GitHub's default cutover,
