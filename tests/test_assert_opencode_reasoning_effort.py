@@ -149,6 +149,7 @@ def test_strip_jsonc_comments_preserves_block_comment_line_endings():
 @pytest.mark.parametrize(
     "text",
     [
+        "{}/*/",
         '{"a": 1, /* unterminated block comment',
         '{"a": "unterminated // string',
     ],

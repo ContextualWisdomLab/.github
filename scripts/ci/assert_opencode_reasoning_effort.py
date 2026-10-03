@@ -45,7 +45,9 @@ def strip_jsonc_comments(text: str) -> str:
         if string_literal is not None:
             return string_literal
         comment = match.group(2) or ""
-        if comment.startswith("/*") and not comment.endswith("*/"):
+        if comment.startswith("/*") and (
+            len(comment) < 4 or not comment.endswith("*/")
+        ):
             return comment
         return "".join(
             character

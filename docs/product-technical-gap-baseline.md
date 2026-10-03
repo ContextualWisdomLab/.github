@@ -75,6 +75,18 @@ Total output lines: 3890
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 OpenCode JSONC delimiter-identity delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-DELIMITER-IDENTITY-01` — **`.github#2556@d6931345e5fbd25de3c063b04eba9790eda307a5`에서 RED 재현 후 canonical parser와 executable corpus를 수리함; fresh exact-head hosted Checks·독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자는 손상된 `opencode.jsonc`의 주석 opener와 closer가 실제로 분리된 delimiter인지 검증받아야 하며, 완전한 JSON 뒤에 붙은 malformed suffix가 제거되어 정책 검사를 통과해서는 안 된다. |
+| TRD / RCA | EOF-bounded block-comment 정규식이 `/*/`를 하나의 후보로 소비한 뒤 replacer의 `endswith("*/")`가 opener offset 1의 `*`를 closer로 재사용했다. 따라서 `{}/*/`가 `{}`로 축약되어 `json.loads`에 승인됐다. 최소 수리는 block comment 길이가 4 미만이면 미종결로 보존해 서로 다른 `/*`와 `*/`를 요구한다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 회귀 corpus를 소유한다. OpenCode workflow는 이 canonical guard만 호출하며 leaf workaround나 별도 parser를 추가하지 않는다. DB·ontology·UI 변화가 없어 ERD와 Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → distinct delimiter check → malformed suffix preservation → json.loads fail-closed → reasoning-effort validation`. 별도 aggregate/class/database가 없으므로 이 데이터 흐름이 기술 경계를 완전하게 표현한다. |
+| RED → GREEN evidence | exact defect head에서 새 `{}/*/` load regression은 `1 failed, 19 passed`였다. 최소 delimiter 수리 후 focused suite는 20 passed다. `{'/', '*', 'a', '"', '\\'}`로 길이 0–7 suffix를 만든 결정적 97,656-input corpus는 pre-regression reference `f8e55ec5d58f6cc3bbb60671396d2e3929616086`와 parse acceptance/value 차이 0건이며, 32,000 repeated opener 입력은 0.0019초에 보존됐다. complete warning-fatal suite는 `5,277 passed, 10 skipped, 40 subtests`, production coverage는 18,173/18,173 statements와 7,468/7,468 branches다. public-doc 100%, compileall, diff check도 GREEN이다. 이는 관측 corpus이며 보편적 성능 주장으로 승격하지 않는다. |
+| Action / 다음 gate | live PR head가 그대로일 때만 force 없이 게시한다. 이후 새 exact head의 hosted security/quality Checks, unresolved threads, qualifying independent approval을 재수집한다. |
+
 ### 2026-10-03 OpenCode JSONC malformed-input runtime delta
 
 | 항목 | 근거 / 결정 |

@@ -1,3 +1,16 @@
+### JSONC guard rejects overlapping block-comment delimiters
+
+- The OpenCode reasoning-effort guard no longer treats `/*/` as a complete
+  block comment by reusing the opener's `*` as the closer. A complete JSON
+  value followed by that malformed suffix had been reduced to valid JSON and
+  silently accepted. The guard now requires distinct opening and closing
+  delimiters, while preserving the bounded EOF scan and all valid empty block
+  comments. The regression failed on exact head `d6931345` and passes after
+  the repair; a 97,656-input differential corpus matches the pre-regression
+  reference `f8e55ec5` with zero parse-result differences. The complete
+  warning-fatal suite passes 5,277 tests with 10 optional skips and 40
+  subtests; all 18,173 production statements and 7,468 branches are covered.
+
 ### JSONC guard bounds unterminated construct scanning
 
 - The OpenCode reasoning-effort guard now consumes an unterminated string or
