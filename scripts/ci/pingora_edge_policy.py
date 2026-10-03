@@ -614,8 +614,6 @@ def _load_raw_file_bytes(
         return raw
     if encoding == "none":
         raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
-    if encoding != "base64":
-        raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
     encoded = payload.get("content")
     if not isinstance(encoded, str):
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
