@@ -1540,11 +1540,14 @@ def iter_json_objects(text: str) -> list[Any]:
             run_length += 1
         return run_length
 
+    markdown_container_characters = frozenset(" \t>+-*.)0123456789")
+
     def is_markdown_fence_prefix(start_index: int, end_index: int) -> bool:
         """Return whether a line prefix contains only Markdown containers."""
-        prefix = text[start_index:end_index]
-        container = r"(?:[ \t]{0,3}>[ \t]?|[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]{1,4})"
-        return re.fullmatch(rf"(?:{container})*[ \t]{{0,3}}", prefix) is not None
+        return all(
+            text[index] in markdown_container_characters
+            for index in range(start_index, end_index)
+        )
 
     matched_spans: list[tuple[int, int, int | None, bool]] = []
     container_stack: list[tuple[str, int, bool]] = []
