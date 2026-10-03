@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2025-02-20 - Update subprocess.Popen Test Mocks When Adding Keyword Arguments
+**Vulnerability:** Subprocess Mock Signature Mismatch (Test Failure)
+**Learning:** `subprocess.Popen`에 `shell=False`와 같은 보안 강화를 위한 인자를 추가할 때, 기존 테스트의 mock 함수(`monkeypatch.setattr(subprocess, 'Popen', mock_popen)`) 시그니처가 추가된 키워드 인자를 처리하지 못하면 `TypeError: mock_popen() got an unexpected keyword argument 'shell'` 에러가 발생하며 테스트가 실패합니다.
+**Prevention:** `subprocess.Popen`이나 `subprocess.run` 호출부에 새로운 키워드 인자를 추가할 때는 항상 테스트 파일들을 검색하여 해당 함수를 모의(mock)하는 코드가 있는지 확인하고, 모의 함수의 시그니처에 `**kwargs`를 추가하여 예기치 않은 테스트 실패를 방지해야 합니다.
