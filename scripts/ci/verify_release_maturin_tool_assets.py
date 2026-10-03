@@ -120,6 +120,7 @@ def _download(filename: str) -> bytes:
 
 
 def _binary(raw: bytes, filename: str) -> bytes:
+    """Extract the single bounded executable from an approved asset archive."""
     if filename.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
@@ -168,6 +169,7 @@ def verify_assets(evidence: dict, reader: str, fetch=_download) -> None:
 
 
 def main() -> None:
+    """Verify fixed Maturin release assets from command-line inputs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--asset-root", type=Path)
     args = parser.parse_args()
