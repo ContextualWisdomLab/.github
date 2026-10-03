@@ -1480,17 +1480,46 @@ def iter_json_objects(text: str) -> list[Any]:
             )
         )
 
+    diagnostic_opener_indices: set[int] = set()
+    diagnostic_label = "Diagnostic:"
+    diagnostic_label_index = 0
+    diagnostic_label_complete = False
+    diagnostic_prefix_invalid = False
+    for diagnostic_index, diagnostic_character in enumerate(text):
+        if diagnostic_character in "\r\n":
+            diagnostic_label_index = 0
+            diagnostic_label_complete = False
+            diagnostic_prefix_invalid = False
+            continue
+        if diagnostic_prefix_invalid:
+            continue
+        if not diagnostic_label_complete:
+            if diagnostic_label_index == 0 and diagnostic_character.isspace():
+                continue
+            if (
+                diagnostic_label_index < len(diagnostic_label)
+                and diagnostic_character == diagnostic_label[diagnostic_label_index]
+            ):
+                diagnostic_label_index += 1
+                diagnostic_label_complete = diagnostic_label_index == len(
+                    diagnostic_label
+                )
+                continue
+            diagnostic_prefix_invalid = True
+            continue
+        if diagnostic_character.isspace():
+            continue
+        if diagnostic_character in "{[":
+            diagnostic_opener_indices.add(diagnostic_index)
+        diagnostic_prefix_invalid = True
+
     def is_recoverable_prose_container(start_index: int, nested_index: int) -> bool:
         """Return whether a known diagnostic frame precedes the nested value."""
-        line_start = max(
-            text.rfind("\n", 0, start_index), text.rfind("\r", 0, start_index)
-        )
-        frame_label = text[line_start + 1 : start_index].strip()
+        if start_index not in diagnostic_opener_indices:
+            return False
         frame_body = text[start_index + 1 : nested_index]
-        return (
-            frame_label == "Diagnostic:"
-            and frame_body.strip() == "pending"
-            and any(newline in frame_body for newline in "\r\n")
+        return frame_body.strip() == "pending" and any(
+            newline in frame_body for newline in "\r\n"
         )
 
     matched_spans: list[tuple[int, int, int | None, bool]] = []
