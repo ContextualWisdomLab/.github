@@ -1,7 +1,9 @@
+import hashlib
 import json
 import runpy
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -190,7 +192,9 @@ def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path)
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
-def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(tmp_path):
+def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(
+    tmp_path,
+):
     """A relative, ``..``-laden symlink target that exits the copied tree is also rejected."""
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("host-only-content", encoding="utf-8")
@@ -263,7 +267,9 @@ def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
-def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(tmp_path):
+def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(
+    tmp_path,
+):
     """A symlink resolved twice in one chain, not as part of a loop, is accepted.
 
     ``link -> shared/../shared/file.txt`` references ``shared`` twice, but
@@ -339,7 +345,9 @@ def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tm
     assert not (copied / "dangling.txt").exists()
 
 
-def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(
+    tmp_path,
+):
     """A benign internal symlink is accepted even when an *ancestor* of the sandbox
     root is itself reached through a symlink (for example a symlinked default
     temp directory, unrelated to anything the copied repository controls).
@@ -369,7 +377,9 @@ def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_vi
     assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(
+    tmp_path,
+):
     """A genuinely escaping symlink is still rejected when the sandbox root is
     itself reached through a symlinked ancestor -- walking from the resolved
     root (this fix) must not weaken the escape check itself.
@@ -454,6 +464,48 @@ def test_timeout_output_text_normalizes_subprocess_payloads():
     assert sandboxed_verify.timeout_output_text(None) == ""
     assert sandboxed_verify.timeout_output_text(b"byte-output") == "byte-output"
     assert sandboxed_verify.timeout_output_text("text-output") == "text-output"
+
+
+def test_forward_bytes_flushes_text_before_binary_output():
+    """Buffered wrapper diagnostics must precede forwarded command bytes."""
+    events = []
+
+    class BinaryStream:
+        def write(self, output):
+            events.append(("binary-write", output))
+
+        def flush(self):
+            events.append(("binary-flush", None))
+
+    class TextStream:
+        buffer = BinaryStream()
+
+        def flush(self):
+            events.append(("text-flush", None))
+
+    sandboxed_verify._forward_bytes(TextStream(), b"command-output")
+
+    assert events == [
+        ("text-flush", None),
+        ("binary-write", b"command-output"),
+        ("binary-flush", None),
+    ]
+
+
+def test_output_bytes_and_text_only_stream_fallback():
+    """String fallbacks preserve text when no binary stream is available."""
+    events = []
+
+    class TextOnlyStream:
+        def write(self, output):
+            events.append(("write", output))
+
+        def flush(self):
+            events.append(("flush", None))
+
+    assert sandboxed_verify._output_bytes("text-output") == b"text-output"
+    sandboxed_verify._forward_bytes(TextOnlyStream(), b"command-output")
+    assert events == [("write", "command-output"), ("flush", None)]
 
 
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):
@@ -544,6 +596,442 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     shutil.rmtree(payload["sandbox"], ignore_errors=True)
 
 
+def test_main_can_write_wrapper_result_to_exclusive_file(tmp_path, capsys):
+    """A caller can separate trusted control evidence from command stdout."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "handoff" / "result.txt"
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            sys.executable,
+            "-c",
+            "import sys; "
+            "sys.stdout.buffer.write(b'SANDBOXED_VERIFY_RESULT attacker-controlled\\n{\\\"fake\\\": true}') ; "
+            "sys.stderr.buffer.write(b'no-final-newline')",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "attacker-controlled" in captured.out
+    assert any(line == sandboxed_verify.RESULT_MARKER + " attacker-controlled" for line in captured.out.splitlines())
+    assert result_file.read_text(encoding="utf-8").startswith(sandboxed_verify.RESULT_MARKER + " {")
+    stdout_file = result_file.with_name(result_file.name + ".stdout")
+    stderr_file = result_file.with_name(result_file.name + ".stderr")
+    stdout_bytes = stdout_file.read_bytes()
+    stderr_bytes = stderr_file.read_bytes()
+    payload = json.loads(result_file.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert stdout_bytes == b'SANDBOXED_VERIFY_RESULT attacker-controlled\n{"fake": true}'
+    assert stderr_bytes == b"no-final-newline"
+    assert payload["schema"] == "sandboxed_verify.execution.v1"
+    assert payload["result_state"] == "completed"
+    assert payload["timed_out"] is False
+    assert payload["helper_id"] == "ContextualWisdomLab/.github:sandboxed_verify"
+    assert payload["runtime"]["implementation"]
+    assert payload["runtime"]["python_version"]
+    assert payload["isolation"] == {
+        "network_enforced": False,
+        "os_process_isolation": "none",
+        "workspace": "copy+scrubbed-env",
+    }
+    assert payload["stdout"] == {
+        "file": stdout_file.name,
+        "sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "size_bytes": len(stdout_bytes),
+    }
+    assert payload["stderr"] == {
+        "file": stderr_file.name,
+        "sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "size_bytes": len(stderr_bytes),
+    }
+    with pytest.raises(ValueError, match="result file already exists"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=repo,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=result_file,
+        )
+
+
+def test_result_envelope_is_not_visible_before_streams_are_complete(monkeypatch, tmp_path):
+    """The envelope path becomes visible only after both streams are complete."""
+    result_file = tmp_path / "evidence" / "result.json"
+    first_stream_started = threading.Event()
+    release_first_stream = threading.Event()
+    envelope_write_started = threading.Event()
+    release_envelope_write = threading.Event()
+    original_write_all = sandboxed_verify._write_all
+
+    def pause_publication(file_descriptor, content):
+        if content == b"stdout":
+            first_stream_started.set()
+            assert release_first_stream.wait(timeout=2)
+        elif content == b"envelope":
+            envelope_write_started.set()
+            assert release_envelope_write.wait(timeout=2)
+        original_write_all(file_descriptor, content)
+
+    monkeypatch.setattr(sandboxed_verify, "_write_all", pause_publication)
+    writer = threading.Thread(
+        target=sandboxed_verify._write_result_bundle,
+        args=(result_file, b"envelope", b"stdout", b"stderr"),
+    )
+    writer.start()
+    assert first_stream_started.wait(timeout=2)
+    try:
+        assert not result_file.exists()
+    finally:
+        release_first_stream.set()
+
+    assert envelope_write_started.wait(timeout=2)
+    try:
+        assert not result_file.exists()
+    finally:
+        release_envelope_write.set()
+        writer.join(timeout=2)
+
+    assert not writer.is_alive()
+    assert result_file.read_bytes() == b"envelope"
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == b"stdout"
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == b"stderr"
+
+
+def test_result_parent_relative_and_component_failures(monkeypatch, tmp_path):
+    """Relative traversal handles dot, parent, and creation-race branches."""
+
+    class Parent:
+        def __init__(self, *parts):
+            self.parts = parts
+
+        def is_absolute(self):
+            return False
+
+        def __str__(self):
+            return "/".join(self.parts)
+
+    directory_fd = sandboxed_verify._open_result_parent(Parent("."))
+    sandboxed_verify.os.close(directory_fd)
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify._open_result_parent(Parent(".."))
+
+    monkeypatch.chdir(tmp_path)
+    original_mkdir = sandboxed_verify.os.mkdir
+
+    def racing_mkdir(path, mode=0o777, *, dir_fd=None):
+        original_mkdir(path, mode=mode, dir_fd=dir_fd)
+        raise FileExistsError
+
+    monkeypatch.setattr(sandboxed_verify.os, "mkdir", racing_mkdir)
+    directory_fd = sandboxed_verify._open_result_parent(Path("raced"))
+    sandboxed_verify.os.close(directory_fd)
+
+    original_open = sandboxed_verify.os.open
+    open_attempts = 0
+
+    def failing_retry(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal open_attempts
+        if path == "denied":
+            open_attempts += 1
+            if open_attempts == 1:
+                raise FileNotFoundError
+            raise OSError("denied")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(sandboxed_verify.os, "mkdir", original_mkdir)
+    monkeypatch.setattr(sandboxed_verify.os, "open", failing_retry)
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify._open_result_parent(Path("denied"))
+
+
+def test_result_bundle_rejects_existing_stream(tmp_path):
+    """A pre-existing stream prevents publication and remains untouched."""
+    result_file = tmp_path / "result.json"
+    stdout_file = result_file.with_name(result_file.name + ".stdout")
+    stdout_file.write_bytes(b"occupied")
+
+    with pytest.raises(ValueError, match="result bundle file already exists"):
+        sandboxed_verify._write_result_bundle(
+            result_file,
+            b"envelope",
+            b"stdout",
+            b"stderr",
+        )
+
+    assert stdout_file.read_bytes() == b"occupied"
+    assert not result_file.exists()
+
+
+def test_result_bundle_cleans_raced_publication(monkeypatch, tmp_path):
+    """A final-name race removes only this writer's private bundle files."""
+    result_file = tmp_path / "result.json"
+    original_unlink = sandboxed_verify.os.unlink
+
+    def reject_publication(*_args, **_kwargs):
+        raise FileExistsError
+
+    def unlink_then_report_missing(path, *, dir_fd=None):
+        original_unlink(path, dir_fd=dir_fd)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(sandboxed_verify.os, "link", reject_publication)
+    monkeypatch.setattr(sandboxed_verify.os, "unlink", unlink_then_report_missing)
+    with pytest.raises(ValueError, match="result file already exists"):
+        sandboxed_verify._write_result_bundle(
+            result_file,
+            b"envelope",
+            b"stdout",
+            b"stderr",
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_result_file_rejects_symlinked_parent(tmp_path):
+    """The trusted handoff must not follow a caller-controlled parent symlink."""
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=tmp_path,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=link / "result.json",
+        )
+
+
+def test_result_file_rejects_existing_symlink_ancestor(tmp_path):
+    """An existing nested directory must not hide a symlink ancestor."""
+    target = tmp_path / "target"
+    nested = target / "nested"
+    nested.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=tmp_path,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=link / "nested" / "result.json",
+        )
+
+    assert not (nested / "result.json").exists()
+
+
+def test_result_bundle_preserves_large_binary_streams(tmp_path, capfdbinary):
+    """Dedicated handoff files preserve large invalid UTF-8 output exactly."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "evidence" / "result.json"
+    stdout_bytes = (b"\xff\x00marker\n" * 131_072) + b"tail"
+    stderr_bytes = b"\xfejson:{not-json}\r\nend"
+    command = (
+        "import sys; "
+        "sys.stdout.buffer.write((b'\\xff\\x00marker\\n' * 131072) + b'tail'); "
+        "sys.stderr.buffer.write(b'\\xfejson:{not-json}\\r\\nend')"
+    )
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(result_file),
+                "--",
+                sys.executable,
+                "-c",
+                command,
+            ]
+        )
+        == 0
+    )
+    capfdbinary.readouterr()
+
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == stdout_bytes
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == stderr_bytes
+
+
+def test_result_file_distinguishes_timeout_from_exit_124(tmp_path, capsys):
+    """A real timeout and a command exit 124 have different result states."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    timeout_result = tmp_path / "timeout" / "result.json"
+    exit_result = tmp_path / "exit" / "result.json"
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--timeout",
+                "1",
+                "--result-file",
+                str(timeout_result),
+                "--",
+                sys.executable,
+                "-c",
+                "import time; print('partial', flush=True); time.sleep(2)",
+            ]
+        )
+        == 124
+    )
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(exit_result),
+                "--",
+                sys.executable,
+                "-c",
+                "raise SystemExit(124)",
+            ]
+        )
+        == 124
+    )
+    capsys.readouterr()
+
+    timeout_payload = json.loads(
+        timeout_result.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    exit_payload = json.loads(
+        exit_result.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    assert timeout_payload["result_state"] == "timed_out"
+    assert timeout_payload["timed_out"] is True
+    assert exit_payload["result_state"] == "completed"
+    assert exit_payload["timed_out"] is False
+    assert timeout_result.with_name(timeout_result.name + ".stdout").read_bytes() == b"partial\n"
+
+
+def test_result_file_failure_is_bounded_and_always_cleans_sandbox(monkeypatch, tmp_path, capsys):
+    """A successful command with a handoff collision returns 125 and cleans up."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sandbox = tmp_path / "sandbox"
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    def make_sandbox(*, prefix):
+        assert prefix == "sandboxed-verify-"
+        sandbox.mkdir()
+        return str(sandbox)
+
+    monkeypatch.setattr(sandboxed_verify.tempfile, "mkdtemp", make_sandbox)
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(result_file),
+                "--",
+                "true",
+            ]
+        )
+        == 125
+    )
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "result file already exists" in captured.err
+    assert not sandbox.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_exit_code"),
+    [
+        ((sys.executable, "-c", "raise SystemExit(2)"), 2),
+        ((sys.executable, "-c", "raise SystemExit(124)"), 124),
+    ],
+)
+def test_result_file_failure_preserves_command_failure(
+    command, expected_exit_code, tmp_path, capsys
+):
+    """Evidence rejection must not mask the command's nonzero exit status."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            *command,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == expected_exit_code
+    assert "result file already exists" in captured.err
+
+
+def test_result_file_failure_preserves_timeout_status(monkeypatch, tmp_path, capsys):
+    """Evidence rejection must not mask the wrapper's timeout status."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    def time_out(*_args, **_kwargs):
+        raise sandboxed_verify.subprocess.TimeoutExpired(
+            cmd=("slow-command",), timeout=1, output=b"partial-out", stderr=b"partial-err"
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", time_out)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--timeout",
+            "1",
+            "--result-file",
+            str(result_file),
+            "--",
+            "slow-command",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 124
+    assert "command timed out after 1s" in captured.err
+    assert "result file already exists" in captured.err
+
+
 def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):
     """A symlink-escape rejection from ``copy_workspace`` must not surface as an
     uncaught traceback.
@@ -561,9 +1049,7 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     repo.mkdir()
     (repo / "escape-link").symlink_to(outside)
 
-    exit_code = sandboxed_verify.main(
-        ["--repo-root", str(repo), "--", "true"]
-    )
+    exit_code = sandboxed_verify.main(["--repo-root", str(repo), "--", "true"])
     captured = capsys.readouterr()
 
     assert exit_code == 125
@@ -573,6 +1059,36 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
+
+
+def test_copy_rejection_is_recorded_in_trusted_result_bundle(tmp_path):
+    """A rejected source tree must still produce explicit trusted evidence."""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+    result_file = tmp_path / "evidence" / "result.json"
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            "true",
+        ]
+    )
+
+    assert exit_code == 125
+    wrapper_result = json.loads(
+        result_file.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    assert wrapper_result["result_state"] == "copy_rejected"
+    assert wrapper_result["timed_out"] is False
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == b""
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == b""
 
 
 def test_parse_args_rejects_invalid_inputs():
@@ -589,7 +1105,19 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
     """The script entrypoint exits with the verification command status."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr(sys, "argv", ["sandboxed_verify.py", "--repo-root", str(repo), "--", sys.executable, "-c", "raise SystemExit(0)"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sandboxed_verify.py",
+            "--repo-root",
+            str(repo),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(0)",
+        ],
+    )
     module = sys.modules.pop("scripts.ci.sandboxed_verify", None)
     with pytest.raises(SystemExit) as exc_info:
         try:
