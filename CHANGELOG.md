@@ -4,7 +4,8 @@
   no sidecar evidence. The evidence-upload step now follows the same live-state
   gate, preventing an exhausted GitHub Actions artifact quota from converting
   that intentional skip into a failed required review. Non-Draft evidence
-  upload remains fail-closed.
+  upload remains fail-closed, with the contract now rejecting both step-level
+  and job-level `continue-on-error` bypasses.
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected

@@ -19,6 +19,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import yaml
+
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 DRAFT_STEP = "Check live pull request draft state before sidecar provisioning"
@@ -47,14 +49,22 @@ def _step_index(job: str, name: str) -> int:
     return job.index(f"      - name: {name}\n")
 
 
-def _sidecar_upload_is_fail_closed(upload_step: str) -> bool:
+def _sidecar_upload_is_fail_closed(workflow: str) -> bool:
     """Return whether the upload uses only the exact gate and propagates failure."""
-    condition_lines = [
-        line.strip().removeprefix("if: ").strip()
-        for line in upload_step.splitlines()
-        if line.strip().startswith("if: ")
-    ]
-    return condition_lines == [EXPECTED_UPLOAD_CONDITION] and "continue-on-error:" not in upload_step
+    steps = yaml.safe_load(workflow)["jobs"]["noema-review"]["steps"]
+    upload_step = next(
+        step for step in steps if step.get("name") == "Upload contextual-orchestrator sidecar evidence"
+    )
+    return (
+        upload_step.get("if") == EXPECTED_UPLOAD_CONDITION
+        and "continue-on-error" not in upload_step
+    )
+
+
+def _noema_review_job_is_fail_closed(workflow: str) -> bool:
+    """Return whether the review job propagates every failed step."""
+    job = yaml.safe_load(workflow)["jobs"]["noema-review"]
+    return "continue-on-error" not in job
 
 
 def test_live_draft_check_runs_after_head_validation_and_before_sidecar() -> None:
@@ -110,12 +120,32 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
     assert "needs.noema-review.result == 'failure'" in continuation
     assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in continuation
     assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in continuation
-    upload = workflow_step(workflow, "Upload contextual-orchestrator sidecar evidence")
-    assert _sidecar_upload_is_fail_closed(upload)
+    assert _noema_review_job_is_fail_closed(workflow)
+    assert _sidecar_upload_is_fail_closed(workflow)
     assert not _sidecar_upload_is_fail_closed(
-        upload.replace(EXPECTED_UPLOAD_CONDITION, f"{EXPECTED_UPLOAD_CONDITION} || true")
+        workflow.replace(EXPECTED_UPLOAD_CONDITION, f"{EXPECTED_UPLOAD_CONDITION} || true", 1)
     )
-    assert not _sidecar_upload_is_fail_closed(f"{upload}        continue-on-error: true\n")
+    upload_marker = "      - name: Upload contextual-orchestrator sidecar evidence\n"
+    for bypass in (
+        "        continue-on-error: true",
+        '        "continue-on-error": true',
+        "        continue-on-error : true",
+    ):
+        mutated = workflow.replace(upload_marker, f"{upload_marker}{bypass}\n", 1)
+        assert not _sidecar_upload_is_fail_closed(mutated), bypass
+    for bypass in (
+        "    continue-on-error: true",
+        '    "continue-on-error": true',
+        "    continue-on-error : true",
+    ):
+        mutated = workflow.replace("  noema-review:\n", f"  noema-review:\n{bypass}\n", 1)
+        assert not _noema_review_job_is_fail_closed(mutated), bypass
+    later_job_bypass = workflow.replace(
+        "  continue-noema-transport:\n",
+        "  continue-noema-transport:\n    continue-on-error: true\n",
+        1,
+    )
+    assert _noema_review_job_is_fail_closed(later_job_bypass)
 
 
 def test_trigger_types_are_unchanged_by_the_runtime_draft_check() -> None:
