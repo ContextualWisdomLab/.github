@@ -133,7 +133,9 @@ def test_dependency_review_runs_only_after_a_confirmed_successful_comparison() -
         "        continue-on-error: ${{ inputs.continue_on_error }}"
         in workflow
     )
-    assert 'if [ "$status" = "200" ]; then' in workflow
+    assert (
+        'if [ "$curl_exit" -eq 0 ] && [ "$status" = "200" ]; then' in workflow
+    )
     assert 'echo "available=true" >>"$GITHUB_OUTPUT"' in workflow
 
 
@@ -205,7 +207,7 @@ def test_pull_request_http_403_and_404_are_not_normalized_to_unavailable() -> No
     assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' not in workflow
     assert "skipping the dependency-review hard gate" not in workflow
     assert "Dependency graph unavailable note" not in workflow
-    assert "::error::Dependency graph comparison failed with HTTP" in workflow
+    assert "::error::Dependency graph comparison failed with curl exit" in workflow
     assert "exit 1" in workflow
 
 

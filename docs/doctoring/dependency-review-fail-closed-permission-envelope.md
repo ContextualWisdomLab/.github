@@ -65,9 +65,24 @@ This proves that anonymous status is not an availability authority and that the 
 - the compare request uses the job token and only HTTP 200 authorizes the pinned Dependency Review action;
 - named refs, malformed identities, 403/404 and all other non-200 outcomes fail closed.
 
+### Defect D — HTTP text could hide a failed curl transfer
+
+The reusable preflight appended `|| true` to curl and then authorized solely on
+the printed HTTP status. A partial body transfer can print `200` and still exit
+nonzero, so the old branch could publish `available=true` for incomplete
+evidence. The executable regression makes the fake transport print `200` and
+exit `18`; the preflight must remain nonzero and must not publish availability.
+The minimal repair captures curl's exit status and requires both exit zero and
+HTTP 200. The bundled Security Scan already enforced both conditions and was
+left unchanged.
+
+Test-first evidence: RED `fe9d193343d12dbd229815a18ce85b494b3acff9` adds only the executable transport
+contract and fails on the inherited preflight; its ordinary child carries the
+minimal production and documentation repair.
+
 ## Security invariants
 
-1. Pull-request Dependency Review executes only after an exact base/head compare returns HTTP 200.
+1. Pull-request Dependency Review executes only after curl completes successfully and an exact base/head compare returns HTTP 200.
 2. Base/head revisions must be exact 40- or 64-character lowercase hexadecimal Git object IDs before transport.
 3. Repository identity must be exactly one non-dot `owner/name` pair before transport.
 4. No anonymous response, HTTP 403/404, or other non-200 response is translated into a successful "unavailable" state.

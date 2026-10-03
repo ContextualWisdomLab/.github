@@ -41,7 +41,7 @@ Rejected. It increases blast radius and hides a caller-contract defect instead o
 
 ## Decision
 
-1. For `pull_request`, the Dependency Graph compare preflight sets `available=true` only on HTTP 200. Every other HTTP status is emitted with an error and terminates the job nonzero.
+1. For `pull_request`, the Dependency Graph compare preflight sets `available=true` only when curl exits zero and the endpoint returns HTTP 200. Every transport failure or other HTTP status is emitted with an error and terminates the job nonzero.
 2. Remove the pull-request "Dependency graph unavailable" success path. No alternate scanner is described as replacement authority.
 3. Keep the called workflow at `contents: read` + `pull-requests: read` and require every thin caller to declare at least those same scopes explicitly.
 4. Make the executable central contract fail when the canonical caller example omits either required scope.
@@ -63,7 +63,7 @@ Hosted exact-current-head Checks and independent review remain required before t
 - A missing or denied Dependency Graph comparison is visible as a blocking failure instead of silent coverage loss.
 - Caller permission omissions become an executable contract defect rather than an undocumented deployment prerequisite.
 - The central workflow still cannot repair a consumer's omitted permissions by itself; each consumer must carry the explicit read-only envelope and later bump its immutable reusable-workflow pin to the protected-main SHA that contains this decision.
-- #1643 remains a separate diagnostic lane for the required Security Scan path and is not evidence transfer for this reusable Dependency Review gate.
+- #1643's canary run remains independent diagnostic evidence for the required Security Scan path; its run/check result is not transferred to this gate. #1725 nevertheless integrates the durable immutable-identity validation source delta into the canonical reusable Dependency Review owner and verifies that integrated behavior with its own tests and exact-head Checks.
 
 ## References
 
