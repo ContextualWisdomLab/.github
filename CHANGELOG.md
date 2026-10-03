@@ -11,9 +11,10 @@
   control. Exact successor head `618471110757c74bcf6b7ac3a5783989dd010213`
   produced 11 focused RED failures across three test-first cycles plus the
   expected Strix self-test failures; the repaired focused normalizer suite
-  passes 133/133 with 100% statement,
+  passes 134/134 with 100% statement,
   branch, and public-doc coverage for the target module. The complete
-  repository suite passes 5,334 tests with 10 optional skips and 40 subtests.
+  repository suite passes 5,335 tests with 10 optional skips and 40 subtests;
+  the complete Strix harness also passes.
 - Concurrent RED commit
   `4de4805502e0fa2cae1178919ec31eec9fcd7249` binds parser and CLI
   regressions; concurrent GREEN `a16431475a223d213b7e827b274282feda92286c`
