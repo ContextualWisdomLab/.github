@@ -73,6 +73,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-01 live-base diff incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-AGENT-QUALITY-LIVE-BASE-01 | **Proposed — live-base source repaired; stacked-owner admission repaired; hosted verification pending** | `.github#1678@b9651115…`의 Agent Review Runtime Quality CI run `36804488453`, job `110185716853`은 이벤트에 고정된 과거 base `f2506388…`와 exact head를 비교해, 현재 protected `main@37b10243…`에 이미 존재하는 CSV CRLF·라이선스 fixture 공백 407건을 PR delta로 오인했다. Canonical owner `.github#2530@dc54310c…`를 일반 두-parent 병합한 #2547 head `b66036e3…`에서는 workflow path가 바뀌었는데도 `pull_request.branches: [main]` 때문에 owner workflow 자체가 시작되지 않았다. | Canonical workflow owner는 `.github/workflows/agent-review-runtime-quality-ci.yml`이다. changed-path 선택과 최종 whitespace gate는 각각 base ref를 즉시 다시 fetch한 뒤 exact head와의 merge-base를 사용한다. stacked-base 계약 RED 뒤 base 제한 한 줄만 제거해 path filter·read-only 권한·exact-head checkout·PR-stable concurrency를 보존했다. 새 exact-head hosted Checks·독립 리뷰·ordinary protected merge 후 #1678이 owner commit을 일반 병합하고 exact-head run을 다시 통과해야 한다. |
+
 ### 2026-09-30 central coverage owner stack delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

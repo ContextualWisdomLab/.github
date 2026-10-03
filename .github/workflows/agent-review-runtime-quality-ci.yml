@@ -2,7 +2,6 @@ name: Agent Review Runtime Quality CI
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
       - ".github/workflows/noema-review.yml"
@@ -166,10 +165,13 @@ jobs:
         id: affected_suites
         shell: bash --noprofile --norc -e -o pipefail {0}
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git fetch --no-tags --prune origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          change_base_sha="$(git merge-base "refs/remotes/origin/$BASE_REF" "$HEAD_SHA")"
+          test -n "$change_base_sha"
           noema_suite=false
           opencode_suite=false
           strix_suite=false
@@ -334,7 +336,7 @@ jobs:
                 exact_artifact_suite=true
                 ;;
             esac
-          done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          done < <(git diff --name-only "$change_base_sha...$HEAD_SHA")
 
           {
             echo "noema=$noema_suite"
@@ -582,9 +584,15 @@ jobs:
             tests/test_exact_artifact_quality_single_runner.py
 
       - name: Verify consolidated workflow contract
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           python -m pytest -q tests/test_agent_review_runtime_quality_consolidation.py
           python -m compileall -q tests/test_agent_review_runtime_quality_consolidation.py
-          git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --prune origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          change_base_sha="$(git merge-base "refs/remotes/origin/$BASE_REF" "$HEAD_SHA")"
+          test -n "$change_base_sha"
+          git diff --check "$change_base_sha...$HEAD_SHA"
           git diff --exit-code

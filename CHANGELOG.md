@@ -1,3 +1,20 @@
+### Agent runtime quality compares the live base graph
+
+- `Agent Review Runtime Quality CI` now derives changed paths and whitespace
+  checks from the merge-base of the fetched live base ref and the exact PR
+  head. Long-lived PR events can no longer make already-protected-main files
+  look like new PR whitespace, while exact-head checkout and fail-closed diff
+  checks remain unchanged. Exact failure evidence is `.github#1678` run
+  `36804488453`, job `110185716853`.
+- Refetch the base ref immediately before both merge-base decisions. A base
+  advance during the quality job can no longer revive the same stale-diff
+  failure at the terminal whitespace gate.
+- Preserve canonical parser/security/coverage owner `.github#2530@dc54310c` as
+  an ordinary second parent. The integrated PR exposed that this quality
+  workflow still admitted only pull requests targeting `main`, so its own
+  stacked exact head produced no quality run. A RED contract now requires
+  stacked-base admission; the minimal repair removes only that base filter.
+  CodeQL and review evidence remain mandatory; release admission stays HOLD.
 ### Authorized Draft reviews reach the exact-head receiver
 
 - Carry an explicit `draft_review_only` boolean from the merge scheduler to the
@@ -126,7 +143,6 @@
   from silently returning to the vulnerable versions. Protected integration,
   immutable consumer-pin advancement, and fresh exact-head hosted security
   Checks remain required before release admission.
-
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
