@@ -96,8 +96,11 @@
   partial transfer that prints `200` but exits 18, preserving the fail-closed
   gate. The bundled Security Scan already enforced both signals and remains
   unchanged. `.github#2565` now preserves the complete `.github#1725` owner
-  delta through ordinary merge `ec7c1b58ba6a3c61a0d09e02d93ef470f12db98d`
-  while retaining its isolated runner-group selectors. Both PRs remain
+  delta through published ordinary two-parent merge
+  `650bc6e35409d52d24fec890c2ab74063794e9b8` (tree
+  `9522f0b9c96247b3412e147bc6f89fd2595c0776`) while retaining its isolated
+  runner-group selectors. The merged-tree focused contract is 53/53 and the
+  warning-fatal full suite is 5,437 passed, 10 skipped, 40 subtests. Both PRs remain
   Proposed until exact-head hosted Checks and qualifying independent review are
   complete. The carried security decision is ADR-0034, the concurrent owned
   CodeQL decision is ADR-0033, and a repository-wide executable contract now
