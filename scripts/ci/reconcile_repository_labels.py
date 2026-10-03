@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
@@ -233,6 +234,27 @@ def _select_repository_identities(
     return selected
 
 
+
+def _run_assignment(
+    operation: Any,
+    assignment: dict[str, Any],
+    type_map: dict[str, str],
+) -> str | None:
+    """Run one independent target and return its bounded failure description."""
+
+    try:
+        operation(assignment, type_map)
+    except (
+        TaxonomyError,
+        RuntimeError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        target = f'{assignment["repository"]}#{assignment["issue"]}'
+        return f"{target}: {exc}"
+    return None
+
+
 def main() -> int:
     """Validate, reconcile, or verify every independent assignment possible."""
 
@@ -245,21 +267,24 @@ def main() -> int:
 
     selected = _select_repository_identities(args.repository, assignments)
     operation = verify_assignment if getattr(args, "verify_only", False) else reconcile_assignment
-    failures: list[str] = []
+    selected_assignments = []
     for assignment in assignments:
         if selected and assignment["repository"].casefold() not in selected:
             continue
-        try:
-            operation(assignment, type_map)
-        except (
-            TaxonomyError,
-            RuntimeError,
-            json.JSONDecodeError,
-            subprocess.TimeoutExpired,
-        ) as exc:
-            target = f'{assignment["repository"]}#{assignment["issue"]}'
-            failures.append(f"{target}: {exc}")
-            print(f"label reconciliation failed for {target}: {exc}", file=sys.stderr)
+        selected_assignments.append(assignment)
+    with ThreadPoolExecutor(
+        max_workers=min(8, max(1, len(selected_assignments)))
+    ) as executor:
+        failures = [
+            failure
+            for failure in executor.map(
+                lambda assignment: _run_assignment(operation, assignment, type_map),
+                selected_assignments,
+            )
+            if failure is not None
+        ]
+    for failure in failures:
+        print(f"label reconciliation failed for {failure}", file=sys.stderr)
     if failures:
         raise RuntimeError("label reconciliation failed: " + "; ".join(failures))
     return 0
