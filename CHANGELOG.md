@@ -1,3 +1,24 @@
+### Isolated CI routing gains a runner-group authority boundary
+
+- Serialize the caller-controlled R matrix OS label with GitHub `toJSON()`
+  before inserting it into the group-scoped runner selector. Quotes,
+  backslashes, newlines, and duplicate `group`/`labels` text remain one
+  data label and cannot replace the fixed `CWL CI isolated` authority
+  boundary. The executable workflow contract covers benign and hostile values.
+  The integrated Maturin verifier now also documents its archive extraction and
+  command entry point, restoring the repository's 100% public-doc gate.
+- Scope every ordinary and non-main self-hosted fallback through the dedicated
+  `CWL CI isolated` runner group as well as the existing platform/isolation
+  labels. A durable regression rejects label-only isolated selectors, while
+  workflow-specific contracts preserve dynamic matrix and trusted-main routing.
+  The reusable R matrix selector now escapes its literal JSON braces for
+  GitHub's `format()` expression, so Linux, Windows, macOS and unsupported OS
+  labels render a valid group-scoped `runs-on` object instead of failing before
+  runner admission.
+  The change remains Draft/HOLD until operators provision the group, restrict
+  its repository access, demonstrate disposable cleanup, and return exact-head
+  canary and required-Check evidence.
+
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected
@@ -75,6 +96,22 @@
   from silently returning to the vulnerable versions. Protected integration,
   immutable consumer-pin advancement, and fresh exact-head hosted security
   Checks remain required before release admission.
+### Dependency Review requires a completed authenticated comparison
+
+- The reusable Dependency Review preflight now requires both curl exit zero
+  and HTTP 200 before publishing `available=true`. A regression reproduces a
+  partial transfer that prints `200` but exits 18, preserving the fail-closed
+  gate. The bundled Security Scan already enforced both signals and remains
+  unchanged. `.github#2565` now preserves the complete `.github#1725` owner
+  delta through published ordinary two-parent merge
+  `650bc6e35409d52d24fec890c2ab74063794e9b8` (tree
+  `9522f0b9c96247b3412e147bc6f89fd2595c0776`) while retaining its isolated
+  runner-group selectors. The merged-tree focused contract is 53/53 and the
+  warning-fatal full suite is 5,437 passed, 10 skipped, 40 subtests. Both PRs remain
+  Proposed until exact-head hosted Checks and qualifying independent review are
+  complete. The carried security decision is ADR-0034, the concurrent owned
+  CodeQL decision is ADR-0033, and a repository-wide executable contract now
+  rejects duplicate numeric ADR identities.
 
 ### Intel macOS native archives are bound to x86_64 bytes
 

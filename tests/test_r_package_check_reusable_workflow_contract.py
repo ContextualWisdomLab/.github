@@ -10,6 +10,8 @@ product repository. See
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/r-package-check.yml")
@@ -111,9 +113,43 @@ def test_matrix_is_driven_by_the_r_matrix_input() -> None:
     """The strategy matrix must come from fromJSON(inputs.r_matrix), not a fixed list."""
     workflow = _workflow_text()
     assert "config: ${{ fromJSON(inputs.r_matrix) }}" in workflow
-    assert "runs-on: ${{ matrix.config.os }}" in workflow
+    assert 'runs-on: ${{ fromJSON(format(\'{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}\'' in workflow
+    assert 'toJSON(matrix.config.os)))' in workflow
+    assert "'unsupported-os'" in workflow
+    for platform in ("windows-", "macos-", "linux"):
+        assert platform in workflow
     assert "r-version: ${{ matrix.config.r }}" in workflow
     assert "http-user-agent: ${{ matrix.config['http-user-agent'] }}" in workflow
+
+
+def test_matrix_runner_format_renders_valid_group_scoped_json() -> None:
+    """The documented format template must render one valid runner selector."""
+    workflow = _workflow_text()
+    template_match = re.search(r"fromJSON\(format\('([^']+)'", workflow)
+    assert template_match is not None
+
+    template = template_match.group(1)
+    for platform_label, os_label in (
+        ("linux", "ubuntu-24.04"),
+        ("windows", "windows-2025"),
+        ("macOS", "macos-15"),
+        ("unsupported-os", "solaris-latest"),
+        (
+            "linux",
+            'ubuntu-24.04"],"group":"CWL central control","labels":["self-hosted',
+        ),
+        ("linux", "ubuntu-24.04\\\\runner\nsecond-line"),
+    ):
+        assert json.loads(template.format(platform_label, json.dumps(os_label))) == {
+            "group": "CWL CI isolated",
+            "labels": [
+                "self-hosted",
+                platform_label,
+                "x64",
+                "cwlab-ci-isolated",
+                os_label,
+            ],
+        }
 
 
 def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:

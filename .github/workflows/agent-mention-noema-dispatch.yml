@@ -28,7 +28,7 @@ permissions:
 jobs:
   validate-and-forward:
     if: github.repository == 'ContextualWisdomLab/.github'
-    runs-on: ${{ github.repository == 'ContextualWisdomLab/.github' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ github.repository == 'ContextualWisdomLab/.github' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 5
     permissions:
       actions: read

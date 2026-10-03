@@ -130,7 +130,7 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -190,7 +190,7 @@ jobs:
         github.event_name != 'pull_request_target' ||
         (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
       ) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -340,7 +340,7 @@ jobs:
         github.event.pull_request.base.repo.full_name || github.repository }}-${{
         github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     # Bound this gh-api-only cleanup job so a stuck call (rate limit, hung
     # `gh api --paginate`) cannot silently occupy a runner for GitHub's
     # 360-minute platform default -- exactly the window when a busy PR is
@@ -462,7 +462,9 @@ jobs:
     # scans may take more than two hours per model (docs/product-goal-directive.md).
     # Inference has no wall-clock deadline; cancellation is reserved for an
     # explicit operator action or a superseded head.
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
     # from the scan job only.
@@ -1297,7 +1299,7 @@ jobs:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     # Single-shot OIDC exchange plus a handful of curl/gh api calls, no loop
     # or pagination -- same shape as the agent-mention-*-dispatch.yml
     # validate-and-forward jobs, which bound at timeout-minutes: 5. Without
@@ -1520,7 +1522,7 @@ jobs:
       && needs.strix.result == 'failure'
       && needs.strix.outputs.transport_capacity_unavailable == 'true'
       && needs.strix.outputs.transport_retry_eligible == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: 10
     permissions:
       contents: write
