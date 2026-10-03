@@ -1,3 +1,29 @@
+### OpenCode inline examples and hostile nesting fail closed
+
+- Treat top-level single-quoted and inline backtick spans as prose rather
+  than approval evidence. An example exact-run control can no longer be
+  promoted merely because its JSON is balanced, and a quoted `{` or `[` can no
+  longer hide the later independent control. Apostrophes inside words remain
+  ordinary prose; triple-or-longer Markdown fences remain transparent to the
+  existing embedded-JSON contract.
+- Catch decoder `RecursionError` at both JSON admission points so excessively
+  nested model output returns no candidate instead of crashing the review
+  step. Integrated source commit
+  `10b32952bae391d794a5d1af36be71f80b32a252` adds single-quote,
+  backtick, contraction, Markdown-fence, delimiter, and 10,000-level nesting
+  cases. Independent review then found that a contraction inside a
+  single-quoted span and a longer backtick run could end the span early; the
+  integrated repair applies word-internal apostrophe handling symmetrically
+  and closes only on an exact complete backtick run. A second independent pass
+  found that fence classification copied each same-line prefix; RED measured
+  800,863 copied characters across 400 spans. The same integrated repair
+  short-circuits by the constant three-character fence indent before slicing.
+  Focused normalizer
+  verification is 156/156; the warning-fatal repository suite is 5,357 passed,
+  10 optional skips, and 40 subtests. Fresh exact-head hosted Checks, coverage
+  evidence, and a qualifying independent approval remain required before
+  ordinary merge.
+
 ### OpenCode quoted prose and unfinished wrappers preserve control identity
 
 - Restore the mixed-output scanner's linear-time security contract after an
