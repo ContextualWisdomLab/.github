@@ -50,10 +50,10 @@ def ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 0,
+                    "required_approving_review_count": 2,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_review_thread_resolution": True,
                     "required_reviewers": [],
                     "allowed_merge_methods": ["merge", "squash"],
@@ -128,10 +128,10 @@ def repository_ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 0,
+                    "required_approving_review_count": 1,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_review_thread_resolution": True,
                     "allowed_merge_methods": ["merge", "squash"],
                 },
@@ -237,18 +237,18 @@ def test_expected_repository_ruleset_passes() -> None:
     assert audit.audit_repository_ruleset(repository_ruleset_payload()) == []
 
 
-def test_repository_ruleset_rejects_unsatisfiable_review_controls() -> None:
+def test_repository_ruleset_rejects_weakened_review_controls() -> None:
     assert hasattr(audit, "audit_repository_ruleset"), (
         "the central audit must inspect the repository ruleset that protects .github"
     )
     payload = repository_ruleset_payload()
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
-    review_rule["parameters"]["required_approving_review_count"] = 1
-    review_rule["parameters"]["require_last_push_approval"] = True
+    review_rule["parameters"]["required_approving_review_count"] = 0
+    review_rule["parameters"]["require_last_push_approval"] = False
 
     assert audit.audit_repository_ruleset(payload) == [
-        "repository solo-maintainer ruleset must not require approving reviews",
-        "repository solo-maintainer ruleset must not require last-push approval",
+        "repository ruleset must require exactly one approving review",
+        "repository ruleset last-push approval protection is disabled",
     ]
 
 
@@ -318,10 +318,10 @@ def test_repository_ruleset_rejects_malformed_review_parameters() -> None:
     review_rule["parameters"] = None
 
     assert audit.audit_repository_ruleset(payload) == [
-        "repository solo-maintainer ruleset must not require approving reviews",
-        "repository solo-maintainer ruleset must not require code-owner review",
+        "repository ruleset must require exactly one approving review",
+        "repository ruleset must not require code-owner review",
         "repository ruleset stale-review dismissal on push is disabled",
-        "repository solo-maintainer ruleset must not require last-push approval",
+        "repository ruleset last-push approval protection is disabled",
         "repository ruleset review-thread resolution protection is disabled",
         "repository ruleset must allow only merge and squash",
     ]
@@ -622,17 +622,17 @@ def test_wrong_workflow_ref_reports_exact_drift() -> None:
     )
 
 
-def test_unsatisfiable_review_policy_reports_exact_drift() -> None:
+def test_weakened_review_policy_reports_exact_drift() -> None:
     payload = ruleset_payload()
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
     review_rule["parameters"]["required_approving_review_count"] = 1
-    review_rule["parameters"]["require_last_push_approval"] = True
+    review_rule["parameters"]["require_last_push_approval"] = False
     review_rule["parameters"]["required_review_thread_resolution"] = False
 
     errors = audit.audit_ruleset(payload)
 
-    assert "central solo-maintainer ruleset must not require approving reviews" in errors
-    assert "central solo-maintainer ruleset must not require last-push approval" in errors
+    assert "exactly two approving reviews are not required" in errors
+    assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
 
 
@@ -698,9 +698,8 @@ def test_audit_handles_duplicate_workflows_and_unsatisfiable_review_parameters()
     assert "central required workflow entry 0 is malformed" in errors
     assert "central required workflow entry 1 is malformed" in errors
     assert "central required workflow .github/workflows/security-scan.yml is configured 2 times" in errors
-    assert "central solo-maintainer ruleset must not require approving reviews" in errors
+    assert "exactly two approving reviews are not required" in errors
     assert "stale-review dismissal on push is disabled" in errors
-    assert "central solo-maintainer ruleset must not require last-push approval" in errors
     assert "review-thread resolution protection is disabled" in errors
     assert "only merge and squash may be allowed merge methods" in errors
 
@@ -731,8 +730,8 @@ def test_audit_handles_malformed_rule_parameter_shapes() -> None:
     errors = audit.audit_ruleset(payload)
 
     assert "missing central required workflow .github/workflows/sast-semgrep.yml" in errors
-    assert "central solo-maintainer ruleset must not require approving reviews" in errors
-    assert "central solo-maintainer ruleset must not require last-push approval" in errors
+    assert "exactly two approving reviews are not required" in errors
+    assert "last-push approval protection is disabled" in errors
 
 
 def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, capsys) -> None:

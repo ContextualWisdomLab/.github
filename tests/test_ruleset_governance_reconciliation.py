@@ -195,9 +195,9 @@ def test_desired_payload_preserves_unrelated_controls_and_removes_drift() -> Non
     assert desired["conditions"] == live["conditions"]
     assert desired["rules"][0] == {"type": "deletion"}
     params = desired["rules"][2]["parameters"]
-    assert params["required_approving_review_count"] == 0
+    assert params["required_approving_review_count"] == 2
     assert params["require_code_owner_review"] is False
-    assert params["require_last_push_approval"] is False
+    assert params["require_last_push_approval"] is True
     assert params["required_reviewers"] == []
     assert params["allowed_merge_methods"] == ["merge", "squash"]
     assert params["dismiss_stale_reviews_on_push"] is True

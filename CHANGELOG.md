@@ -1,5 +1,6 @@
 ### Ruleset owner-plane reconciliation preserves concurrent administrator state
 
+- Preserve protected-main's scope-specific independent-review posture while reconciling live owner-plane drift: two approvals for the organization ruleset, one for the `.github` repository ruleset, and last-push approval in both scopes. The reconciler still removes routine bypass actors and rebase while retaining stale-review dismissal, thread resolution, deletion, and non-fast-forward protection.
 - Keep central, owner-repository, and stacked-ruleset audit failures visible in
   one terminal receipt. A later ruleset fetch failure no longer exits before an
   already-detected central governance drift is named.

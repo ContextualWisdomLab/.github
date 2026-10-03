@@ -49,10 +49,10 @@ def _ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 0,
+                    "required_approving_review_count": 2,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_review_thread_resolution": True,
                     "allowed_merge_methods": ["merge", "squash"],
                 },

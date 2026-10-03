@@ -1,10 +1,10 @@
-"""Regression contract for solo-maintainer protected-branch governance."""
+"""Regression contract for independent protected-branch review governance."""
 
 from scripts.ci import audit_central_required_workflows as audit
 
 
 def _central_ruleset_payload() -> dict:
-    """Return the desired organization ruleset for a one-human-maintainer fleet."""
+    """Return the desired organization ruleset review posture."""
     return {
         "id": audit.RULESET_ID,
         "name": audit.RULESET_NAME,
@@ -36,10 +36,10 @@ def _central_ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 0,
+                    "required_approving_review_count": 2,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_review_thread_resolution": True,
                     "required_reviewers": [],
                     "require_extra_approval_for_unattributed_changes": True,
@@ -69,10 +69,10 @@ def _repository_ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 0,
+                    "required_approving_review_count": 1,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_review_thread_resolution": True,
                     "required_reviewers": [],
                     "require_extra_approval_for_unattributed_changes": True,
@@ -91,13 +91,13 @@ def _review_parameters(payload: dict) -> dict:
     return review_rule["parameters"]
 
 
-def test_central_ruleset_accepts_zero_approvals_without_last_push_approval() -> None:
-    """A one-human fleet must not require an approval its sole author cannot give."""
+def test_central_ruleset_accepts_two_approvals_with_last_push_approval() -> None:
+    """The organization policy requires independent approval after the last push."""
     assert audit.audit_ruleset(_central_ruleset_payload()) == []
 
 
-def test_repository_ruleset_accepts_zero_approvals_without_last_push_approval() -> None:
-    """The control-plane repository must use the same satisfiable admission model."""
+def test_repository_ruleset_accepts_one_approval_with_last_push_approval() -> None:
+    """The owner repository requires one independent approval after the last push."""
     assert audit.audit_repository_ruleset(_repository_ruleset_payload()) == []
 
 
@@ -109,7 +109,7 @@ def test_central_ruleset_rejects_synthetic_required_reviewer() -> None:
     ]
 
     assert audit.audit_ruleset(payload) == [
-        "central solo-maintainer ruleset must not configure required reviewers"
+        "central ruleset must not configure required reviewers"
     ]
 
 
@@ -121,7 +121,7 @@ def test_repository_ruleset_rejects_synthetic_required_reviewer() -> None:
     ]
 
     assert audit.audit_repository_ruleset(payload) == [
-        "repository solo-maintainer ruleset must not configure required reviewers"
+        "repository ruleset must not configure required reviewers"
     ]
 
 
@@ -131,7 +131,7 @@ def test_central_ruleset_rejects_code_owner_review_deadlock() -> None:
     _review_parameters(payload)["require_code_owner_review"] = True
 
     assert audit.audit_ruleset(payload) == [
-        "central solo-maintainer ruleset must not require code-owner review"
+        "central ruleset must not require code-owner review"
     ]
 
 
@@ -141,7 +141,7 @@ def test_repository_ruleset_rejects_code_owner_review_deadlock() -> None:
     _review_parameters(payload)["require_code_owner_review"] = True
 
     assert audit.audit_repository_ruleset(payload) == [
-        "repository solo-maintainer ruleset must not require code-owner review"
+        "repository ruleset must not require code-owner review"
     ]
 
 

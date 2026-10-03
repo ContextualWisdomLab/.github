@@ -341,6 +341,7 @@ def test_focused_workflow_runs_every_permanent_governance_regression_suite() -> 
         "tests/test_central_required_workflow_ruleset_audit.py",
         "tests/test_ruleset_audit_completeness_regression.py",
         "tests/test_ruleset_merge_method_shape_regression.py",
+        "tests/test_ruleset_review_policy_reconciliation.py",
         "tests/test_solo_maintainer_ruleset_policy.py",
     )
     test_command = text.split("-m pytest -q \\\n", 1)[1].split("\n          python -m coverage report", 1)[0]

@@ -227,24 +227,16 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         parameters = review_rules[0].get("parameters")
         parameters = parameters if isinstance(parameters, dict) else {}
         approving_reviews = parameters.get("required_approving_review_count")
-        if approving_reviews != 0:
-            errors.append(
-                "central solo-maintainer ruleset must not require approving reviews"
-            )
+        if approving_reviews != 2:
+            errors.append("exactly two approving reviews are not required")
         if parameters.get("required_reviewers") not in (None, []):
-            errors.append(
-                "central solo-maintainer ruleset must not configure required reviewers"
-            )
+            errors.append("central ruleset must not configure required reviewers")
         if parameters.get("require_code_owner_review") is not False:
-            errors.append(
-                "central solo-maintainer ruleset must not require code-owner review"
-            )
+            errors.append("central ruleset must not require code-owner review")
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not False:
-            errors.append(
-                "central solo-maintainer ruleset must not require last-push approval"
-            )
+        if parameters.get("require_last_push_approval") is not True:
+            errors.append("last-push approval protection is disabled")
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("review-thread resolution protection is disabled")
         raw_allowed_methods = parameters.get("allowed_merge_methods")
@@ -361,23 +353,19 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
     else:
         raw_parameters = review_rules[0].get("parameters")
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
-        if parameters.get("required_approving_review_count") != 0:
+        if parameters.get("required_approving_review_count") != 1:
             errors.append(
-                "repository solo-maintainer ruleset must not require approving reviews"
+                "repository ruleset must require exactly one approving review"
             )
         if parameters.get("required_reviewers") not in (None, []):
-            errors.append(
-                "repository solo-maintainer ruleset must not configure required reviewers"
-            )
+            errors.append("repository ruleset must not configure required reviewers")
         if parameters.get("require_code_owner_review") is not False:
-            errors.append(
-                "repository solo-maintainer ruleset must not require code-owner review"
-            )
+            errors.append("repository ruleset must not require code-owner review")
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("repository ruleset stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not False:
+        if parameters.get("require_last_push_approval") is not True:
             errors.append(
-                "repository solo-maintainer ruleset must not require last-push approval"
+                "repository ruleset last-push approval protection is disabled"
             )
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append(
