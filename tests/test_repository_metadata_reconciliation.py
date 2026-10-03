@@ -69,6 +69,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
+        "global-hs-trade": ("harmonized-system", "data-provenance"),
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
         "keyverse": ("identity", "openid-connect"),
