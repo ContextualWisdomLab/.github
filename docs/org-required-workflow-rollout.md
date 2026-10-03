@@ -136,21 +136,19 @@ gate only when they do not compete to upload the same SARIF. The central native
 dispatch handler analyzes the target head without making the target repository's
 default-setup upload path its source of truth.
 
-### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
+### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL
 
-**This entire subsection describes a plan that did not work and is not
-current guidance.** It assumed `codeql-pr.yml` would become a functioning
-central required check once ruleset `18156473` included it; the "Correction
-(2026-09-03)" note under "Code scanning required workflow posture" above
-explains why that assumption was wrong — `codeql-action` cannot run inside a
-required workflow at all, so `codeql-pr.yml` was removed from the ruleset,
-not fixed. "Centralizing through `codeql-pr.yml` fixes every inherited
-repository in one ruleset change" (below) never happened and never could.
-Coverage for repositories without a local CodeQL workflow now comes from
-GitHub's native `code-scanning/default-setup` instead (see the 2026-09-03
-"Evidence from this rollout" entry) — do not read the table below as
-"repositories still needing the ruleset update to land"; treat it only as a
-2026-07-04 point-in-time snapshot of which repositories had a local `codeql.yml`.
+**This subsection records the original July rollout, not current guidance.**
+That plan invoked `github/codeql-action` directly inside a required workflow,
+which GitHub does not support. The old entrypoint was removed on 2026-09-03.
+The 2026-09-04 correction above restores a different, dispatch-safe
+`codeql-pr.yml`: it sends the scan to a native workflow and consumes an
+app-authored exact-head status. This restored entrypoint is in the current
+seven-workflow ruleset. Native default setup is a repository-local safety net,
+not a replacement for that central gate. The table below remains only the
+2026-07-04 snapshot of repositories with a local `codeql.yml`; it does not
+identify present-day adoption gaps.
+
 
 Org audit of default-branch workflow files as of 2026-07-04.
 
@@ -214,16 +212,15 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 
 - Recovery posture: native PR and review events own normal progress, GitHub auto-merge owns required-check completion, and each repository keeps one daily `scan-pr-queue` recovery. The central organization-wide polling job was removed because each invocation occupied a runner, walked every repository, and amplified the same Actions and API pressure it was intended to repair. Same-PR supersession remains with trigger-aware concurrency and the repository-local exact-head coalescer.
 
-## Second-reviewer (Noema) posture
+## Independent-review (Noema) posture
 
-The active ruleset does not require a second human approving review —
-`required_approving_review_count = 0` and `require_last_push_approval = false`,
-since this is a solo-maintained organization with no genuine second human
-maintainer to require an approval from (see the "Canonical organization
-ruleset" bypass_actors/solo-maintainer note above and `.github#772`). Noema
-instead supplies a second, model-authored review identity independent of
-OpenCode — not a substitute for a fictional second human approver, but
-defense-in-depth review evidence distinct from OpenCode's own judgement.
+The organization ruleset contract requires two approving reviews and
+last-push approval; the owner-repository ruleset requires one approving review
+and last-push approval. Neither scope configures a synthetic named reviewer,
+same-author CODEOWNER approval, or routine administrator bypass. Noema supplies
+a model-authored review identity independent of OpenCode as defense-in-depth
+review evidence; every accepted approval must still bind to the exact current
+head and a later push invalidates stale approval evidence.
 That identity is `cwl-noema-review[bot]`, supplied by
 the organization-owned `cwl-noema-review` GitHub App. The central workflow
 is an active organization required workflow. It runs the centrally versioned
@@ -305,16 +302,15 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 ## Evidence from this rollout
 
-- `.github#1644` ("ruleset owner-plane reconciler") extended `scripts/ci/audit_central_required_workflows.py`'s
+- `.github#1644` ("ruleset owner-plane reconciler") extends `scripts/ci/audit_central_required_workflows.py`'s
   `audit_ruleset` to validate two new structural properties the prior audit was silent on: the ruleset
   must not configure `bypass_actors` (routine bypass actors on the central required-workflow ruleset are
   forbidden — an actor with bypass rights could satisfy every other check while still skipping the
-  workflows/review requirements this audit exists to enforce), and — because this is a solo-maintained
-  organization — a `central solo-maintainer ruleset must not require approving reviews`, configure
-  required reviewers, require code-owner review, or require last-push approval; the audit fails closed
-  on each of those individually with a dedicated message. The same solo-maintainer check set was added
-  for the per-repository `Lock default branch` ruleset audit path (`repository solo-maintainer ruleset
-  must not ...`). See `.github#772` for the solo-maintainer protected-PR policy decision this codifies.
+  workflows/review requirements this audit exists to enforce). It also preserves protected-main's
+  scope-specific review contract: two approvals for the organization ruleset and one for the owner
+  repository, with last-push approval, stale-review dismissal, and thread resolution in both scopes.
+  Required-reviewer lists, same-author CODEOWNER approval, rebase, and routine bypass actors remain
+  forbidden. Fresh exact-head evidence and qualifying independent approval remain merge conditions.
 - On 2026-09-02 KST, live verification via `gh api repos/<org>/<repo>/rules/branches/<branch>`
   against six repositories (`aFIPC`, `bandscope`, `newsdom-api`, `naruon`,
   `xtrmLLMBatchPython`, `pg-erd-cloud`) found ruleset `18156473`'s `workflows`

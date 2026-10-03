@@ -17,6 +17,7 @@ on:
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
       - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_ruleset_review_policy_reconciliation.py"
       - "tests/test_solo_maintainer_ruleset_policy.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
@@ -38,6 +39,7 @@ on:
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
       - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_ruleset_review_policy_reconciliation.py"
       - "tests/test_solo_maintainer_ruleset_policy.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
@@ -121,6 +123,7 @@ jobs:
               tests/test_central_required_workflow_ruleset_audit.py \
               tests/test_ruleset_audit_completeness_regression.py \
               tests/test_ruleset_merge_method_shape_regression.py \
+              tests/test_ruleset_review_policy_reconciliation.py \
               tests/test_solo_maintainer_ruleset_policy.py
           python -m coverage report \
             --fail-under=100 \

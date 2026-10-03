@@ -495,9 +495,12 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
             "pull_request.parameters.required_reviewers has invalid type"
         )
 
-    parameters["required_approving_review_count"] = 0
+    parameters["required_approving_review_count"] = {
+        "organization": 2,
+        "repository": 1,
+    }[target.scope]
     parameters["require_code_owner_review"] = False
-    parameters["require_last_push_approval"] = False
+    parameters["require_last_push_approval"] = True
     parameters["required_reviewers"] = []
     parameters["dismiss_stale_reviews_on_push"] = True
     parameters["required_review_thread_resolution"] = True

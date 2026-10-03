@@ -1,10 +1,10 @@
 # Ruleset owner-plane reconciliation
 
-Date reviewed: 2026-09-02
+Date reviewed: 2026-10-03
 
 ## Incident and product impact
 
-Orgmetra's protected `develop` is currently governed by organization ruleset `18156473`, while the central `.github` default branch also has repository ruleset `17921150`. Live reads on 2026-09-02 showed two policy drifts that block a defensible ordinary merge path: the organization ruleset still requires one generic approval even though the current operating model has one human maintainer and it retains `OrganizationAdmin/always`; the `.github` repository ruleset already has approval count zero but still permits rebase and also retains `OrganizationAdmin/always`.
+Orgmetra's protected `develop` is governed by organization ruleset `18156473`, while the central `.github` default branch has repository ruleset `17921150`. A fresh repository-ruleset read on 2026-10-03 showed four policy drifts that block a defensible ordinary merge path: the `.github` ruleset requires zero approvals, disables last-push approval, permits rebase, and retains `OrganizationAdmin/always`. Protected main independently defines two approvals plus last-push approval for the organization ruleset and one approval plus last-push approval for the owner repository. The owner-plane repair preserves those distinct review contracts instead of flattening both scopes to the stale zero-approval posture.
 
 The application connector can read those settings but does not expose ruleset mutation. Administrator bypass is not an acceptable substitute because it would destroy the canary needed to prove the normal path. The owner-plane repair therefore needs reviewed configuration-as-code plus a separately provisioned, narrowly scoped credential rather than an application-side shim.
 
@@ -13,9 +13,9 @@ The application connector can read those settings but does not expose ruleset mu
 `config/ruleset-governance.json` is not merely shape-validated. Production code pins the privileged manifest to exactly repository ruleset `17921150` (`ContextualWisdomLab/.github`, `Lock default branch`) and organization ruleset `18156473` (`ContextualWisdomLab`, `CWL Central required workflows`). A structurally valid manifest cannot redirect Administration-write authority to another positive ruleset ID, repository, or name. `scripts/ci/reconcile_ruleset_governance.py` then reads the full live object and refuses to act if the ID, name, source, source type, branch target, or active enforcement state has changed. It preserves all unrelated conditions and rules while changing only these reviewed governance fields:
 
 - remove routine bypass actors;
-- set generic approving-review count to zero;
+- require two approving reviews on the organization ruleset and one on the owner-repository ruleset;
 - keep same-author CODEOWNER review disabled;
-- keep last-push approval disabled;
+- require last-push approval in both scopes;
 - require no synthetic reviewer identities; and
 - allow merge and squash only, removing rebase.
 
@@ -51,9 +51,9 @@ Pull requests execute only offline manifest validation plus 100% statement/branc
 2. After source reaches protected `main`, provision the protected environment and dedicated credential, then enable the repository variable only for an exclusive owner-plane maintenance interval.
 3. Run the reconciler and require one exact new ruleset-history version per uncontended target whose predecessor is the sampled pre-write baseline. If an intervening version exists, require recovery to follow immutable predecessor evidence until the newest displaced administrator state is restored or fail closed without claiming success.
 4. Re-read both complete live ruleset payloads using the independently authorized credential.
-5. Require organization ruleset approval count 0, last-push false, code-owner false, empty required reviewers, merge/squash only, no routine bypass, unchanged required workflows/conditions/deletion/non-fast-forward/thread-resolution controls.
-6. Require repository ruleset approval count 0, last-push false, code-owner false, empty required reviewers, merge/squash only, no routine bypass, unchanged deletion/non-fast-forward/thread-resolution controls.
-7. Revalidate the canonical audit writer and unchanged downstream deterministic-GREEN `ContextualWisdomLab/Orgmetra#88`; ordinary protected merge must work without self-approval, synthetic approval, or administrator bypass.
+5. Require organization ruleset approval count 2, last-push true, code-owner false, empty required reviewers, merge/squash only, no routine bypass, unchanged required workflows/conditions/deletion/non-fast-forward/thread-resolution controls.
+6. Require repository ruleset approval count 1, last-push true, code-owner false, empty required reviewers, merge/squash only, no routine bypass, unchanged deletion/non-fast-forward/thread-resolution controls.
+7. Revalidate the canonical audit writer and an unchanged downstream deterministic-GREEN canary; ordinary protected merge must work with qualifying independent current-head approval and without self-approval, synthetic approval, or administrator bypass.
 8. Keep the reconciler enabled for drift repair only if the protected owner-plane environment and history evidence remain available. If the API identity, editable schema, history contract, or modeled runtime boundary changes, it fails closed and requires a reviewed source update.
 
 ## Standards and research basis

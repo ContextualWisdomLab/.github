@@ -9,12 +9,12 @@ import pytest
 from scripts.ci import audit_central_required_workflows as audit
 
 
-def _review_parameters() -> dict[str, object]:
+def _review_parameters(*, approving_reviews: int) -> dict[str, object]:
     return {
-        "required_approving_review_count": 0,
+        "required_approving_review_count": approving_reviews,
         "dismiss_stale_reviews_on_push": True,
         "require_code_owner_review": False,
-        "require_last_push_approval": False,
+        "require_last_push_approval": True,
         "required_review_thread_resolution": True,
         "required_reviewers": [],
         "require_extra_approval_for_unattributed_changes": True,
@@ -51,7 +51,7 @@ def _central_payload() -> dict[str, object]:
                     ],
                 },
             },
-            {"type": "pull_request", "parameters": _review_parameters()},
+            {"type": "pull_request", "parameters": _review_parameters(approving_reviews=2)},
             {"type": "deletion"},
             {"type": "non_fast_forward"},
         ],
@@ -71,7 +71,7 @@ def _repository_payload() -> dict[str, object]:
             "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
         },
         "rules": [
-            {"type": "pull_request", "parameters": _review_parameters()},
+            {"type": "pull_request", "parameters": _review_parameters(approving_reviews=1)},
             {"type": "deletion"},
             {"type": "non_fast_forward"},
         ],

@@ -145,11 +145,11 @@ def test_disposable_focused_contract_is_removed_after_terminal_proof() -> None:
     assert not proof_workflow.exists()
 
 
-def test_rollout_guide_declares_solo_maintainer_review_policy() -> None:
-    """Operator documentation must not reintroduce a fictional second human approval."""
+def test_rollout_guide_declares_scope_specific_review_policy() -> None:
+    """Operator documentation must retain the independently reviewed policy."""
     rollout = (REPO_ROOT / "docs/org-required-workflow-rollout.md").read_text(encoding="utf-8")
 
-    assert "required_approving_review_count = 0" in rollout
-    assert "require_last_push_approval = false" in rollout
-    assert "The org's two-reviewer merge rule" not in rollout
-    assert "two distinct approvals" not in rollout
+    assert "requires two approving reviews" in rollout
+    assert "requires one approving review" in rollout
+    assert "last-push approval" in rollout
+    assert "routine administrator bypass" in rollout
