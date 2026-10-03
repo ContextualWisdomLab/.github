@@ -17,6 +17,102 @@
   workspace and scrubbed environment, not OS process isolation or enforced
   network policy. Legacy stdout-marker mode remains available for human-only
   calls. Refs #2086, #2088.
+### Intel macOS native archives are bound to x86_64 bytes
+
+- The release prescreener now requires every native member in an Intel macOS
+  continuation wheel to contain x86_64 code. Architecture inspection happens
+  before package/hash deduplication, so a wheel already reviewed for the
+  universal2 release leg cannot bypass the Intel-specific check. Universal2
+  binaries that contain x86_64 remain valid; aarch64-only binaries fail closed.
+  Exact-tree evidence is 4,061 passed, 8 skipped, and 40 subtests passed, with
+  all 17,383 production statements and 7,098 branches covered.
+
+### Intel macOS runtime archives enter the exact release dependency gate
+
+- Require three same-run Intel macOS install receipts for the universal2 wheels.
+  The central verifier checks each artifact ZIP digest, source and distribution
+  identity, x86_64 interpreter, and dependency archive bytes before licence
+  prescreen. Distinct x86_64 dependency wheels join the Strix fixture matrix;
+  the final verdict seals the three artifact IDs and digests. The thirteen
+  publishable distribution identities remain unchanged. Local focused tests
+  are 77 passed, the full suite is 4,063 passed and 4 skipped, and the three
+  changed production modules have 100% statement and branch coverage. Release
+  admission remains HOLD pending the fast-mlsirm consumer and hosted checks.
+
+### Exact native-link review is bound before release verdict sealing
+
+- Release wheel and build-interpreter native links now fail closed unless each
+  target is a reviewed operating-system, interpreter, self-install-name, or
+  named external runtime. The immutable report advances to
+  `cwl.release-native-links/2` and records the review basis beside every needed
+  library. Concurrent coverage work was preserved by an ordinary two-parent
+  merge, including its exact Maturin release-asset verifier. That integration
+  first reproduced a 99% coverage failure with 22 missing statements and 10
+  partial branches; behavior contracts now cover bounded downloads, archive
+  shapes, executable identity, native-link review, CLI dispatch, and prescreen
+  rejection paths. Current-tree evidence is 4,049 passed, 8 skipped, and 40
+  subtests passed; all 17,302 production statements and 7,058 branches are
+  covered. Ruff E9/F/I, compileall, and diff checks also pass. Hosted exact-head
+  Checks and independent review remain required before admission.
+
+### Native release prescreen coverage remains fail-closed
+
+- Added behavior-level contracts for directory entries, cached analyzer reuse, oversized and unreadable native members, build-snapshot files omitted from package receipts, runtime wheels with unknown dynamic links, and malformed static-link evidence. This repairs the coverage regression introduced when runtime wheels and build-interpreter snapshots began using the pinned native-link analyzer. The exact-tree suite is 4,037 passed, 8 skipped, and 40 subtests passed; all 17,186 production statements and 7,000 branches are covered. Release admission remains Draft/HOLD pending fresh exact-head hosted Checks and qualifying independent review.
+
+### Canonical Rust materializer integration closes the repository coverage gate
+
+- Ordinary-merged the complete `ContextualWisdomLab/.github#2360` owner branch into the release-control stack, preserving its foundation ancestry, multi-root `cargo vendor --sync --locked` implementation, target-path confinement, real-Cargo integration cases, and toolchain-independent mock/error/CLI contracts. The focused materializer suite is 26 passed and 3 real-Cargo skips with `materialize_base_rust_dependencies.py` at 155/155 statements and 60/60 branches. The merged exact tree is 4,030 passed, 8 skipped, and 40 subtests passed; all 17,144 production statements and 6,982 branches are covered. Draft remains required until fresh exact-head hosted Checks and qualifying independent review complete.
+
+### Noema document-reader trust boundaries reach 100% executable coverage
+
+- Added behavior-level coverage for unsupported and oversized inputs, bounded DOCX ZIP/XML structure, empty documents, visible Word controls, ragged and escaped tables, missing or unstartable local HWP readers, oversized/non-UTF-8/empty adapter output, UTF-8-safe prompt truncation, and both CLI outcomes. Production reader behavior is unchanged. The focused suite is 11 passed and 2 optional real-fixture skips with `noema_review_document.py` at 144/144 statements and 52/52 branches. The warnings-as-errors full suite is 3,988 passed, 28 skipped, and 40 subtests passed; only the independently owned Rust dependency materializer on `ContextualWisdomLab/.github#2360` remains below 100%, so the repository gate remains RED and this PR remains Draft.
+
+### Queue-health ownership matches the documented boundary and reaches 100% coverage
+
+- Removed the dead duplicate `collect_snapshot()` and CLI `main()` from `actions_queue_health_core.py`; the executable `actions_queue_health.py` remains the single owner of collection, retry, exact-head reconciliation, and process exit behavior, while the core retains bounded parsing and report primitives. New boundary cases cover both pre-evidence identity retries, malformed active and terminal run IDs, obsolete target cancellations, and remediation-action deduplication. The focused queue-health suite is 80 passed with both queue-health modules at 100% statement and branch coverage. The full exact tree is 3,982 passed, 28 skipped, and 40 subtests passed; uncovered statements fell from 249 to 163 and partial branches from 26 to 19, leaving only the Noema document reader and Rust dependency materializer owners.
+
+### Release dependency gate trust boundaries reach executable 100% coverage
+
+- `release_dependency_gate.py` now has behavior-level coverage for bounded archive reads, unsafe or absent declared licence files, symlink/special members, archive-member limits, raw-capture and destination symlinks, Cargo workspace identity, Strix fanout identity/fixture/runtime-report validation, and install-time licence rebinding. The no-caller `parse_member_listing` helper and its isolated test were removed; immutable archive bytes remain the sole member authority. Focused evidence is 442 passed with 1,126/1,126 statements and 472/472 branches; the warnings-as-errors repository suite is 3,976 passed and 28 skipped. Repository-wide coverage rises from 98% to 99%, so the overall 100% release gate remains RED and the PR stays Draft.
+
+### Pingora declared binary artifacts reject readable runtime directives
+
+- A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
+### Queue-health permission contract rejects aggregate token grants
+
+- The queue-health workflow contract now pins both workflow-level and collector-job permissions to exactly `contents: read` plus `actions: read`, rejecting scalar `read-all`/`write-all`, quoting/spacing variants, inline maps, and unexpected write scopes.
+
+### OpenCode coverage image materializes every Dockerfile lock input
+
+- Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
+
+### Noema transport capacity schedules a bounded continuation re-dispatch
+
+- After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
+
+### Strix evidence binding distinguishes PR-delta from baseline and fails closed on false remediation
+
+- Required Strix on `.github#2106` attributed findings against base-identical `scripts/ci/pingora_edge_policy.py` / `scripts/ci/contextual_orchestrator_review_policy.py` as if they were PR-introduced (#2159). Separately, LineageWeave Strix run `34746057545` claimed a fix was "already applied" after `apply_patch` missed `/workspace/backend/app/main.py` (#2168). `scripts/ci/strix_evidence_binding.py` now classifies findings as `pr_delta` / `repository_baseline` / `context_dependency` / `unmapped` against the authenticated changed-file inventory (renames + hunks), and remediation claims fail closed unless workspace bytes or a source commit receipt prove the edit. The gate labels decisions with `evidence_scope=` and sanitizes report artifacts after each attempt. Contract tests: `tests/test_strix_evidence_binding.py`; doctoring: `docs/doctoring/strix-evidence-binding-2159-2168.md`.
+
+### OpenCode coverage admits immutable `python/` VCS source roots
+
+- Central OpenCode coverage run [34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) failed before executing `contextual-orchestrator#1149`: the trusted image builder resolved VCS packages only from repository root or `src/`, while the exact immutable `fast-mlsirm@09f762ded35786dd1078222a4577ff09d649816f` exposes `fast_mlsirm` from `python/fast_mlsirm`. The builder now admits the explicit `python/` source root, retains the one-and-only-one import-root invariant, symlink/namespace/compiled-artifact/installed-metadata rejection, exact commit verification, and the later credential-free networkless sandbox. Contract tests pin both package and single-module `python/` layouts. Refs `contextual-orchestrator#1149`. Exact-head Runtime Quality [job 103581110552](https://github.com/ContextualWisdomLab/.github/actions/runs/34704176931/job/103581110552) then caught the required independent workflow-blob trust pin still naming the predecessor blob; `683cb053` advances only that pin to exact blob `f315683208d57ba89a2942502c525abe7355e2fd`.
+
+### Contextual-orchestrator pin advance removes the implicit 90 s model request timeout
+
+- Advanced the central sidecar's pinned immutable CO revision from `414f2297` to protected `main@767e67fbc6b881a452761f32abb69b9971b9b03b`, carrying contextual-orchestrator#1053 into Strix, OpenCode, and Noema. Root cause: `ModelClient.__init__` defaulted `timeout=90`, and the review gateway constructed its client without a timeout, so long structured-output completions on NVIDIA NIM (`google/gemma-4-31b-it`) hit `TimeoutError` at exactly 90 s on every attempt; the orchestrator then cycled circuit open/reset on the same route for ~20 min and answered `502 provider_connection_error` (fast-mlsirm#1860 run 34748511702, sidecar artifact 10315556637: 15 of 27 failed attempts at 90.0 s; fast-mlsirm#1825 run 34752130895 same signature). #1053 removes the implicit deadline (null by default, administrator `model_timeout_seconds` per model) and was merged under the infrastructure exception because the pre-fix sidecar was failing its own Noema/OpenCode gates. Hosted acceptance is the first Noema/OpenCode/Strix run on this pin against a consumer PR; not claimed here. Refs ContextualWisdomLab/contextual-orchestrator#1053, ContextualWisdomLab/fast-mlsirm#1860.
+
+### Pingora edge policy admits HWPX evidence documents without UTF-8 decoding
+
+- `scripts/ci/pingora_edge_policy.py`'s `BINARY_DOCUMENT_MAGIC` only knew `.pdf` and `.png`, and `_is_binary_documentation_asset` only admitted a `doc`/`docs`/`documentation` directory, so a ZIP-based `.hwpx` evidence attachment under `evidence/` matched neither rule and fell through to the strict UTF-8 decode every other candidate gets. Observed on ContextualWisdomLab/late-life-anxiety-reanalysis#10, head `a1cd5bc6783c6510dfcf937f523c733366e82213`, run `34700409497`, job `103571044859`: "Pingora edge policy could not establish complete evidence: Runtime policy candidate evidence/reviewer_response_draft.hwpx is not valid UTF-8". The fix adds `.hwpx` (`PK\x03\x04`) to `BINARY_DOCUMENT_MAGIC` and extends `_is_binary_documentation_asset` to admit an `.hwpx` under an `evidence` path segment, gated on a bounded container check in the new `_is_complete_hwpx` -- unprefixed ZIP, exact EOCD record, unique members with `mimetype` first, a stored (not deflated) `mimetype` entry exactly `application/hwp+zip`, and a non-empty, unencrypted `Contents/content.hpf` manifest -- so no document body is ever parsed or rendered and no malware inspection is implied. The runtime-path guard and the Nginx-runtime-text fallback scan for disguised or malformed archives are unchanged. `tests/test_pingora_hwpx_evidence.py` runs the production policy boundary offline: RED (test-only apply) showed 3 failing / 19 passing; GREEN (full patch) showed 90 passing across that file plus `tests/test_pingora_edge_policy.py` and `tests/test_pingora_edge_workflow_contract.py`. Branch coverage of the touched module is 100% (388 statements, 174 branches, 0 missed) and `interrogate scripts/ci -q` reports 100.0% docstrings. Hosted acceptance still requires a newly loaded central source SHA to re-run the consumer's exact head bootstrap. Refs ContextualWisdomLab/.github#2116.
+
+### Review policy ZDR feed keys routes by the wrong field, catalog always empty under `--require-zdr`
+
+- `_load_zdr_endpoints` (`scripts/ci/contextual_orchestrator_review_policy.py`, introduced by 17052a7ca / #1360) built ZDR route keys from `endpoint.get("model_name")`, but on the real `https://openrouter.ai/api/v1/endpoints/zdr` feed `model_name` is a human display string (e.g. "DeepSeek: DeepSeek V4.1 Flash") while `model_id` is the slug contextual-orchestrator discovery reports as `model` (e.g. `inclusionai/ling-3.0-flash-vl:free`). No live-feed key ever matched `is_zdr_model(...)`, so every `--require-zdr` consumer (every private/internal caller, per ADR-0003) saw an empty catalog and failed closed with `PolicyError: no attested ZDR model route is available with the ZDR policy; orchestrator/free would fail closed`. Confirmed as the cause of `noema-review` and `strix` failing on `ContextualWisdomLab/late-life-anxiety-reanalysis#10` (head `a1cd5bc6783c6510dfcf937f523c733366e82213`, runs `34700409452`/`103571267389` and `34700409446`/`103571829483`) against central `fb17ef556f94f673234aa557254ae52779e9a7b0`. `_load_zdr_endpoints` now keys on `model_id`, with no fallback to the display name; the three existing fixtures that put slugs into `model_name` (masking the bug since #1360) now carry the real feed schema. Offline reproduction against a 60-row consumer discovery snapshot and the live 859-entry ZDR feed: before, `--require-zdr --pool free` exits 1 with the `PolicyError` above; after, it exits 0 and selects 3 attested `openrouter` ZDR routes (`inclusionai/ling-3.0-flash-{vl,sante,fin}:free`, served by `Novita`). Hosted acceptance on the private consumer's exact head is still required and is not claimed here. Refs ContextualWisdomLab/late-life-anxiety-reanalysis#10, ContextualWisdomLab/.github#2122.
+
+### CodeQL required workflow denies private consumers a read they need for their own PR
+
+- `.github/workflows/codeql-pr.yml`'s `analyze-head` and `dispatch-current-head` jobs called `gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"` and later `repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses` while holding only `contents: read` (plus `id-token: write`, and `actions: read` on the coordinator job) -- reads GitHub's REST contract gates behind the `pull-requests: read` and `statuses: read` fine-grained permissions on a private repository. Public consumers never surfaced this because GET on a public repository needs no such grant, but private consumer ContextualWisdomLab/late-life-anxiety-reanalysis's PR #10 (head `a1cd5bc6783c6510dfcf937f523c733366e82213`, run `34700410434`) failed both required-workflow jobs (`103571590442`, `103571810868`) at their first API call with `gh: Resource not accessible by integration (HTTP 403)`. Both jobs now also hold `pull-requests: read` and `statuses: read`; no write permission is added anywhere, and `actions: write` stays absent, so `tests/test_codeql_pr_workflow_contract.py::test_codeql_required_workflow_does_not_gain_actions_write` needed no change. New regression test `test_codeql_pr_jobs_hold_read_grants_private_consumers_need` pins the exact grant set. See `docs/doctoring/codeql-pr-private-consumer-read-permissions.md`. Refs ContextualWisdomLab/late-life-anxiety-reanalysis#10.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
@@ -88,6 +184,7 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Bind GitHub REST redirect evidence to both production opener chains.** `.github#2279` now feeds a synthetic same-authority 302 through the CodeQL identity and Strix evidence clients' real module-level openers, proving the redirect target is never contacted and the bearer header is never forwarded. Removing `_RejectRedirects` from either opener makes the contract fail on the forbidden second request. Four stale Strix HTTP/transport/JSON fixtures now patch that same production seam; direct handler unit cases and standalone CodeQL materialization remain unchanged.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler

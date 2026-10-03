@@ -479,11 +479,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
     )
-    assert "  coverage-source-tree:\n" in workflow
+    # coverage-source-tree was folded into validate-pr-metadata (2026-09-17):
+    # both only ever exchanged the OpenCode app token for READ-scoped data and
+    # neither executes untrusted PR-head content, so they sit on the same side
+    # of the trust boundary that keeps coverage-evidence (untrusted test/build
+    # execution, `actions: read` only) and opencode-review-target (privileged
+    # write-capable publication) isolated. Folding them removes one of the
+    # three needs:-chained job-to-job runner-queue re-entries this workflow
+    # paid under saturation; see
+    # docs/doctoring/actions-capacity-root-cause-20260917.md.
+    assert "  coverage-source-tree:\n" not in workflow
     assert "  coverage-evidence:\n" in workflow
 
     metadata_start = workflow.index("  validate-pr-metadata:\n")
-    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_end = workflow.index("\n  coverage-evidence:", metadata_start)
     metadata_job = workflow[metadata_start:metadata_end]
     assert "id-token: write" in metadata_job
     assert (
@@ -498,22 +507,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.client_payload.target_repository != github.repository"
         in metadata_job
     )
-
-    source_start = workflow.index("  coverage-source-tree:\n")
-    source_end = workflow.index("\n  coverage-evidence:", source_start)
-    source_job = workflow[source_start:source_end]
-    assert "github.event_name == 'repository_dispatch'" in source_job
-    assert "github.event_name == 'pull_request_target'" not in source_job
-    assert "id-token: write" in source_job
+    assert "github.event_name == 'repository_dispatch'" in metadata_job
+    assert "github.event_name == 'pull_request_target'" not in metadata_job
     assert (
-        "Exchange OpenCode app token for target repository coverage reads" in source_job
+        "Exchange OpenCode app token for target repository coverage reads"
+        in metadata_job
     )
     assert (
         "GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || "
         "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
-    ) in source_job
+    ) in metadata_job
     assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in source_job
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in metadata_job
     )
 
     coverage_start = workflow.index("  coverage-evidence:\n")
@@ -522,7 +527,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'repository_dispatch'" in coverage_job
     assert "github.event_name == 'pull_request_target'" not in coverage_job
     assert "id-token: write" not in coverage_job
-    assert "Report coverage source materialization failure" in coverage_job
+    assert "Report coverage source materialization failure" not in coverage_job
     assert (
         "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         in coverage_job
@@ -563,7 +568,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
-    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
+    assert (
+        "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-"
+        "${{ github.run_id }}-${{ github.run_attempt }}" in workflow
+    )
+    prepare = workflow.split("      - name: Prepare pull request merge tree for coverage measurement", 1)[1].split("      - name:", 1)[0]
+    assert 'mkdir "$COVERAGE_SOURCE_WORKDIR"' in prepare
+    assert 'rm -rf "$COVERAGE_SOURCE_WORKDIR"' not in prepare
     assert (
         'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
     )
@@ -738,6 +749,26 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
+    assert (
+        'trusted_noema_document_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"'
+        in measure_step
+    )
+    assert (
+        '[ ! -f "$trusted_noema_document_requirements" ]'
+        in measure_step
+    )
+    assert (
+        '[ -L "$trusted_noema_document_requirements" ]'
+        in measure_step
+    )
+    assert (
+        'install -m 0644 "$trusted_noema_document_requirements"'
+        in measure_step
+    )
+    assert (
+        '"$coverage_build_dir/requirements-noema-document-ci-hashes.txt"'
+        in measure_step
+    )
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
@@ -748,17 +779,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
-    assert 'candidate_count=$((candidate_count + 1))' in measure_step
-    assert '[ "$candidate_count" -ne 1 ]' in measure_step
-    assert "has a missing or ambiguous import root" in measure_step
-    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
-    assert "has a namespace or linked import root" in measure_step
-    assert 'find "$destination" -type l -print -quit' in measure_step
-    assert "contains a symbolic-link layout" in measure_step
-    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
-    assert "contains a compiled extension" in measure_step
-    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
-    assert "contains installed distribution metadata" in measure_step
+    # Import-root admission (including immutable ``python/`` layouts for
+    # fast-mlsirm) lives in scripts/ci/resolve_opencode_base_vcs_import_root.sh;
+    # the Dockerfile COPYs that helper rather than inlining candidate discovery.
+    assert "resolve_opencode_base_vcs_import_root.sh" in measure_step
+    assert (
+        "COPY resolve-opencode-base-vcs-import-root.sh"
+        " /usr/local/libexec/resolve-opencode-base-vcs-import-root.sh"
+    ) in measure_step
+    assert 'install -m 0755 "$trusted_vcs_import_root_resolver"' in measure_step
+    assert (
+        'python_root="$("$resolver" "$destination" "$import_name" "$repository")"'
+        in measure_step
+    )
+    assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
@@ -807,6 +841,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert "printf '\\n[net]\\noffline = true\\n' >>/work/.opencode-sandbox-home/.cargo/config.toml" in measure_step
+    assert "CARGO_NET_OFFLINE=true \\" not in measure_step
+    assert measure_step.index('rm -rf -- /work/.opencode-sandbox-home') < measure_step.index(
+        'cp -a /opt/coverage-cargo-home/. /work/.opencode-sandbox-home/.cargo/'
+    )
     assert "docker run --rm --init --network=none" in measure_step
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1
@@ -2371,6 +2410,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
         encoding="utf-8"
     )
 
+    scan_job = workflow.split("  scan-pr-queue:\n", 1)[1]
+    permission_block = scan_job.split("    permissions:\n", 1)[1].split("    env:\n", 1)[0]
+    status_permissions = re.findall(r"^      statuses: (\w+)\s*$", permission_block, re.MULTILINE)
+    assert status_permissions == ["read"], "same-repository status evidence needs read-only permission"
+
     assert "id-token: write" in workflow
     assert "Exchange OpenCode app token for scheduler mutations" in workflow
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
@@ -2528,7 +2572,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     measure_step = coverage_job.index(
         "      - name: Measure test and docstring evidence\n"
     )
-    measure = coverage_job[measure_step:]
+    cleanup_step = coverage_job.index(
+        "      - name: Clean up coverage runner resources\n", measure_step
+    )
+    measure = coverage_job[measure_step:cleanup_step]
     target_start = coverage_end + 1
     target_job = workflow[target_start:]
 
@@ -2548,7 +2595,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
-    assert syntax_step < measure_step
+    assert syntax_step < measure_step < cleanup_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
     assert measure.count("GITHUB_ENV=/dev/null") == 3
