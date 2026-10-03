@@ -1,3 +1,7 @@
+### Change-request autofix fails closed on unknown merge state
+
+- The shared change-request gate now requires `mergeStateStatus` to be exactly `CLEAN` or `HAS_HOOKS`. Missing, empty, and unknown REST fallback values cannot authorize autofix or RCA dispatch. Proposed in ContextualWisdomLab/.github#1492.
+
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected
