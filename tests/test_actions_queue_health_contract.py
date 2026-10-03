@@ -15,7 +15,7 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     assert "workflow_dispatch:" not in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 30" in workflow
-    assert "runs-on: ubuntu-24.04" in workflow
+    assert "runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" not in workflow
     assert "contents: write" not in workflow

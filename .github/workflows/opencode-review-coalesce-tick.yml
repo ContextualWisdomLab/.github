@@ -54,7 +54,7 @@ jobs:
     # gate back to step scope: that reintroduces multi-hour queue wait for
     # an inert echo under the org concurrent-job ceiling.
     if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 4
     permissions:
       actions: write

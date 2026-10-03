@@ -162,7 +162,7 @@ env:
 jobs:
   prepare:
     name: Verify exact distributions and approve the licence closure
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -455,7 +455,7 @@ jobs:
   strix:
     name: Strix ${{ matrix.key }}
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 360
     permissions:
       contents: read
@@ -709,7 +709,7 @@ jobs:
     name: Strix overflow ${{ matrix.key }}
     needs: prepare
     if: ${{ needs.prepare.outputs.has_overflow == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 360
     permissions:
       contents: read
@@ -726,7 +726,7 @@ jobs:
           ((needs.prepare.outputs.has_overflow == 'true' && needs.strix_overflow.result == 'success') ||
            (needs.prepare.outputs.has_overflow == 'false' && needs.strix_overflow.result == 'skipped')) }}
     name: Collect every Strix binding and seal the complete verdict
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 180
     permissions:
       contents: read

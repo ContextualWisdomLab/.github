@@ -64,7 +64,7 @@ env:
 jobs:
   verify-evidence-artifact:
     name: Verify inert sealed evidence
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 15
     permissions:
       actions: read
@@ -180,7 +180,7 @@ jobs:
   attest-exact-artifacts:
     name: Attest exact wheel and sdist SBOMs
     needs: verify-evidence-artifact
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 20
     permissions:
       actions: read

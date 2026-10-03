@@ -245,10 +245,10 @@ def test_workflow_attests_each_exact_distribution_and_exports_offline_evidence()
 
 
 def test_quality_workflow_pins_supported_runner_images() -> None:
-    """Keep exact supply-chain evidence on an explicit runner image."""
+    """Keep exact supply-chain evidence on isolated self-hosted Linux."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") == 1
+    assert workflow.count("runs-on: [self-hosted, linux, x64, cwlab-ci-isolated]") == 1
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:

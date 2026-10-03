@@ -29,7 +29,7 @@ permissions: read-all
 jobs:
   analysis:
     name: Scorecard analysis
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted", "linux", "x64", "cwlab-ci-isolated"]
     permissions:
       security-events: write
       id-token: write
