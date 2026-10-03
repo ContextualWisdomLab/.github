@@ -10,6 +10,8 @@ product repository. See
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/r-package-check.yml")
@@ -118,6 +120,31 @@ def test_matrix_is_driven_by_the_r_matrix_input() -> None:
         assert platform in workflow
     assert "r-version: ${{ matrix.config.r }}" in workflow
     assert "http-user-agent: ${{ matrix.config['http-user-agent'] }}" in workflow
+
+
+def test_matrix_runner_format_renders_valid_group_scoped_json() -> None:
+    """The documented format template must render one valid runner selector."""
+    workflow = _workflow_text()
+    template_match = re.search(r"fromJSON\(format\('([^']+)'", workflow)
+    assert template_match is not None
+
+    template = template_match.group(1)
+    for platform_label, os_label in (
+        ("linux", "ubuntu-24.04"),
+        ("windows", "windows-2025"),
+        ("macOS", "macos-15"),
+        ("unsupported-os", "solaris-latest"),
+    ):
+        assert json.loads(template.format(platform_label, os_label)) == {
+            "group": "CWL CI isolated",
+            "labels": [
+                "self-hosted",
+                platform_label,
+                "x64",
+                "cwlab-ci-isolated",
+                os_label,
+            ],
+        }
 
 
 def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
