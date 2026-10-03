@@ -176,6 +176,35 @@ def test_strip_jsonc_comments_has_bounded_large_comment_runtime():
     assert elapsed_seconds < 2.0
 
 
+@pytest.mark.parametrize("suffix", ["", "\\"], ids=["plain-eof", "dangling-backslash"])
+def test_strip_jsonc_comments_has_bounded_unterminated_string_runtime(suffix):
+    """An unterminated escaped-quote string is rejected without quadratic scanning."""
+    text = '{"a": "' + '\\"' * 16_000 + suffix
+
+    started_at = time.perf_counter()
+    stripped = guard.strip_jsonc_comments(text)
+    elapsed_seconds = time.perf_counter() - started_at
+
+    assert stripped == text
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(stripped)
+    assert elapsed_seconds < 2.0
+
+
+def test_strip_jsonc_comments_has_bounded_unterminated_comment_runtime():
+    """Repeated unclosed block-comment openers do not trigger quadratic scanning."""
+    text = '{"a": 1}' + "/*a" * 32_000
+
+    started_at = time.perf_counter()
+    stripped = guard.strip_jsonc_comments(text)
+    elapsed_seconds = time.perf_counter() - started_at
+
+    assert stripped == text
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(stripped)
+    assert elapsed_seconds < 2.0
+
+
 def test_strip_jsonc_comments_preserves_double_slash_inside_strings():
     """A string value containing // (a URL) is not treated as a comment."""
     text = '{\n  "$schema": "https://opencode.ai/config.json" // trailing note\n}\n'

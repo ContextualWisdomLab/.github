@@ -22,7 +22,8 @@ def is_known_reasoning_capable(model_name: str) -> bool:
 
 
 _JSONC_COMMENT_PATTERN = re.compile(
-    r'("(?:\\.|[^\\"])*")|(//[^\r\n]*|/\*.*?\*/)', re.DOTALL
+    r'("(?:\\.|[^\\"])*(?:"|[\\]?\Z))|(//[^\r\n]*|/\*.*?(?:\*/|\Z))',
+    re.DOTALL,
 )
 
 
@@ -43,9 +44,12 @@ def strip_jsonc_comments(text: str) -> str:
         string_literal = match.group(1)
         if string_literal is not None:
             return string_literal
+        comment = match.group(2) or ""
+        if comment.startswith("/*") and not comment.endswith("*/"):
+            return comment
         return "".join(
             character
-            for character in (match.group(2) or "")
+            for character in comment
             if character in "\r\n"
         )
 
