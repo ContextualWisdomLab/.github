@@ -2556,6 +2556,25 @@ class PrefixScanCountingText(str):
         return super().rfind(substring, start, end)
 
 
+class SliceCountingText(str):
+    """Count characters copied by slices of an untrusted transcript."""
+
+    def __new__(cls, value):
+        """Create a string that records cumulative sliced width."""
+
+        instance = super().__new__(cls, value)
+        instance.sliced_character_count = 0
+        return instance
+
+    def __getitem__(self, key):
+        """Record copied slice width before returning the normal string value."""
+
+        result = super().__getitem__(key)
+        if isinstance(key, slice):
+            self.sliced_character_count += len(result)
+        return result
+
+
 def test_iter_json_objects_does_not_rescan_prefix_per_nested_opener():
     """Nested untrusted delimiters retain the scanner's linear-time contract."""
 
@@ -2565,6 +2584,27 @@ def test_iter_json_objects_does_not_rescan_prefix_per_nested_opener():
 
     assert norm.iter_json_objects(nested_transcript) == []
     assert nested_transcript.rfind_call_count <= 2
+
+
+def test_iter_json_objects_does_not_copy_line_prefix_per_backtick_span():
+    """Backtick fence classification retains the scanner's linear contract."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(current_control)
+    transcript = SliceCountingText("prefix " + "`example` " * 400 + encoded_control)
+
+    assert norm.iter_json_objects(transcript) == [current_control]
+    assert transcript.sliced_character_count <= len(encoded_control) + 3
+
+
+def test_iter_json_objects_fails_closed_on_excessive_json_nesting():
+    """Hostile nesting cannot crash the review-output normalizer."""
+    deeply_nested_json = "[" * 10_000 + "0" + "]" * 10_000
+
+    assert norm.iter_json_objects(deeply_nested_json) == []
 
 
 @pytest.mark.parametrize("quoted_delimiter", ["{", "["])
@@ -2581,6 +2621,155 @@ def test_iter_json_objects_skips_quoted_prose_delimiters(quoted_delimiter):
     )
 
     assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize(
+    ("quote", "quoted_delimiter"),
+    [
+        ("'", "{"),
+        ("'", "["),
+        ("`", "{"),
+        ("`", "["),
+        ("``", "{"),
+        ("``", "["),
+    ],
+)
+def test_iter_json_objects_skips_inline_delimiter_literals(
+    quote, quoted_delimiter
+):
+    """Paired prose literals cannot hide a later independent control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = (
+        f"Review noted a literal {quote}{quoted_delimiter}{quote} in the log.\n"
+        + json.dumps(current_control)
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize("quote", ["'", "`", "``"])
+def test_iter_json_objects_does_not_promote_inline_control_examples(quote):
+    """Quoted examples cannot become authoritative approval controls."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = (
+        f"Previous candidate was {quote}{json.dumps(example_control)}{quote}, "
+        "but reject it."
+    )
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_extracts_control_from_markdown_fence():
+    """A fenced final JSON payload remains an eligible embedded control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "```json\n" + json.dumps(current_control) + "\n```"
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+@pytest.mark.parametrize(
+    ("quote", "mixed_run_text"),
+    [("`", "``` text `` "), ("``", "``` text ` ")],
+)
+def test_iter_json_objects_requires_exact_backtick_closing_run(
+    quote, mixed_run_text
+):
+    """A longer backtick run cannot end a shorter quoted example."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"{quote}example {mixed_run_text}" + json.dumps(example_control) + quote
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize("quote", ["`", "``"])
+def test_iter_json_objects_recovers_after_exact_backtick_closing_run(quote):
+    """A mixed longer run cannot hide control after the exact closing run."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = f"{quote}example ``` text{quote}.\n" + json.dumps(current_control)
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_does_not_promote_inline_triple_backtick_example():
+    """A same-line triple-backtick span is prose, not a Markdown fence."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "Previous ```" + json.dumps(example_control) + "``` was rejected."
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_does_not_treat_contraction_as_prose_quote():
+    """An apostrophe within a word cannot hide a later independent control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "The review doesn't change the parser.\n" + json.dumps(current_control)
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_keeps_contraction_inside_single_quoted_example():
+    """A contraction cannot end a quoted example and promote its control."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "'doesn't accept " + json.dumps(example_control) + "'"
+
+    assert norm.iter_json_objects(text) == []
+
+
+def test_iter_json_objects_preserves_control_after_quoted_contraction():
+    """A contraction cannot keep a completed quote open across real control."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "Review said 'it doesn't contain a control'.\n" + json.dumps(
+        current_control
+    )
+
+    assert norm.iter_json_objects(text) == [current_control]
+
+
+def test_iter_json_objects_recognizes_quote_adjacent_to_word():
+    """A quote beside prose still prevents promotion of its example control."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = "example'" + json.dumps(example_control) + "'"
+
+    assert norm.iter_json_objects(text) == []
 
 
 def test_iter_json_objects_keeps_unclosed_prose_quote_fail_closed():

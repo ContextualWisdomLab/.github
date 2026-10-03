@@ -1453,7 +1453,7 @@ def iter_json_objects(text: str) -> list[Any]:
     try:
         # Fast path for pure JSON payloads; preserve the single top-level value.
         return [json.loads(text)]
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
@@ -1522,25 +1522,68 @@ def iter_json_objects(text: str) -> list[Any]:
             newline in frame_body for newline in "\r\n"
         )
 
+    def apostrophe_is_word_internal(index: int) -> bool:
+        """Return whether an apostrophe joins two identifier-like characters."""
+        return (
+            0 < index < len(text) - 1
+            and (text[index - 1].isalnum() or text[index - 1] == "_")
+            and (text[index + 1].isalnum() or text[index + 1] == "_")
+        )
+
+    def backtick_run_length_at(index: int) -> int:
+        """Return the complete backtick run length beginning at ``index``."""
+        run_length = 0
+        while index + run_length < len(text) and text[index + run_length] == "`":
+            run_length += 1
+        return run_length
+
     matched_spans: list[tuple[int, int, int | None, bool]] = []
     container_stack: list[tuple[str, int, bool]] = []
     blocking_depth = 0
     in_string = False
     escaped = False
-    in_prose_quote = False
+    prose_quote_delimiter: str | None = None
     prose_quote_escaped = False
+    prose_quote_skip_until = 0
+    line_start_index = 0
     for index, character in enumerate(text):
+        if character in "\r\n":
+            line_start_index = index + 1
         if not container_stack:
-            if in_prose_quote:
-                if prose_quote_escaped:
+            if index < prose_quote_skip_until:
+                continue
+            if prose_quote_delimiter is not None:
+                if prose_quote_delimiter.startswith("`"):
+                    if character == "`":
+                        backtick_run_length = backtick_run_length_at(index)
+                        prose_quote_skip_until = index + backtick_run_length
+                        if backtick_run_length == len(prose_quote_delimiter):
+                            prose_quote_delimiter = None
+                elif prose_quote_escaped:
                     prose_quote_escaped = False
                 elif character == "\\":
                     prose_quote_escaped = True
-                elif character == '"':
-                    in_prose_quote = False
+                elif character == prose_quote_delimiter and not (
+                    character == "'" and apostrophe_is_word_internal(index)
+                ):
+                    prose_quote_delimiter = None
                 continue
-            if character == '"':
-                in_prose_quote = True
+            if character == "`":
+                backtick_run_length = backtick_run_length_at(index)
+                prose_quote_skip_until = index + backtick_run_length
+                line_prefix_length = index - line_start_index
+                is_markdown_fence = (
+                    backtick_run_length >= 3
+                    and line_prefix_length <= 3
+                    and not text[line_start_index:index].strip()
+                )
+                if not is_markdown_fence:
+                    prose_quote_delimiter = "`" * backtick_run_length
+                continue
+            if character in {'"', "'"} and not (
+                character == "'" and apostrophe_is_word_internal(index)
+            ):
+                prose_quote_delimiter = character
                 continue
             if character in "{[":
                 blocks_nested = blocks_nested_container(index, character)
@@ -1587,7 +1630,7 @@ def iter_json_objects(text: str) -> list[Any]:
             continue
         try:
             values.append(json.loads(text[start_index:end_index]))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             pass
 
     return values
