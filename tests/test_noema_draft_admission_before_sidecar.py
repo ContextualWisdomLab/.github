@@ -23,6 +23,7 @@ from tests.test_required_workflow_queue_contract import workflow_step, workflow_
 
 DRAFT_STEP = "Check live pull request draft state before sidecar provisioning"
 DRAFT_GATE = "steps.live_draft.outputs.live_draft != 'true'"
+EXPECTED_UPLOAD_CONDITION = "always() && env.PR_NUMBER != '' && " + DRAFT_GATE
 REVIEWER_TOKEN = (
     "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token"
     " || steps.noema_oidc_token.outputs.token }}"
@@ -45,6 +46,16 @@ def _step_index(job: str, name: str) -> int:
     """Return the offset of one exact step header inside the job body."""
     return job.index(f"      - name: {name}\n")
 
+
+
+def _sidecar_upload_is_fail_closed(upload_step: str) -> bool:
+    """Return whether the upload uses only the exact gate and propagates failure."""
+    condition_lines = [
+        line.strip().removeprefix("if: ").strip()
+        for line in upload_step.splitlines()
+        if line.strip().startswith("if: ")
+    ]
+    return condition_lines == [EXPECTED_UPLOAD_CONDITION] and "continue-on-error:" not in upload_step
 
 def test_live_draft_check_runs_after_head_validation_and_before_sidecar() -> None:
     """The draft decision sits between live-head validation and model provisioning."""
@@ -100,10 +111,11 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
     assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in continuation
     assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in continuation
     upload = workflow_step(workflow, "Upload contextual-orchestrator sidecar evidence")
-    assert (
-        "if: always() && env.PR_NUMBER != '' && "
-        "steps.live_draft.outputs.live_draft != 'true'" in upload
+    assert _sidecar_upload_is_fail_closed(upload)
+    assert not _sidecar_upload_is_fail_closed(
+        upload.replace(EXPECTED_UPLOAD_CONDITION, f"{EXPECTED_UPLOAD_CONDITION} || true")
     )
+    assert not _sidecar_upload_is_fail_closed(f"{upload}        continue-on-error: true\n")
 
 
 def test_trigger_types_are_unchanged_by_the_runtime_draft_check() -> None:
