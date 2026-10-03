@@ -1540,6 +1540,12 @@ def iter_json_objects(text: str) -> list[Any]:
             run_length += 1
         return run_length
 
+    def is_markdown_fence_prefix(start_index: int, end_index: int) -> bool:
+        """Return whether a line prefix contains only Markdown containers."""
+        prefix = text[start_index:end_index]
+        container = r"(?:[ \t]{0,3}>[ \t]?|[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]{1,4})"
+        return re.fullmatch(rf"(?:{container})*[ \t]{{0,3}}", prefix) is not None
+
     matched_spans: list[tuple[int, int, int | None, bool]] = []
     container_stack: list[tuple[str, int, bool]] = []
     blocking_depth = 0
@@ -1550,10 +1556,12 @@ def iter_json_objects(text: str) -> list[Any]:
     prose_quote_skip_until = 0
     line_start_index = 0
     markdown_fence_line = False
+    markdown_fence_candidate_consumed = False
     for index, character in enumerate(text):
         if character in "\r\n":
             line_start_index = index + 1
             markdown_fence_line = False
+            markdown_fence_candidate_consumed = False
         elif markdown_fence_line:
             continue
         if not container_stack:
@@ -1578,12 +1586,12 @@ def iter_json_objects(text: str) -> list[Any]:
             if character in {"`", "~"}:
                 delimiter_run_length = delimiter_run_length_at(index, character)
                 prose_quote_skip_until = index + delimiter_run_length
-                line_prefix_length = index - line_start_index
                 is_markdown_fence = (
-                    delimiter_run_length >= 3
-                    and line_prefix_length <= 3
-                    and not text[line_start_index:index].strip()
+                    not markdown_fence_candidate_consumed
+                    and delimiter_run_length >= 3
+                    and is_markdown_fence_prefix(line_start_index, index)
                 )
+                markdown_fence_candidate_consumed = True
                 if is_markdown_fence:
                     markdown_fence_line = True
                 elif character == "`":
