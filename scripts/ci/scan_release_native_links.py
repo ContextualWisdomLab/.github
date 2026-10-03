@@ -69,7 +69,6 @@ def _reader() -> dict[str, str]:
 
 
 def _links(binary: bytes, target: str, reader: str, *, allow_subset: bool = False) -> list[dict]:
-    """Inspect native bytes and return the target's declared dynamic links."""
     if len(binary) > 128 * 1024 * 1024:
         raise ValueError("release native extension exceeds inspection limit")
     with tempfile.NamedTemporaryFile() as temporary:
@@ -102,7 +101,6 @@ def _links(binary: bytes, target: str, reader: str, *, allow_subset: bool = Fals
 
 
 def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) -> dict:
-    """Build a link inventory for every exact verified release wheel."""
     rows = verified.get("verified_distributions") if isinstance(verified, dict) else None
     if (not re.fullmatch(r"[0-9a-f]{40}", source_sha)
             or not isinstance(rows, list) or len(rows) != 13
@@ -170,7 +168,6 @@ def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) ->
 
 
 def main() -> None:
-    """Run the native-link inventory command."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--verified-distributions", required=True)
     parser.add_argument("--distribution-root", required=True)

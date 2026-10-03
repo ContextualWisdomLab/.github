@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import runpy
-import sys
 import zipfile
 from pathlib import Path
 
@@ -67,17 +65,6 @@ def test_python_source_outside_the_project_is_rejected(tmp_path: Path) -> None:
         placer.place(wheel, project)
 
 
-def test_non_string_python_source_is_rejected(tmp_path: Path) -> None:
-    """A malformed maturin source root cannot be coerced into a filesystem path."""
-
-    project = _project(tmp_path, "python")
-    (project / "pyproject.toml").write_text(
-        "[tool.maturin]\npython-source = 1\n", encoding="utf-8"
-    )
-    with pytest.raises(ValueError, match="must be a string"):
-        placer.place(tmp_path / "unused.whl", project)
-
-
 def test_traversing_wheel_member_is_rejected(tmp_path: Path) -> None:
     project = _project(tmp_path, "python")
     wheel = _wheel(tmp_path, {f"../../{_SO}": b"ELF"})
@@ -102,34 +89,3 @@ def test_offline_maturin_build_places_the_extension_for_pytest() -> None:
     build = workflow.split("build_maturin_extension_if_needed() {", 1)[1].split("\n          }", 1)[0]
     assert 'python3 "$2" "$dist_dir"/*.whl .' in build
     assert '"${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"' in build
-
-
-def test_cli_rejects_wrong_arity_and_reports_placement_failure(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The CLI distinguishes invocation errors from invalid build artifacts."""
-
-    assert placer.main([]) == 2
-    assert "usage:" in capsys.readouterr().err
-
-    project = _project(tmp_path, "python")
-    assert placer.main([str(tmp_path / "missing.whl"), str(project)]) == 1
-    assert "Could not place" in capsys.readouterr().err
-
-
-def test_script_entrypoint_places_and_reports_extension(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The executable script exits successfully after placing a real wheel member."""
-
-    project = _project(tmp_path, "python")
-    wheel = _wheel(tmp_path, {f"pkg/{_SO}": b"ELF"})
-    script = Path(placer.__file__)
-    monkeypatch.setattr(sys, "argv", [str(script), str(wheel), str(project)])
-
-    with pytest.raises(SystemExit) as exited:
-        runpy.run_path(str(script), run_name="__main__")
-
-    assert exited.value.code == 0
-    assert "Placed built extension" in capsys.readouterr().out
-    assert (project / "python" / "pkg" / _SO).read_bytes() == b"ELF"

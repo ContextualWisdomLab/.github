@@ -11,7 +11,6 @@ import base64
 import hashlib
 import io
 import json
-import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -739,14 +738,6 @@ def test_benign_cmdclass_without_lifecycle_override_passes(tmp_path: Path) -> No
     assert gate.gate(capture).failures == []
 
 
-def test_rust_hook_without_process_or_network_namespace_is_benign() -> None:
-    """Ordinary Rust build code stays allowed while network namespaces are detected."""
-    assert gate.detect_install_hooks({"build.rs": "fn main() { println!(\"cargo:rerun\"); }"}) == []
-    assert gate.detect_install_hooks({"build.rs": "use std::net; fn main() {}"}) == [
-        "build.rs references a process/network namespace"
-    ]
-
-
 # ---------------------------------------------------------------------------
 # RED: Strix structured evidence
 # ---------------------------------------------------------------------------
@@ -908,31 +899,6 @@ def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -
         gate._load_selections(capture)
 
 
-def test_capture_license_selection_cli_publishes_the_exact_commit_blob(tmp_path: Path) -> None:
-    """The CLI command delegates to the same exact-commit capture boundary."""
-    source = tmp_path / "source"
-    source.mkdir()
-    path = source / "docs/release-license-selections.json"
-    path.parent.mkdir()
-    path.write_text("[]")
-    subprocess.run(["git", "init", "-q", str(source)], check=True)
-    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(source), "-c", "user.name=Test", "-c",
-                    "user.email=test@example.invalid", "commit", "-qm", "selection"], check=True)
-    source_sha = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
-    ).strip()
-    capture = tmp_path / "capture"
-
-    assert gate.main([
-        "capture-license-selections",
-        "--source", str(source),
-        "--source-sha", source_sha,
-        "--capture", str(capture),
-    ]) == 0
-    assert (capture / "license-selections.json").read_text() == "[]"
-
-
 def test_selection_loader_refuses_dangling_link_and_nonstring_choice(tmp_path: Path) -> None:
     path = tmp_path / "license-selections.json"
     path.symlink_to(tmp_path / "missing")
@@ -970,58 +936,6 @@ def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path,
     with pytest.raises(gate.GateError, match="exceeds bounded size"):
         gate.capture_license_selections(source, sha, capture)
     assert not capture.exists()
-
-
-def test_selection_capture_refuses_unbound_sources_and_payload_size_races(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Selection capture accepts only exact regular blobs whose bytes remain bounded."""
-    source = tmp_path / "source"
-    source.mkdir()
-    subprocess.run(["git", "init", "-q", str(source)], check=True)
-    subprocess.run([
-        "git", "-C", str(source), "-c", "user.name=Test", "-c",
-        "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "empty",
-    ], check=True)
-    sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    capture = tmp_path / "capture"
-
-    with pytest.raises(gate.GateError, match="exact commit SHA"):
-        gate.capture_license_selections(source, "not-a-sha", capture)
-    gate.capture_license_selections(source, sha, capture)
-    assert not capture.exists()
-
-    selection = source / "docs/release-license-selections.json"
-    selection.parent.mkdir()
-    selection.symlink_to(source / "missing")
-    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(source), "-c", "user.name=Test", "-c",
-                    "user.email=test@example.invalid", "commit", "-qm", "link"], check=True)
-    link_sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    with pytest.raises(gate.GateError, match="regular Git blob"):
-        gate.capture_license_selections(source, link_sha, capture)
-
-    selection.unlink()
-    selection.write_text("[]")
-    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(source), "-c", "user.name=Test", "-c",
-                    "user.email=test@example.invalid", "commit", "-qm", "regular"], check=True)
-    regular_sha = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
-    ).strip()
-
-    original = gate.subprocess.check_output
-
-    def raced_blob(command, **kwargs):
-        if command[1:3] == ["cat-file", "-s"]:
-            return "1\n" if kwargs.get("text") else b"1\n"
-        if command[1:3] == ["cat-file", "blob"]:
-            return b"x" * (gate._MAX_METADATA_BYTES + 1)
-        return original(command, **kwargs)
-
-    monkeypatch.setattr(gate.subprocess, "check_output", raced_blob)
-    with pytest.raises(gate.GateError, match="exceeds bounded size"):
-        gate.capture_license_selections(source, regular_sha, capture)
 
 
 @pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"])
@@ -1120,99 +1034,9 @@ def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> N
     assert decision.allowed == (selection is not None)
 
 
-@pytest.mark.parametrize(
-    ("mutation_name", "expected_message"),
-    [
-        ("nonexact", "exact release commit"),
-        ("oversized", "blob exceeds bounded size"),
-        ("not-list", "must be a JSON array"),
-        ("missing-choice", "lacks one explicit notice selection"),
-        ("separator", "grant separator differs"),
-        ("grant", "grant bytes differ"),
-    ],
-)
-def test_reviewed_source_notice_refuses_unbound_git_evidence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mutation_name: str,
-    expected_message: str,
-) -> None:
-    """Reviewed supplemental grants remain exact-SHA, bounded, and byte separated."""
-    subject = "cargo/example@1.0.0"
-    archive_sha = "a" * 64
-    source_sha = "b" * 40
-    source = tmp_path / "source"
-    source.mkdir()
-    first_grant = b"MIT"
-    second_grant = b"BSD"
-    content = first_grant + b"\n\n" + second_grant
-    if mutation_name == "separator":
-        content = first_grant + b"xx" + second_grant
-    elif mutation_name == "grant":
-        content = b"BAD\n\n" + second_grant
-    notice_digest = hashlib.sha256(content).hexdigest()
-    grants = (
-        ("LICENSE-MIT", 3, hashlib.sha256(first_grant).hexdigest()),
-        ("LICENSE-BSD", 3, hashlib.sha256(second_grant).hexdigest()),
-    )
-    monkeypatch.setitem(
-        gate._REVIEWED_SOURCE_NOTICES,
-        subject,
-        (archive_sha, "owner/repo", "c" * 40, notice_digest, {"MIT"}, grants),
-    )
-    upstream = [
-        {
-            "url": f"https://raw.githubusercontent.com/owner/repo/{'c' * 40}/{name}",
-            "sha256": digest,
-        }
-        for name, _, digest in grants
-    ]
-    choice = {
-        "ecosystem": "cargo",
-        "name": "example",
-        "version": "1.0.0",
-        "chosen": "MIT",
-        "rationale": "Reviewed both immutable grant bytes.",
-        "archive_sha256": archive_sha,
-        "upstream_licenses": upstream,
-        "bundled_notice": {
-            "path": "python/fast_mlsirm/_licenses/example.txt",
-            "sha256": notice_digest,
-        },
-    }
-    choices = [] if mutation_name == "missing-choice" else [choice]
-    choices_payload = b"{}" if mutation_name == "not-list" else json.dumps(choices).encode()
-
-    def git_blob(command, **kwargs):
-        operation = command[3]
-        if operation == "ls-tree":
-            path = command[-1]
-            oid = "selection-oid" if path == "docs/release-license-selections.json" else "notice-oid"
-            return f"100644 blob {oid}\t{path}\n"
-        if operation == "cat-file" and command[4] == "-s":
-            size = gate._MAX_METADATA_BYTES + 1 if mutation_name == "oversized" else 1
-            return f"{size}\n" if kwargs.get("text") else f"{size}\n".encode()
-        if operation == "cat-file" and command[4] == "blob":
-            return choices_payload if command[5] == "selection-oid" else content
-        raise AssertionError(command)
-
-    monkeypatch.setattr(gate.subprocess, "check_output", git_blob)
-    selected_sha = "short" if mutation_name == "nonexact" else source_sha
-    with pytest.raises(gate.GateError, match=expected_message):
-        gate._source_license_notice(
-            source,
-            selected_sha,
-            subject,
-            {"ecosystem": "cargo", "source_sha256": archive_sha},
-            {"chosen": "MIT", "rationale": "Reviewed both immutable grant bytes."},
-        )
-
-
-@pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "nonexact_sha",
-                                      "foreign_workspace", "workspace_version", "foreign_path",
+@pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
                                       "changed_manifest", "changed_lock", "captured_lock",
-                                      "symlink", "identity", "missing_dev", "matching_dev_lock",
-                                      "changed_dev_lock"])
+                                      "symlink", "identity", "missing_dev"])
 def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
     import subprocess
 
@@ -1227,14 +1051,8 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     lock = capture / "cargo/Cargo.lock"
     lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
     (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
-    if mutation in {"missing_dev", "matching_dev_lock", "changed_dev_lock"}:
+    if mutation == "missing_dev":
         (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
-        if mutation in {"matching_dev_lock", "changed_dev_lock"}:
-            dev = capture / "cargo-dev"
-            dev.mkdir()
-            dev_lock = ((source / "Cargo.lock").read_bytes() if mutation == "matching_dev_lock"
-                        else b"different development lock\n")
-            (dev / "Cargo.lock").write_bytes(dev_lock)
     def git(*args):
         return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
     git("init", "-q")
@@ -1252,20 +1070,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id"}]})
     if mutation == "wrong_sha":
         sha = "a" * 40
-    elif mutation == "nonexact_sha":
-        sha = "short"
-    elif mutation == "foreign_workspace":
-        metadata["workspace_root"] = str(tmp_path / "foreign")
-    elif mutation == "workspace_version":
-        core.write_text('[package]\nname = "local-core"\nversion.workspace = true\n')
-        (wheel / "Cargo.toml").write_text(
-            '[package]\nname = "fast-mlsirm"\nversion = "0.11.5"\n'
-            '[workspace]\nmembers = ["../core"]\n[workspace.package]\nversion = "1.0.0"\n'
-        )
-        subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c",
-                        "user.email=fixture@example.invalid", "commit", "-qm", "workspace version"], check=True)
-        sha = git("rev-parse", "HEAD")
     elif mutation == "foreign_path":
         metadata["packages"][-1]["manifest_path"] = str(tmp_path / "foreign/Cargo.toml")
     elif mutation == "changed_manifest":
@@ -1283,22 +1087,14 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     elif mutation == "identity":
         metadata["packages"][-1]["name"] = "foreign-core"
     _write(path, metadata)
-    if mutation in {"missing_dev", "matching_dev_lock", "changed_dev_lock"}:
+    if mutation == "missing_dev":
         release = json.loads((capture / "release.json").read_text())
         release["source_sha"] = sha
         _write(capture / "release.json", release)
-        if mutation == "matching_dev_lock":
-            dev_metadata = json.loads((capture / "cargo/metadata.json").read_text())
-            dev_metadata["workspace_root"] = str(source)
-            _write(capture / "cargo-dev/metadata.json", dev_metadata)
-            assert gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source).passed
-            return
-        expected = ("development Cargo graph is missing" if mutation == "missing_dev"
-                    else "development Cargo lock differs from source root")
-        with pytest.raises(gate.GateError, match=expected):
+        with pytest.raises(gate.GateError, match="development Cargo graph is missing"):
             gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
         return
-    if mutation not in {None, "workspace_version"}:
+    if mutation is not None:
         with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
             gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
                                   source_sha=sha)

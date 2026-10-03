@@ -40,7 +40,6 @@ class DistributionSetError(ValueError):
 
 
 def _strict_object(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
-    """Build a JSON object while rejecting duplicate keys."""
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -50,12 +49,10 @@ def _strict_object(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_constant(value: str) -> Any:
-    """Reject non-finite JSON numeric constants."""
     raise DistributionSetError(f"non-finite JSON value: {value}")
 
 
 def _json_bytes(data: bytes) -> Any:
-    """Decode bounded strict UTF-8 JSON bytes."""
     if len(data) > MAX_CONTROL_BYTES:
         raise DistributionSetError("control JSON is too large")
     try:
@@ -66,7 +63,6 @@ def _json_bytes(data: bytes) -> Any:
 
 
 def _timestamp(value: Any) -> datetime:
-    """Parse a canonical UTC timestamp."""
     if not isinstance(value, str) or not value.endswith("Z"):
         raise DistributionSetError("missing canonical UTC timestamp")
     try:
@@ -79,7 +75,6 @@ def _timestamp(value: Any) -> datetime:
 
 
 def _digest(value: Any) -> str:
-    """Validate and return a canonical SHA-256 artifact digest."""
     if not isinstance(value, str) or DIGEST_RE.fullmatch(value) is None:
         raise DistributionSetError("missing canonical artifact digest")
     return value
@@ -87,7 +82,6 @@ def _digest(value: Any) -> str:
 
 def _artifact(artifacts: Mapping[str, Mapping[str, Any]], name: str, artifact_id: int,
               digest: str, run_id: int, control_sha: str, started: datetime) -> None:
-    """Require immutable artifact metadata bound to the selected run."""
     item = artifacts.get(name)
     if item is None or type(artifact_id) is not int or artifact_id <= 0:
         raise DistributionSetError(f"{name}: missing immutable artifact identity")
@@ -105,7 +99,6 @@ def _artifact(artifacts: Mapping[str, Mapping[str, Any]], name: str, artifact_id
 @contextmanager
 def _archive(repository: str, artifact_id: int, digest: str,
              fetch: Callable[[str, int, BinaryIO], None]):
-    """Yield an artifact ZIP only after bounded download and digest verification."""
     with tempfile.TemporaryFile() as archive:
         fetch(repository, artifact_id, archive)
         if archive.tell() > MAX_ARCHIVE_BYTES:
@@ -120,7 +113,6 @@ def _archive(repository: str, artifact_id: int, digest: str,
 
 
 def _members(archive: zipfile.ZipFile, expected: set[str]) -> dict[str, zipfile.ZipInfo]:
-    """Validate an artifact ZIP's exact regular-file member set."""
     entries = archive.infolist()
     if len(entries) != len(expected) or {entry.filename for entry in entries} != expected:
         raise DistributionSetError("artifact ZIP members differ from the expected set")
@@ -134,7 +126,6 @@ def _members(archive: zipfile.ZipFile, expected: set[str]) -> dict[str, zipfile.
 
 
 def _record_rows(data: bytes, source_sha: str) -> dict[str, tuple[str, str]]:
-    """Parse source-bound reproducibility rows into file and digest identities."""
     if len(data) > MAX_CONTROL_BYTES:
         raise DistributionSetError("reproducibility record is too large")
     try:
@@ -278,7 +269,6 @@ def fetch_artifact(repository: str, artifact_id: int, output: BinaryIO) -> None:
 
 
 def main() -> None:
-    """Run exact release-distribution verification from CLI inputs."""
     parser = argparse.ArgumentParser()
     for option in ("repository", "source-sha", "control-sha", "run-id", "run-attempt",
                    "record-artifact-id", "record-artifact-digest", "wheel-filename",

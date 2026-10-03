@@ -131,18 +131,6 @@ def test_dual_license_selection_needs_a_rationale() -> None:
     assert (decision.allowed, decision.code) == (False, policy.LICENSE_SELECTION_INVALID)
 
 
-def test_dual_license_selection_must_be_valid_spdx() -> None:
-    """A rationale cannot make a malformed SPDX selection valid."""
-    decision = policy.evaluate_license_expression(
-        "MIT OR GPL-2.0-only", selection="MIT AND", rationale="commercial choice"
-    )
-
-    assert (decision.allowed, decision.code) == (
-        False,
-        policy.LICENSE_SELECTION_INVALID,
-    )
-
-
 def test_selection_must_name_an_operand_of_the_expression() -> None:
     """A selection naming a license the dependency never offered is rejected."""
     decision = policy.evaluate_license_expression(

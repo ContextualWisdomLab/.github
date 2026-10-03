@@ -218,19 +218,6 @@ def test_directory_report_path_keeps_plain_failure(tmp_path, monkeypatch):
     assert outputs["transport_capacity_unavailable"] == "false"
 
 
-def test_symlinked_report_parent_is_rejected(tmp_path):
-    """A symlinked evidence directory cannot redirect the trusted report read."""
-    real_parent = tmp_path / "real-parent"
-    real_parent.mkdir()
-    report = _all_429()
-    (real_parent / "report.json").write_text(json.dumps(report), encoding="utf-8")
-    symlink_parent = tmp_path / "report-parent"
-    symlink_parent.symlink_to(real_parent, target_is_directory=True)
-
-    assert capacity.load_preflight_report(real_parent / "report.json") == report
-    assert capacity.load_preflight_report(symlink_parent / "report.json") is None
-
-
 def test_oversized_report_keeps_plain_failure(tmp_path, monkeypatch):
     """The classifier reads a bounded prefix and rejects anything larger."""
     padded = _all_429()

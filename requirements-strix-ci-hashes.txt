@@ -144,7 +144,6 @@ anyio==4.14.2 \
     --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
     --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
     # via
-    #   -r requirements-strix-ci.txt
     #   google-genai
     #   gql
     #   httpx
@@ -1120,45 +1119,24 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
-litellm==1.94.3 \
-    --hash=sha256:0ddb60a439cc361e69bb4f550a78d1656c8edad6753f8fece14f60bbd0fcd054 \
-    --hash=sha256:1017f29a6f72a16ef1b026208b3e52c7197b91ae848b396c817bfb051f86c300 \
-    --hash=sha256:136960922878cbc66065346583a60fd0d35f3b1dbe853d636d10da39f049399f \
-    --hash=sha256:14f06f1486aa4eef0684a2088539548e3647495fa119edc2b8145c5cfee3ca24 \
-    --hash=sha256:1594d231e005f6a99e319310f2e3c0d33f26d8c746e90ec42fedc2b413f16573 \
-    --hash=sha256:1ec0ff6e81acbfa85b4af90f9460c46a7872a28d53aaeee956ad7d289f47edc4 \
-    --hash=sha256:2098c818ce5d8139eb46a851f26d1ac5caac1502e19d5223af4930b31682c461 \
-    --hash=sha256:45b9f56f02a5417b249ecaf6f01f2531e744b17b701aaea441741ed9431ba35e \
-    --hash=sha256:4a21e3f5cc72b18bd424009e5ad9addcee5ebdd726c7b26cadb4c87f865f5f1b \
-    --hash=sha256:56bb6b303e2e341eb55570fd0cfa5734e5d89e8a1a5ee0096e7bb0bd9f27f9e2 \
-    --hash=sha256:57a82dbbf1528aa530f021f1e6fe7528331c7d5f95fa755a17f984623eaf29ae \
-    --hash=sha256:584b705ece98e7b7a2fc3cf4b720711d0b786e4d131de5c4469c34cabc3f55e0 \
-    --hash=sha256:5b7ef13f56e167c76ca5dfc2e6bba8e52faf6371a540c00585ee7cff81af4ba0 \
-    --hash=sha256:68b5b8c4ec8d51e4a2d02cf5405b6dd85be06b8ccf0205b7b0b30c1d3c02aebe \
-    --hash=sha256:6ae267172e1c615346523faf6de6cac2f21937bda2e15e0af8c5d3291476a4e5 \
-    --hash=sha256:87a343c86304daa6be5f96493f1eb0796d57142886f21f8d0815e1712d2bfc18 \
-    --hash=sha256:93e13c1919f8eaeb3bee9a9160c6339d1fc3913254981a1e152023c5815667cc \
-    --hash=sha256:9d0fabd73ca571771773a892de1c57e208349c99a3bbc51cd049a326f7a6f6e2 \
-    --hash=sha256:9e339bea866f313487b1d7e150374360700f7ed80cac41722f7ddb072b9b685e \
-    --hash=sha256:9f0529505cd5cceed220f89b311f4403fa076beae18069e9df31c4e59b226871 \
-    --hash=sha256:a18386278e02a2b7f8d73bf836f1c7945133becca7894ee0641dbacc6473322d \
-    --hash=sha256:ac40df3e6f412a2e87f61553640922d63c8114e433c85992461317b5f67ce78f \
-    --hash=sha256:b6984b3b8032ab6807aa7c56423e961a5c4220d6b93a348dbf37ec1162b68e2d \
-    --hash=sha256:b6ba10b699165a9a46811f2d3abe92967dc1c2d16f972d1057dae5c5c9cd460b \
-    --hash=sha256:c0eee30a6d7c38fd4702339a5a53648f140ed8e5307baa321215d0d10dd9e535 \
-    --hash=sha256:c526656e85ee1be21038c75774c094b97e7439e649dc13f61cb434700199990a \
-    --hash=sha256:ccf58062430fdfd53d1ebb02d55d2316ad1068005dbb4186a522039077489f9b \
-    --hash=sha256:d2027a4e492fd85702ffdbcc43be770a450c521b8c8c0c995e6f7d2fb6df1d49 \
-    --hash=sha256:d8eedd2dc2e504ea8452392c4c66c102ed7ccd204307d72420fd073552b59ea9 \
-    --hash=sha256:de2b3cc1a5cb5b9c7e393b55a0da58cdbe46f0b373b215d4422e30b2d5dec29b \
-    --hash=sha256:deac3f3efdb5373729f37f612d2469696bbc928baef5f7c80ae7a2b0940b7939 \
-    --hash=sha256:e05cabfc94633e47b725bed0851ecf18809117d23e8d6ef9abaa6059c2712261 \
-    --hash=sha256:e4255bc09a27d99e8c1526baf76ff307e16d3543f51fda9c87c51a71c99c8ff7 \
-    --hash=sha256:f8913c9f10ef3fb1baf4ab16fc77e110f92c1c0a9a16fa0f86d1b90b417e063f \
-    --hash=sha256:f8c9a92d6165570065349b8d324e7b58800cb993c39b85a5f3c7458b5d926f3d \
-    --hash=sha256:fafb59618a85f3c96d38a123ac53187c75e722a6b4e34d305063661262f62ea8
+litellm==1.94.1 \
+    --hash=sha256:001be1cde7950f2ae484e450ab2f8e93ab8791e5e8d4da560d21f2fb456b0b47 \
+    --hash=sha256:07c1771315d7d26e242ef90b9336bcbc49a52158ff72ee640b4f8160cc963147 \
+    --hash=sha256:156c62022320bccab7c3507b6b13400b26e55b74c799e5a4a2d5bf904a77368f \
+    --hash=sha256:1b0bc4a2373e54f2bd4c13f8ef9fda3839bfb2e1173fb4bcea3150b07d4c59bc \
+    --hash=sha256:2103e9b155d6545b48936d2ac2e614661613adb9e3d081c58c7303ca5dd6c656 \
+    --hash=sha256:44e55a55270dee8bb85e063940c368d32040e6db66765c55db4b884fc002d4ef \
+    --hash=sha256:66bc95498af3ab687ce7570704cb274bcf1d78049afa87a9f5f64db45b72847d \
+    --hash=sha256:a6f5274876f20dd5c9e53ba3da502e94f5b3c681c5027a0398231d0caae4aacd \
+    --hash=sha256:af37356cf5b325a2887c40ff772b39e1e0865b988297c544b29123ffb13fd1b9 \
+    --hash=sha256:b0145d6b9fb718d12b7242ce5c975123f4dbfecd7b8ed1eb6a6939b0e506c946 \
+    --hash=sha256:c5c9247d9fea8fe7cda851f7b15db560ee547a8325a0af86048967edf3ccfa15 \
+    --hash=sha256:cfef0468bda9c1ba8f554bebc2966f08436f1ead98017e7ed2d7663ece77f1c2 \
+    --hash=sha256:d14e5812b5f36af2ab45461ee0c925251bc07daf65c33b8f2ce3fd3ec1235eae \
+    --hash=sha256:e9b6d92e305d96bdadb8a5ccd343b1ac188de142fbd6c91f72c75416b8c25c48 \
+    --hash=sha256:e9effe4c1e9206740b4bb4c98142ea1f71bae57e49df007cd25ef24b0ce4563f \
+    --hash=sha256:ffa9a6cd9b6205d60b02ffc0b7f077a03693d835b06d2a34bfeaabb4f073c08a
     # via
-    #   -r requirements-strix-ci.txt
     #   openai-agents
     #   strix-agent
 markdown-it-py==4.2.0 \
@@ -1833,12 +1811,10 @@ pygments==2.20.0 \
     --hash=sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f \
     --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
     # via rich
-pyjwt==2.15.1 \
-    --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
-    --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
-    # via
-    #   -r requirements-strix-ci.txt
-    #   mcp
+pyjwt==2.13.0 \
+    --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
+    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
+    # via mcp
 pyopenssl==26.4.0 \
     --hash=sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7 \
     --hash=sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c
@@ -2370,11 +2346,10 @@ typing-inspection==0.4.4 \
     #   mcp
     #   pydantic
     #   pydantic-settings
-urllib3==2.8.0 \
-    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
-    --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
+urllib3==2.7.0 \
+    --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
+    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
     # via
-    #   -r requirements-strix-ci.txt
     #   docker
     #   requests
 uvicorn==0.49.0 \

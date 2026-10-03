@@ -23,7 +23,6 @@ PIN_FILES = ("rust-toolchain.toml", "rust-toolchain")
 
 
 def _base_blob(repo_root: pathlib.Path, base_sha: str, path: str) -> str | None:
-    """Return a UTF-8 replacement-decoded file from the exact base commit."""
     completed = subprocess.run(
         ["git", "-C", str(repo_root), "show", f"{base_sha}:{path}"],
         check=False,
@@ -35,7 +34,6 @@ def _base_blob(repo_root: pathlib.Path, base_sha: str, path: str) -> str | None:
 
 
 def _channel(content: str) -> str | None:
-    """Extract a TOML or legacy Rust toolchain channel when structurally valid."""
     try:
         toolchain = tomllib.loads(content).get("toolchain")
     except tomllib.TOMLDecodeError:
@@ -49,7 +47,6 @@ def _channel(content: str) -> str | None:
 
 
 def resolve(repo_root: pathlib.Path, base_sha: str) -> str:
-    """Resolve an exact stable base toolchain or the central fallback."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be a full 40-character commit id")
     for path in PIN_FILES:
@@ -69,7 +66,6 @@ def resolve(repo_root: pathlib.Path, base_sha: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Print the resolved base Rust toolchain for workflow consumption."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)

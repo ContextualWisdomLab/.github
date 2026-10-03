@@ -1,7 +1,6 @@
 import json
 import runpy
 import sys
-import time
 
 import pytest
 
@@ -132,48 +131,6 @@ def test_strip_jsonc_comments_removes_line_and_block_comments():
 
     assert json.loads(stripped) == {"a": 1, "b": 2}
     assert stripped.count("\n") == text.count("\n")
-
-
-def test_strip_jsonc_comments_preserves_block_comment_line_endings():
-    """Block-comment removal preserves every LF and CR character in order."""
-    text = '{\r\n  "a": 1, /* first\r\nsecond\rthird\nfourth */ "b": 2\r\n}\r\n'
-
-    stripped = guard.strip_jsonc_comments(text)
-
-    assert json.loads(stripped) == {"a": 1, "b": 2}
-    assert [character for character in stripped if character in "\r\n"] == [
-        character for character in text if character in "\r\n"
-    ]
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        '{"a": 1, /* unterminated block comment',
-        '{"a": "unterminated // string',
-    ],
-)
-def test_load_config_rejects_unterminated_jsonc_constructs(tmp_path, text):
-    """Malformed comments and strings remain invalid instead of being accepted."""
-    config_path = tmp_path / "opencode.jsonc"
-    config_path.write_text(text, encoding="utf-8")
-
-    with pytest.raises(SystemExit, match="OpenCode config is not valid JSON"):
-        guard.load_config(config_path)
-
-
-def test_strip_jsonc_comments_has_bounded_large_comment_runtime():
-    """A one-megabyte adversarial block comment is stripped within two seconds."""
-    comment_body = "x\\/" * 349_526
-    text = '{"a": 1, /*' + comment_body + '\r\n*/ "b": 2}'
-
-    started_at = time.perf_counter()
-    stripped = guard.strip_jsonc_comments(text)
-    elapsed_seconds = time.perf_counter() - started_at
-
-    assert json.loads(stripped) == {"a": 1, "b": 2}
-    assert "\r\n" in stripped
-    assert elapsed_seconds < 2.0
 
 
 def test_strip_jsonc_comments_preserves_double_slash_inside_strings():

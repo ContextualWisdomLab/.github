@@ -450,10 +450,7 @@ jobs:
             )"
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
-          statuses="$(
-            gh api --paginate -f per_page=100 "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses" --jq '.[]' |
-              jq -s '.'
-          )"
+          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
