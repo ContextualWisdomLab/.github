@@ -52,11 +52,18 @@ def _step_index(job: str, name: str) -> int:
 def _sidecar_upload_is_fail_closed(workflow: str) -> bool:
     """Return whether the upload uses only the exact gate and propagates failure."""
     steps = yaml.safe_load(workflow)["jobs"]["noema-review"]["steps"]
-    upload_step = next(
-        step for step in steps if step.get("name") == "Upload contextual-orchestrator sidecar evidence"
-    )
+    upload_steps = [
+        step
+        for step in steps
+        if str(step.get("uses", "")).casefold().startswith("actions/upload-artifact@")
+    ]
+    if len(upload_steps) != 1:
+        return False
+    upload_step = upload_steps[0]
     return (
-        upload_step.get("if") == EXPECTED_UPLOAD_CONDITION
+        upload_step.get("name") == "Upload contextual-orchestrator sidecar evidence"
+        and upload_step.get("if") == EXPECTED_UPLOAD_CONDITION
+        and upload_step.get("with", {}).get("name") == "noema-sidecar-evidence"
         and "continue-on-error" not in upload_step
     )
 
@@ -133,6 +140,43 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
     ):
         mutated = workflow.replace(upload_marker, f"{upload_marker}{bypass}\n", 1)
         assert not _sidecar_upload_is_fail_closed(mutated), bypass
+    decoy = (
+        f"{upload_marker}"
+        f"        if: {EXPECTED_UPLOAD_CONDITION}\n"
+        '        run: "true"\n\n'
+    )
+    decoy_bypass = workflow.replace(
+        upload_marker,
+        f"{decoy}{upload_marker}        continue-on-error: true\n",
+        1,
+    )
+    assert not _sidecar_upload_is_fail_closed(decoy_bypass)
+    upload_action = next(
+        step["uses"]
+        for step in yaml.safe_load(workflow)["jobs"]["noema-review"]["steps"]
+        if step.get("name") == "Upload contextual-orchestrator sidecar evidence"
+    )
+    assert upload_action.casefold().startswith("actions/upload-artifact@")
+    mixed_case_actual = workflow.replace(
+        f"uses: {upload_action}",
+        f"uses: Actions/Upload-Artifact@{upload_action.split('@', 1)[1]}",
+        1,
+    )
+    assert mixed_case_actual != workflow
+    action_decoy = (
+        f"{upload_marker}"
+        f"        if: {EXPECTED_UPLOAD_CONDITION}\n"
+        f"        uses: {upload_action}\n"
+        "        with:\n"
+        "          name: noema-sidecar-evidence\n"
+        "          path: CHANGELOG.md\n\n"
+    )
+    mixed_case_alias_bypass = mixed_case_actual.replace(
+        upload_marker,
+        f"{action_decoy}{upload_marker}        continue-on-error: true\n",
+        1,
+    )
+    assert not _sidecar_upload_is_fail_closed(mixed_case_alias_bypass)
     for bypass in (
         "    continue-on-error: true",
         '    "continue-on-error": true',
