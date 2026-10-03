@@ -47,6 +47,7 @@ def _run_availability_probe(
     base_sha: str = "a" * 40,
     head_sha: str = "b" * 40,
     http_status: str = "200",
+    curl_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the real preflight shell against a marker-only fake curl."""
     fake_bin = tmp_path / "bin"
@@ -61,7 +62,8 @@ def _run_availability_probe(
         "  if [[ \"$arg\" == Authorization:* ]]; then authorized=true; fi\n"
         "done\n"
         "printf '%s\\n' \"$authorized\" >>\"${CURL_MARKER}\"\n"
-        "printf '%s' \"${HTTP_STATUS:-200}\"\n",
+        "printf '%s' \"${HTTP_STATUS:-200}\"\n"
+        "exit \"${CURL_EXIT:-0}\"\n",
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
@@ -78,6 +80,7 @@ def _run_availability_probe(
             "GITHUB_OUTPUT": str(output),
             "CURL_MARKER": str(curl_marker),
             "HTTP_STATUS": http_status,
+            "CURL_EXIT": str(curl_exit),
         }
     )
     result = subprocess.run(
@@ -258,6 +261,22 @@ def test_preflight_accepts_dotgithub_and_uses_job_token(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert curl_marker.read_text(encoding="utf-8") == "true\n"
     assert output.read_text(encoding="utf-8") == "available=true\n"
+
+
+def test_preflight_rejects_http_200_when_curl_transport_fails(tmp_path: Path) -> None:
+    """Partial transport failure cannot authorize an incomplete HTTP 200 compare."""
+    result, curl_marker, output = _run_availability_probe(
+        tmp_path,
+        "ContextualWisdomLab/.github",
+        http_status="200",
+        curl_exit=18,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert curl_marker.read_text(encoding="utf-8") == "true\n"
+    assert not output.exists() or "available=true" not in output.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_dependency_review_comment_summary_defaults_to_on_failure() -> None:
