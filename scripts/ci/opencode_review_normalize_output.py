@@ -1546,9 +1546,13 @@ def iter_json_objects(text: str) -> list[Any]:
     prose_quote_escaped = False
     prose_quote_skip_until = 0
     line_start_index = 0
+    markdown_fence_line = False
     for index, character in enumerate(text):
         if character in "\r\n":
             line_start_index = index + 1
+            markdown_fence_line = False
+        elif markdown_fence_line:
+            continue
         if not container_stack:
             if index < prose_quote_skip_until:
                 continue
@@ -1577,7 +1581,9 @@ def iter_json_objects(text: str) -> list[Any]:
                     and line_prefix_length <= 3
                     and not text[line_start_index:index].strip()
                 )
-                if not is_markdown_fence:
+                if is_markdown_fence:
+                    markdown_fence_line = True
+                else:
                     prose_quote_delimiter = "`" * backtick_run_length
                 continue
             if character in {'"', "'"} and not (
