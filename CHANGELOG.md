@@ -1,3 +1,13 @@
+### Noema draft admission no longer depends on artifact quota
+
+- A live Draft already skips contextual-orchestrator provisioning and produces
+  no sidecar evidence. The evidence-upload step now follows the same live-state
+  gate, preventing an exhausted GitHub Actions artifact quota from converting
+  that intentional skip into a failed required review. Non-Draft evidence
+  upload remains fail-closed, with the contract now rejecting both step-level
+  and job-level `continue-on-error` bypasses. The contract binds the unique
+  case-normalized `upload-artifact` action itself, so a compliant no-op decoy
+  cannot hide a second fail-open evidence upload behind a case alias.
 ### Maturin download failures close every transport response
 
 - Refactor the bounded Maturin asset downloader so successful and rejected

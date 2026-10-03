@@ -61,6 +61,11 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 Noema Draft artifact-quota incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-NOEMA-DRAFT-ARTIFACT-01 | **Proposed — canonical-owner RED→GREEN; protected integration pending** | `.github#2530@153cbabe…` job `111068439116`과 `.github#2543@f5a1d47d…` job `111069409132`은 live Draft를 확인해 model/sidecar 단계를 의도대로 건너뛴 뒤, 존재할 수 없는 sidecar evidence 업로드에서 GitHub Actions artifact storage quota 오류로 실패했다. 계약 RED는 Draft에서도 upload step이 실행되는 기존 조건을 고정한다. Exact head `050075e5…`의 최초 oracle은 upload step의 `continue-on-error`만 검사해 job-level `continue-on-error: true` 변이에서도 `10 passed`였다. `70b29743…`의 후속 oracle도 compliant no-op decoy 뒤 fail-open 실제 upload를 두면 `10 passed`였으며 mixed-case action alias도 놓쳤다. 보강된 contract는 case-normalized action identity와 uniqueness를 함께 검증해 세 변이를 모두 실패시킨다. | 중앙 `.github/.github/workflows/noema-review.yml`이 소유한다. upload step을 동일한 live-Draft output으로 gate하되, non-Draft evidence upload 실패는 step과 job 양쪽에서 계속 fail-closed한다. Focused/full 검증, 새 exact-head hosted Checks, 독립 승인과 ordinary merge가 남아 있다. |
 ### 2026-09-30 central coverage owner stack delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
