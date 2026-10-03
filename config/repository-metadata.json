@@ -95,6 +95,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "cwl-telemetry": {
+      "description": "CWL Telemetry — explicit OpenTelemetry runtime and Collector contract for validated bootstrap, signal ownership, degraded-mode behavior, and security-event routing.",
+      "topics": [
+        "opentelemetry",
+        "observability",
+        "telemetry",
+        "otlp",
+        "distributed-tracing",
+        "metrics",
+        "logging",
+        "security-events",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
