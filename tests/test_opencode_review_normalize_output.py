@@ -2686,6 +2686,10 @@ def test_iter_json_objects_extracts_control_from_markdown_fence():
         "```json\nreview prose\n``` <control>",
         "~~~json <control>\n~~~",
         "~~~json\nreview prose\n~~~ <control>",
+        "> ~~~json <control>\n> ~~~",
+        "> ~~~json\n> review prose\n> ~~~ <control>",
+        "- ~~~json <control>\n  ~~~",
+        "> - ~~~json <control>\n>   ~~~",
     ],
 )
 def test_iter_json_objects_ignores_controls_on_markdown_fence_lines(
