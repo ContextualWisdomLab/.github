@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 Noema document-reader prerelease security-oracle closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The transitive lock security regression converted dot-separated version parts with `int()`, so an npm prerelease such as `3.1.8-beta.1` raised `ValueError` before the security assertion and could not preserve prerelease ordering against the final fixed release | Independent `.github#2531` review `PRR_kwDOS_C14s8AAAABQb3fbw`; RED commit `b4a24d2585e0b076c51552c43f3c29a466fdd6dd` reproduces the exception in `test_prerelease_does_not_satisfy_final_security_minimum`; GREEN commit `e169a9d3defe06f427ca53071bc8ff3a20483b4a` passes the focused file and the 5,176-test repository suite | Parse every matching hoisted or nested lock version with the already pinned `packaging.version.Version`, compare it with semantic final-release minima, and retain the prerelease regression case | **Proposed / focused 4 tests and full 5,176 tests GREEN; exact-head hosted Checks and qualifying approval required** |
+
 ## 2026-10-01 bounded Maturin release downloader SAST closure
 
 | Gap | Exact evidence | Action | Status |
