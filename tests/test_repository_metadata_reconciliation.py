@@ -67,6 +67,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "ConceptWeave": ("semantic-model", "ontology"),
         "EmbedRelay": ("embeddings", "vector-migration"),
         "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
+        "inkspan": ("markdown-editor", "document-conversion"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
