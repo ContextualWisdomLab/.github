@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+<<<<<<< HEAD
+=======
 import os
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import re
 import sys
 from typing import Any, TextIO
@@ -47,6 +50,8 @@ REQUIRED_PROBE_FIELDS = (
 )
 
 
+<<<<<<< HEAD
+=======
 def coverage_summary_rejection_reason(summary: str) -> str | None:
     """Explain why a coverage summary cannot authorize approval reuse."""
     decisions = [line for line in summary.splitlines() if line.startswith("- Result:")]
@@ -64,6 +69,7 @@ def coverage_decision_is_pass(summary: str) -> bool:
     return coverage_summary_rejection_reason(summary) is None
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def flatten_reviews(document: object) -> list[dict[str, Any]]:
     """Flatten REST pagination output while rejecting malformed review entries."""
     if not isinstance(document, list):
@@ -174,12 +180,22 @@ def has_reusable_real_model_approval(
     log: TextIO,
     approval_authors: frozenset[str] = APPROVAL_AUTHORS,
 ) -> bool:
+<<<<<<< HEAD
+    """Return whether reviews contain a real-model approval for the exact head."""
+    candidate_count = 0
+    for review in reversed(reviews):
+        state = str(review.get("state") or "").upper()
+        commit_id = str(review.get("commit_id") or "")
+        login = str((review.get("user") or {}).get("login") or "")
+        if state != "APPROVED" or commit_id.lower() != head_sha.lower():
+=======
     """Return whether the latest exact-head OpenCode decision is reusable."""
     candidate_count = 0
     for review in reversed(reviews):
         commit_id = str(review.get("commit_id") or "")
         login = str((review.get("user") or {}).get("login") or "")
         if commit_id.lower() != head_sha.lower():
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
             continue
         if login not in KNOWN_PUBLICATION_ACTORS:
             continue
@@ -199,11 +215,17 @@ def has_reusable_real_model_approval(
             return True
         print(
             "existing-approval gate rejected same-head review "
+<<<<<<< HEAD
+            f"id={review_id} author={login}: {reason}",
+            file=log,
+        )
+=======
             f"id={review_id} author={login}; latest same-head review is authoritative: "
             f"{reason}",
             file=log,
         )
         break
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     print(
         "existing-approval gate found no reusable real-model approval "
@@ -218,10 +240,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", required=True)
     parser.add_argument(
+<<<<<<< HEAD
+=======
         "--coverage-summary",
         default=os.environ.get("COVERAGE_EVIDENCE_SUMMARY", ""),
     )
     parser.add_argument(
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         "--require-opencode-app",
         action="store_true",
         help="accept only reviews authored by the OpenCode GitHub App",
@@ -237,10 +262,13 @@ def main(argv: list[str]) -> int:
             "existing-approval gate requires a 40-character head SHA", file=sys.stderr
         )
         return 2
+<<<<<<< HEAD
+=======
     coverage_error = coverage_summary_rejection_reason(args.coverage_summary)
     if coverage_error:
         print(f"existing-approval gate rejected evidence: {coverage_error}", file=sys.stderr)
         return 1
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     try:
         reviews = flatten_reviews(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError) as exc:

@@ -450,10 +450,14 @@ jobs:
             )"
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
+<<<<<<< HEAD
+          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
+=======
           statuses="$(
             gh api --paginate -f per_page=100 "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses" --jq '.[]' |
               jq -s '.'
           )"
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"

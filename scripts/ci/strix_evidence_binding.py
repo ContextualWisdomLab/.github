@@ -305,10 +305,15 @@ def default_github_opener(url: str, token: str) -> Any:
         with _GITHUB_API_OPENER.open(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
+<<<<<<< HEAD
+        raise EvidenceBindingError(
+            f"GitHub changed-file request failed with HTTP {exc.code}"
+=======
         status_code = exc.code
         exc.close()
         raise EvidenceBindingError(
             f"GitHub changed-file request failed with HTTP {status_code}"
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         ) from exc
     except URLError as exc:
         raise EvidenceBindingError(

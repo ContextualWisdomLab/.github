@@ -2,7 +2,10 @@
 
 import runpy
 import threading
+<<<<<<< HEAD
+=======
 from io import BytesIO
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -64,17 +67,24 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
     """Concurrent completion does not enlarge the committed probe budget."""
     namespace = runpy.run_path(str(LAUNCHER))
     calls = []
+<<<<<<< HEAD
+=======
     provider_errors = []
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     class Client:
         """Return explicit provider rate-limit responses."""
         def proxy_send_once(self, agent, endpoint, payload):
             calls.append(agent.id)
+<<<<<<< HEAD
+            raise HTTPError('https://provider.invalid', 429, 'private body', {}, None)
+=======
             provider_error = HTTPError(
                 'https://provider.invalid', 429, 'private body', {}, None
             )
             provider_errors.append(provider_error)
             raise provider_error
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     with pytest.raises(namespace['ReviewPreflightError']) as error:
         namespace['_preflight_review_agents_concurrently'](agents(24), client=Client())
@@ -83,6 +93,8 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
     assert report['ready_count'] == report['pending_count'] == 0
     assert all(row['status'] == 'rejected' and row['http_status'] == 429 for row in report['routes'])
     assert 'private body' not in str(report)
+<<<<<<< HEAD
+=======
     assert all(provider_error.closed for provider_error in provider_errors)
 
 
@@ -134,6 +146,7 @@ def test_http_error_is_closed_when_optional_telemetry_raises():
         record_exception({}, provider_error)
 
     assert error_body.closed
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_parallel_escalations_share_one_budget():

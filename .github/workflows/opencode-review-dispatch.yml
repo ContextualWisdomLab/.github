@@ -2441,12 +2441,16 @@ jobs:
           if [ "$not_measured" -ne 0 ]; then
             append "- Not measured: ${not_measured} Rust coverage command(s) exceeded the 900 s per-command cap; line coverage for that code is unproven, not failed."
           fi
+<<<<<<< HEAD
+          if [ "$failures" -eq 0 ]; then
+=======
           if [ "$failures" -eq 0 ] && [ "$not_measured" -ne 0 ]; then
             append "- Result: NOT MEASURED"
             append "- Test evidence: incomplete; timed-out Rust suites are not proven passing."
             append "- Coverage thresholds: not proven satisfied for unmeasured Rust code."
             append "- Review handling: advisory only; this result is not approval evidence and does not replace required verification."
           elif [ "$failures" -eq 0 ]; then
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
             append "- Result: PASS"
             if [ "$measured_any" -eq 0 ]; then
               append "- Test coverage: not applicable (no supported changed source files or package manifests)"
@@ -7057,12 +7061,15 @@ jobs:
               grep -Fq -- "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
           }
 
+<<<<<<< HEAD
+=======
           coverage_decision_is_pass() {
             local coverage_decision
             coverage_decision="$(printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" | grep '^- Result:' || true)"
             [ "$coverage_decision" = '- Result: PASS' ]
           }
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           collect_successful_r_cmd_check_evidence() {
             local output_file="$1"
             if ! gh pr checks "$PR_NUMBER" \
@@ -7160,8 +7167,12 @@ jobs:
           publish_blockers_after_model_unavailable() {
             local pending_wait_status body
 
+<<<<<<< HEAD
+            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+=======
             if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ] ||
               ! coverage_decision_is_pass; then
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
               return 1
             fi
 
@@ -7290,7 +7301,10 @@ jobs:
             printf '%s\n' "$reviews_json" |
               python3 scripts/ci/opencode_existing_approval_gate.py \
                 --head "$HEAD_SHA" \
+<<<<<<< HEAD
+=======
                 --coverage-summary "$COVERAGE_EVIDENCE_SUMMARY" \
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                 --require-opencode-app
           }
 
@@ -7494,10 +7508,13 @@ jobs:
                 echo "::endgroup::"
                 exit 1
               fi
+<<<<<<< HEAD
+=======
               if ! coverage_decision_is_pass; then
                 stop_approval_without_review "COVERAGE_NOT_MEASURED" \
                   "Coverage measurement is incomplete or its decision is missing. A successful advisory job is not approval evidence and does not replace required verification."
               fi
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
               if request_changes_for_merge_conflict_if_present; then
                 echo "::endgroup::"
                 exit 0
@@ -7879,7 +7896,10 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
+<<<<<<< HEAD
+=======
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
@@ -7913,7 +7933,10 @@ jobs:
               python3 scripts/ci/opencode_dispatch_status.py \
                 --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
                 --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
+<<<<<<< HEAD
+=======
                 --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}" \
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                 --expected-head "$PR_HEAD_SHA" \
                 --pull-request-file "$pull_request_file" \
                 --reviews-file "$reviews_file"
@@ -7973,7 +7996,10 @@ jobs:
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+<<<<<<< HEAD
+=======
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -8005,7 +8031,10 @@ jobs:
               if printf '%s\n' "$reviews_json" |
                 python3 scripts/ci/opencode_existing_approval_gate.py \
                   --head "$PR_HEAD_SHA" \
+<<<<<<< HEAD
+=======
                   --coverage-summary "$COVERAGE_EVIDENCE_SUMMARY" \
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                   --require-opencode-app \
                   2>"$gate_error_file"; then
                 approval_visible=1

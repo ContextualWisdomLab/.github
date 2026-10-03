@@ -1,46 +1,4 @@
-### JSONC guard preserves whitespace between separated tokens
-
-- The OpenCode reasoning-effort guard no longer deletes a single-line block
-  comment to the empty string. Exact head `af135ea7` changed malformed inputs
-  such as `{"a":1/* comment */2}` into valid `{"a":12}` and silently changed
-  their value; the earlier differential oracle shared that deletion behavior.
-  RED `b637d358` adds numeric, sign, and decimal token-fusion regressions.
-  GREEN `621bf1c9` retains the comment's exact CR/LF sequence or one separating
-  space when no line ending exists. The focused file passes 23 tests and the
-  warning-fatal repository suite passes 5,280 tests with 10 optional skips and
-  40 subtests; compileall and diff checks pass. No fresh coverage or docstring
-  percentage is claimed because those local plugins were unavailable.
-
-### JSONC guard rejects overlapping block-comment delimiters
-
-- The OpenCode reasoning-effort guard no longer treats `/*/` as a complete
-  block comment by reusing the opener's `*` as the closer. A complete JSON
-  value followed by that malformed suffix had been reduced to valid JSON and
-  silently accepted. The guard now requires distinct opening and closing
-  delimiters, while preserving the bounded EOF scan and all valid empty block
-  comments. The regression failed on exact head `d6931345` and passes after
-  the repair; a 97,656-input differential corpus matches the pre-regression
-  reference `f8e55ec5` with zero parse-result differences. The complete
-  warning-fatal suite passes 5,277 tests with 10 optional skips and 40
-  subtests; all 18,173 production statements and 7,468 branches are covered.
-
-### JSONC guard bounds unterminated construct scanning
-
-- The OpenCode reasoning-effort guard now consumes an unterminated string or
-  block comment through end-of-input in one regex match. Exact predecessor
-  `f8e55ec5` took about 4.04 seconds for 16,000 escaped quotes, 3.98 seconds
-  when that input ended in a lone backslash, and 10.77 seconds for 32,000
-  repeated unclosed block-comment openers. Repair commit `6854dab8` / tree
-  `4ef2f83a` processes those observed inputs in about 0.0008–0.0018 seconds,
-  preserving each malformed construct for `json.loads` to reject. A
-  deterministic 200,000-input differential corpus found no parse-result
-  change. The focused suite passes 19 tests, its `GITHUB_ACTIONS=true`
-  guard+consumer suite passes 73 tests, and the complete warning-fatal suite
-  passes 5,276 tests with 10 optional skips and 40 subtests. All 18,173
-  production statements and 7,468 branches are covered; public-doc coverage,
-  compileall, and diff checks pass. The change remains Draft/HOLD pending fresh
-  hosted Checks and qualifying independent review.
-
+<<<<<<< HEAD
 ### JSONC guard preserves CR and LF evidence across block comments
 
 - The OpenCode reasoning-effort guard's regex comment stripper now retains
@@ -50,11 +8,11 @@
   one-megabyte adversarial comment to two seconds. Focused normal and
   `GITHUB_ACTIONS=true` runs each pass 16 tests; the guard and its consuming
   OpenCode contract suite pass 70 tests with 100% statement and branch coverage.
-  The ordinary stack on canonical owner `.github#2040@38a1692b` passes 5,273
-  tests with 10 optional skips and 40 subtests; all 18,170 production statements
-  and 7,466 branches are covered, and interrogate reports 100.0%. The change
-  remains Draft/HOLD pending fresh hosted Checks and independent review.
-
+  The full tree passes 5,162 tests but retains the exact predecessor's unrelated
+  178 missed statements and 33 partial branches, so the repository-wide 100%
+  gate remains RED. Full-tree interrogate is likewise unchanged at 97.1%; this
+  change remains Draft/HOLD while those canonical owners are repaired.
+=======
 ### Central coverage owner preserves concurrent repairs and restores the 100% gate
 
 - The `.github#2521` coverage owner now carries the complete valid deltas from
@@ -91,6 +49,7 @@
   from silently returning to the vulnerable versions. Protected integration,
   immutable consumer-pin advancement, and fresh exact-head hosted security
   Checks remain required before release admission.
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 ### Intel macOS native archives are bound to x86_64 bytes
 
@@ -161,6 +120,8 @@
 
 - Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
 
+<<<<<<< HEAD
+=======
 ### Scheduler forbids source-neutral head refreshes
 
 - Removed the scheduler's same-tree commit paths for pre-job workflow `startup_failure` recovery and last-push approval. Those commits repaired no source or platform cause while invalidating all exact-head checks and reviews. The scheduler now reports the newest zero-job startup-failure run IDs and waits for a real repair; last-push protection waits for an independent approval on the unchanged head. Refs #2040.
@@ -177,6 +138,7 @@
 - A native scan that becomes superseded between initial validation and its privileged scan no longer publishes an `error` status to the unchanged current head: status publication now requires the second live-metadata check and SARIF preservation to succeed, verifies the returned status creator, and emits only `codeql-dispatch/<language>/<base_sha>`. The evidence-complete #1902 producer is integrated into the same successor, eliminating the unsafe head-only compatibility context and its circular rollout. Exact evidence: handler run `34235814716`. Refs #2040, #1902.
 - Producer provenance is now bound to GitHub's live synthetic pull-request merge revision rather than to an unrelated ancestry relation with the protected handler workflow. The handler requires `producer_source_sha == pull_request.merge_commit_sha`, fetches that immutable commit, and verifies its two ordered parents are the live base and head SHAs. Raw `pr_head` JSON is also type-checked and must agree with independently extracted legacy scalars, so numeric schema coercion and nested-field shadowing fail closed. Refs #2040, #2044, #1902.
 - The handler accepts either the legacy top-level rerun fields or #1902's bounded `rerun_request:{mode,required_jobs}` envelope, rejects conflicting or malformed dual authority, and normalizes both to one validated mode/job map. Matrix scans now hold only `actions: read`; after every language has a terminal gate and an exact unexpired SARIF artifact, one non-matrix job revalidates the live PR/base/head and every required job before one run-wide `/rerun-failed-jobs` (`failed`) or `/rerun` (`all`) request. A partial matrix cannot authorize waking an unscanned required language; #1902 must send the complete rerun map as its matrix after this handler lands. This removes the observed race where the first job-level rerun moved the shared workflow and the second received HTTP 403. The sole settlement owner preserves the target App → `PR_REVIEW_MERGE_TOKEN` → `OPENCODE_APPROVE_TOKEN` → same-repository `github.token` fallback chain and fails closed if no request is accepted. Refs #2040, #1902, #1999, #2028, naruon#1592.
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
@@ -275,6 +237,8 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+<<<<<<< HEAD
+=======
 - Reconciled the CodeQL wake owner `#2040` with protected
   `main@e6334e229581a918e2f22de18733b76fa65d7e71` through ordinary two-parent
   merge `10c4d38d824aebe8bbd7a1c056b6c830f28fd992`. The merge preserves the
@@ -288,6 +252,7 @@
   GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
   missing or unknown envelope versions fail closed before pull-request metadata
   is used.
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 - **Bind GitHub REST redirect evidence to both production opener chains.** `.github#2279` now feeds a synthetic same-authority 302 through the CodeQL identity and Strix evidence clients' real module-level openers, proving the redirect target is never contacted and the bearer header is never forwarded. Removing `_RejectRedirects` from either opener makes the contract fail on the forbidden second request. Four stale Strix HTTP/transport/JSON fixtures now patch that same production seam; direct handler unit cases and standalone CodeQL materialization remain unchanged.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
@@ -382,6 +347,8 @@
 
 # Changelog
 
+<<<<<<< HEAD
+=======
 ## Proposed
 
 - Run Python Security and Agent Review Runtime Quality CI for stacked pull
@@ -402,6 +369,7 @@
   from blocking current-head review admission while preserving fail-closed
   cross-repository authority.
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
 All notable changes to the organization automation repository are documented in
@@ -1663,7 +1631,11 @@ Semantic Versioning where the repository publishes a release.
 - Allowed an allowlisted base repository's open fork-head PR to enter the central exact-head OpenCode review path. The scheduler and privileged reviewer still re-read the live PR, bind base/head refs and SHAs, reject malformed repository identities, keep fork source as untrusted data, preserve the existing maintainer-writable update rule, and reserve the final external-head merge for a maintainer.
 - Confined OSV base and head repository checkouts to the same `source/` child directory, so a cross-fork head checkout can replace that repository without deleting the base-scan JSON held at the workspace root. Both scans retain identical source paths and the required base/head vulnerability comparison remains fail-closed.
 - Restored 100% docstring coverage for the commercial-readiness GitHub transport constructor.
+<<<<<<< HEAD
+- Refused PR Review Merge Scheduler head mutations, `update-branch` and the last-push approval head restamp, whenever the resolved mutation credential is the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. The scheduler now waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
+=======
 - Refused PR Review Merge Scheduler head mutations, including the then-supported `update-branch` and last-push approval head refresh, whenever the resolved mutation credential was the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. Source-neutral refreshes have since been removed entirely; `update-branch` still waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).

@@ -1719,6 +1719,14 @@ def call_llm(
         http_status: int | None = None
         retry_after_seconds: int | None = None
         if isinstance(exc, urllib.error.HTTPError):
+<<<<<<< HEAD
+            active_phase = "response_error"
+            http_status = exc.code if type(exc.code) is int else None
+            retry_after_seconds = parse_http_retry_after_seconds(exc.headers)
+            gateway_telemetry = _extract_http_error_telemetry(exc)
+            model_value = gateway_telemetry.get("served_model")
+            served_model = model_value if isinstance(model_value, str) else None
+=======
             try:
                 active_phase = "response_error"
                 http_status = exc.code if type(exc.code) is int else None
@@ -1728,6 +1736,7 @@ def call_llm(
                 served_model = model_value if isinstance(model_value, str) else None
             finally:
                 exc.close()
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"

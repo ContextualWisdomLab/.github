@@ -583,6 +583,8 @@ def test_build_snapshot_refuses_unlisted_native_file(tmp_path: Path, monkeypatch
         _build_packages(row, folder)
 
 
+<<<<<<< HEAD
+=======
 def test_build_snapshot_refuses_unknown_universal_interpreter_architecture(
     tmp_path: Path,
 ) -> None:
@@ -599,6 +601,7 @@ def test_build_snapshot_refuses_unknown_universal_interpreter_architecture(
         _build_packages(scope_row, artifact_folder)
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_runtime_archive_refuses_unknown_native_link(tmp_path: Path, monkeypatch) -> None:
     """A runtime archive with an unlicensed dynamic target cannot pass prescreen."""
     root, rows = _prescreen_case(tmp_path)
@@ -994,6 +997,8 @@ def test_prescreen_refuses_complete_rows_without_sdist(
         prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
+<<<<<<< HEAD
+=======
 @pytest.mark.parametrize("mutation_name", ["oversized", "digest", "architecture"])
 def test_prescreen_refuses_untrusted_runtime_receipts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation_name: str,
@@ -1023,6 +1028,7 @@ def test_prescreen_refuses_untrusted_runtime_receipts(
         prescreen(scope, scope_root)
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_prescreen_cli_writes_once_and_refuses_existing_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

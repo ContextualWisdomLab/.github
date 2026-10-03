@@ -122,6 +122,8 @@ def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
     assert '      - "docs/automation/review-agent-comment-invocation.md"' in text
     assert '      - "tests/test_agent_mention_*.py"' in text
+<<<<<<< HEAD
+=======
     assert text.count('      - "requirements-noema-document-ci-hashes.txt"') == 2
     assert (
         "cache-dependency-path: |\n"
@@ -129,6 +131,7 @@ def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
         "            requirements-noema-document-ci-hashes.txt"
     ) in text
     assert "-r requirements-noema-document-ci-hashes.txt" in text
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     assert "python -m coverage run -m pytest -q\n" in text
     assert "python -m compileall -q scripts/ci tests" in text
     assert "CHANGE_DIFF_RANGE" in text

@@ -218,6 +218,8 @@ def test_directory_report_path_keeps_plain_failure(tmp_path, monkeypatch):
     assert outputs["transport_capacity_unavailable"] == "false"
 
 
+<<<<<<< HEAD
+=======
 def test_symlinked_report_parent_is_rejected(tmp_path):
     """A symlinked evidence directory cannot redirect the trusted report read."""
     real_parent = tmp_path / "real-parent"
@@ -231,6 +233,7 @@ def test_symlinked_report_parent_is_rejected(tmp_path):
     assert capacity.load_preflight_report(symlink_parent / "report.json") is None
 
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_oversized_report_keeps_plain_failure(tmp_path, monkeypatch):
     """The classifier reads a bounded prefix and rejects anything larger."""
     padded = _all_429()

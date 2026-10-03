@@ -221,6 +221,10 @@ jobs:
               exit 1
               ;;
           esac
+<<<<<<< HEAD
+
+=======
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
             if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
               type == "object"
@@ -263,10 +267,14 @@ jobs:
             exit 1
           fi
 
+<<<<<<< HEAD
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+=======
           target_repository_component="${TARGET_REPOSITORY#ContextualWisdomLab/}"
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             [[ "$target_repository_component" == *..* ]] ||
             [[ "$target_repository_component" == *. ]] ||
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
@@ -1058,6 +1066,10 @@ jobs:
               "$RERUN_SCHEMA" "$rerun_languages" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             exit 1
           fi
+<<<<<<< HEAD
+
+=======
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
           if ! required_job_pages="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100" | jq -s .)"; then
             echo "::error::CodeQL settlement could not read the required jobs."
             exit 1

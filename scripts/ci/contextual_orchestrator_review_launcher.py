@@ -33,7 +33,10 @@ import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
+<<<<<<< HEAD
+=======
 from urllib.error import HTTPError
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
@@ -330,6 +333,12 @@ def _safe_retry_after_seconds(exc: Exception) -> int | None:
     # runs inside the probe walk's exception handler, so a ValueError here
     # would escape ``_preflight_review_agents`` -- whose callers catch only
     # ``ReviewPreflightError`` -- and kill the boot before any evidence file
+<<<<<<< HEAD
+    # is written. Every ``isdecimal`` string is accepted by ``int``.
+    if not isinstance(raw, str) or not raw.strip().isdecimal():
+        return None
+    seconds = int(raw.strip())
+=======
     # is written. Reject more than five decimal characters before conversion:
     # the accepted ceiling is 86400, and Python deliberately rejects very
     # long integer strings before ``int`` can return a value.
@@ -339,6 +348,7 @@ def _safe_retry_after_seconds(exc: Exception) -> int | None:
     if len(normalized) > 5 or not normalized.isdecimal():
         return None
     seconds = int(normalized)
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     return seconds if 0 <= seconds <= 86400 else None
 
 
@@ -395,6 +405,21 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row: The in-progress per-route evidence row to update.
         exc: The exception a probe attempt raised.
     """
+<<<<<<< HEAD
+    row["status"] = "rejected"
+    error_type = type(exc).__name__
+    row["error_type"] = (
+        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
+    )
+    http_status = _safe_http_status(exc)
+    if http_status is not None:
+        row["http_status"] = http_status
+    retry_after = _safe_retry_after_seconds(exc)
+    if retry_after is not None:
+        row["retry_after_s"] = retry_after
+    row.pop("finish_reason", None)
+    row.pop("reasoning_without_content", None)
+=======
     try:
         row["status"] = "rejected"
         error_type = type(exc).__name__
@@ -414,6 +439,7 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     finally:
         if isinstance(exc, HTTPError):
             exc.close()
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def _demote_agent(agent: object, penalty: int) -> object:

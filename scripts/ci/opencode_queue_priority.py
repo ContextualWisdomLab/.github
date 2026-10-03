@@ -38,8 +38,11 @@ TITLE_RE = re.compile(r"ContextualWisdomLab/([A-Za-z0-9_.-]+)#(\d+)@([0-9a-f]{7,
 
 @dataclass(frozen=True)
 class QueuedRun:
+<<<<<<< HEAD
+=======
     """One queued OpenCode workflow run bound to a pull-request head."""
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     run_id: int
     created_at: datetime
     repo: str
@@ -49,8 +52,11 @@ class QueuedRun:
 
 @dataclass(frozen=True)
 class PrState:
+<<<<<<< HEAD
+=======
     """Live pull-request state used to classify a queued run."""
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     state: str
     head: str
     priority: bool
@@ -58,8 +64,11 @@ class PrState:
 
 @dataclass(frozen=True)
 class Plan:
+<<<<<<< HEAD
+=======
     """Deterministic queue disposition for retained and cancellable runs."""
 
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     keep: tuple[QueuedRun, ...]
     cancel_current: tuple[QueuedRun, ...]
     cancel_stale: tuple[QueuedRun, ...]
@@ -100,12 +109,18 @@ def metrics(p: Plan, *, now: datetime) -> dict:
 
 
 def _gh(*args: str, stdin: str | None = None) -> str:
+<<<<<<< HEAD
+=======
     """Run an authenticated GitHub CLI command and return standard output."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     return subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=True).stdout
 
 
 def fetch_queued() -> list[QueuedRun]:
+<<<<<<< HEAD
+=======
     """Return parseable queued OpenCode dispatch runs from the central workflow."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     out = _gh("api", "--paginate", f"repos/{CENTRAL}/actions/workflows/{WORKFLOW}/runs?status=queued&per_page=100",
               "--jq", ".workflow_runs[]|[.id,.created_at,.display_title]|@json")
     runs = []
@@ -119,7 +134,10 @@ def fetch_queued() -> list[QueuedRun]:
 
 
 def fetch_live(keys: set[tuple[str, int]], label: str) -> dict[tuple[str, int], PrState]:
+<<<<<<< HEAD
+=======
     """Fetch live PR heads and trusted priority-label provenance for queue keys."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     live: dict[tuple[str, int], PrState] = {}
     perms: dict[tuple[str, str], str] = {}
     keys_sorted = sorted(keys)
@@ -153,7 +171,10 @@ def fetch_live(keys: set[tuple[str, int]], label: str) -> dict[tuple[str, int], 
 
 
 def main(argv: list[str] | None = None) -> int:
+<<<<<<< HEAD
+=======
     """Print a queue plan and optionally record and apply bounded cancellations."""
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--label", default="review-priority")
     ap.add_argument("--include-current", action="store_true", help="also cancel non-priority current-head runs")

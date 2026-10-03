@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+<<<<<<< HEAD
+import subprocess
+=======
 import runpy
 import subprocess
 import sys
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from pathlib import Path
 
 import pytest
@@ -83,6 +87,8 @@ def test_invalid_base_sha_is_rejected(tmp_path: Path) -> None:
 
 def test_central_release_is_itself_exact() -> None:
     assert resolver.EXACT_RELEASE_RE.fullmatch(resolver.CENTRAL_RUST_TOOLCHAIN)
+<<<<<<< HEAD
+=======
 
 
 def test_cli_prints_resolved_release_and_rejects_untrusted_sha(
@@ -117,3 +123,4 @@ def test_script_entrypoint_uses_the_trusted_base(
 
     assert exited.value.code == 0
     assert capsys.readouterr().out == "1.97.1\n"
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

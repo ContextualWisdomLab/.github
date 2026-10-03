@@ -2513,7 +2513,10 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
+<<<<<<< HEAD
+=======
     assert '--coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}"' in status_step
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}"' in status_step
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in status_step
     assert '[ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "success" ] &&' not in status_step
@@ -3081,8 +3084,11 @@ def test_opencode_model_pool_failure_uses_only_existing_real_model_approval():
     assert "no duplicate APPROVE review was posted" in workflow
     assert "opencode_existing_approval_gate.py" in workflow
     assert '--head "$HEAD_SHA"' in workflow
+<<<<<<< HEAD
+=======
     assert '--coverage-summary "$COVERAGE_EVIDENCE_SUMMARY"' in workflow
     assert workflow.count('--coverage-summary "$COVERAGE_EVIDENCE_SUMMARY"') == 2
+>>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     assert "--require-opencode-app" in workflow
     assert (
         "same-head real-model OpenCode approval with passed adversarial evidence"
