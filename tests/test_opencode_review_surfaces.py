@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci import opencode_review_receipt_gate as receipt_gate
 from scripts.ci import opencode_review_surfaces as surfaces
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -799,3 +800,37 @@ def test_publisher_workflow_cannot_replace_review_with_coverage_finding(
     model_skip = workflow.split("if [ \"$opencode_review_outcome\" != \"success\" ]; then", 1)[1]
     model_skip = model_skip.split("selected_review_output_file=", 1)[0]
     assert "publish_fallback_diff_review" in model_skip
+
+
+def test_coverage_fallback_is_diagnostic_without_product_findings() -> None:
+    """Infrastructure failure must not create a product changes-requested state."""
+    workflow = (ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    fallback_fn = workflow.split("publish_fallback_diff_review() {", 1)[1]
+    fallback_fn = fallback_fn.split("\n          }\n", 1)[0]
+    assert 'event="COMMENT"' in fallback_fn
+    assert 'event="REQUEST_CHANGES"' not in fallback_fn
+    assert "request_changes_for_coverage_evidence_failure" in fallback_fn
+
+
+def test_coverage_fallback_does_not_satisfy_the_formal_receipt_gate() -> None:
+    """Diagnostic coverage comments cannot authorize a completed product review."""
+    body = surfaces.build_fallback_review(
+        changed_files=["python/fast_mlsirm/estimators/marginal.py"],
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        coverage_result="failure",
+    )
+    body += "\n## Review outcome\n\nCoverage is a gate, not the review. This body reviews the changed product files.\n"
+    review = {
+        "id": 1,
+        "user": {"login": "opencode-agent"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": body,
+    }
+    receipt, reason = receipt_gate.evaluate_receipts([review], HEAD, is_draft=False)
+    assert receipt is None
+    assert "no current-head formal" in reason

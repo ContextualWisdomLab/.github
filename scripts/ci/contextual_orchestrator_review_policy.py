@@ -466,14 +466,23 @@ def build_zdr_prioritized_catalog(
 
 
 def _load_zdr_endpoints(path: str | None) -> frozenset[str]:
-    """Load exact provider/model keys from an OpenRouter ZDR feed file."""
+    """Load exact provider/model keys from an OpenRouter ZDR feed file.
+
+    Each feed row's ``model_id`` is the discovery slug contextual-orchestrator
+    reports as ``model`` (e.g. ``"inclusionai/ling-3.0-flash-vl:free"``);
+    ``model_name`` is a human display string (e.g. "DeepSeek: DeepSeek V4.1
+    Flash") and is never used to build a route key. ``provider_name`` is the
+    feed's serving-provider label (e.g. "Novita"). Rows missing either
+    ``model_id`` or ``provider_name`` are skipped; there is no fallback to
+    the display name.
+    """
     if not path:
         return frozenset()
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     keys: set[str] = set()
     for endpoint in payload.get("data", []):
         provider = endpoint.get("provider_name")
-        model = endpoint.get("model_name")
+        model = endpoint.get("model_id")
         if provider and model:
             keys.add(_route_key(str(provider), str(model)))
             keys.add(_route_key("openrouter", str(model)))
