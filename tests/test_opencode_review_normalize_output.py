@@ -2680,6 +2680,27 @@ def test_iter_json_objects_extracts_control_from_markdown_fence():
 
 
 @pytest.mark.parametrize(
+    "fence_line_transcript",
+    [
+        "```json <control>\n```",
+        "```json\nreview prose\n``` <control>",
+    ],
+)
+def test_iter_json_objects_ignores_controls_on_markdown_fence_lines(
+    fence_line_transcript,
+):
+    """A fence delimiter line cannot itself publish a control example."""
+    example_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    text = fence_line_transcript.replace("<control>", json.dumps(example_control))
+
+    assert norm.iter_json_objects(text) == []
+
+
+@pytest.mark.parametrize(
     ("quote", "mixed_run_text"),
     [("`", "``` text `` "), ("``", "``` text ` ")],
 )
