@@ -163,6 +163,23 @@ def test_load_config_rejects_unterminated_jsonc_constructs(tmp_path, text):
         guard.load_config(config_path)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"a": 1/* comment */2}',
+        '{"a": -/* comment */1}',
+        '[1/* comment */.5]',
+    ],
+)
+def test_load_config_rejects_comment_fused_json_tokens(tmp_path, text):
+    """A removed comment cannot join separate tokens into a valid JSON value."""
+    config_path = tmp_path / "opencode.jsonc"
+    config_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="OpenCode config is not valid JSON"):
+        guard.load_config(config_path)
+
+
 def test_strip_jsonc_comments_has_bounded_large_comment_runtime():
     """A one-megabyte adversarial block comment is stripped within two seconds."""
     comment_body = "x\\/" * 349_526
