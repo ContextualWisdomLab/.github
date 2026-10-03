@@ -21,7 +21,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 ORGANIZATION = "ContextualWisdomLab"
-REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
 PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"

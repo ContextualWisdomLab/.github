@@ -21,6 +21,31 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
+    """Central-only workflows cannot fall back into the general Ubuntu pool."""
+    for name, group, jobs in (
+        ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("agent-mention-router.yml", "CWL central control", 2),
+        ("hourly-review-repair.yml", "CWL central control", 1),
+    ):
+        text = workflow_text(name)
+        assert text.count(f"    runs-on:\n      group: {group}\n      labels: [self-hosted, linux, x64]") == jobs
+        assert "runs-on: ubuntu-24.04" not in text
+
+
+def test_reusable_scheduler_keeps_consumer_runner_access() -> None:
+    """Reusable trusted schedulers share control capacity without PR execution."""
+    text = workflow_text("pr-review-merge-scheduler.yml")
+    selector = next(line for line in text.splitlines() if line.strip().startswith("runs-on:"))
+    assert selector.strip() == "runs-on:"
+    assert "    runs-on:\n      group: CWL central control\n      labels: [self-hosted, linux, x64]" in text
+    assert "fromJSON" not in selector
+    assert 'trusted_repository != "ContextualWisdomLab/.github"' in text
+    assert 'tarball/${TRUSTED_SOURCE_REF}' in text
+    assert 'Trusted scheduler source ref must resolve to the immutable workflow commit SHA' in text
+
+
 # The workflow-level block is the one whose key starts at column zero; job-level
 # blocks are indented under ``jobs:``. Anchoring there instead of slicing the text
 # before ``permissions:`` makes the search independent of key order, which two
@@ -910,11 +935,12 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     end = workflow.index('\n              \' <<<"$runs_json"', start)
     runs = {
         "workflow_runs": [
-            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
-            {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
-            {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 1, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
+            {"id": 2, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 3, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
+            {"id": 4, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 5, "name": "Strix Security Scan owner/repo#7@old", "path": ".github/workflows/strix.yml", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 6, "name": "Strix Security Scan", "path": ".github/workflows/other.yml", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
         ]
     }
     result = subprocess.run(
@@ -963,7 +989,7 @@ if [[ "$*" == *"/pulls/7"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status=queued"* ]]; then
-  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan owner/repo#7@old","path":".github/workflows/strix.yml","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status="* ]]; then
@@ -1674,8 +1700,8 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
 
     assert workflow.count("--allow-no-lockfiles") == 4
     assert workflow.count("path: source") == 2
-    assert workflow.count("--output=old-results.json") == 2
-    assert workflow.count("--output=new-results.json") == 2
+    assert workflow.count("--output-file=old-results.json") == 2
+    assert workflow.count("--output-file=new-results.json") == 2
     assert workflow.count("source/") == 4
     assert "clean: false" not in workflow
     assert "test -s old-results.json" in workflow
@@ -1732,10 +1758,45 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_osv_scan_uses_current_output_flags_and_binds_sarif_checkout_path() -> None:
+    """Drop deprecated OSV output flags and bind upload-sarif to the real checkout.
+
+    Live evidence (ContextualWisdomLab/.github#2132): the pinned
+    `ghcr.io/google/osv-scanner-action:v2.5.1` image warns
+    `--output has been deprecated in favor of --output-file` (scanner) and
+    `... in favor of --output-files` (reporter), and `upload-sarif` logged
+    twice that the workspace root "does not appear to be a git repository"
+    because the exact head is checked out into `source`. A bare
+    `--output-files=<path>` defaults to the sarif format in v2.5.1, so the
+    reporter's output is unchanged. The checkout-path assertion is the
+    negative fixture: an absent or wrong `checkout_path` fails here instead
+    of silently relying on server-derived commit identity.
+    """
+    workflow = workflow_text("security-scan.yml")
+
+    # Check each named scanner/reporter step on its own, so a flag removed from
+    # one step cannot hide behind the same string appearing elsewhere.
+    for step_name, output_flag in (
+        ("Scan base with OSV", "--output-file=old-results.json"),
+        ("Retry base OSV without transitive resolution", "--output-file=old-results.json"),
+        ("Scan head with OSV", "--output-file=new-results.json"),
+        ("Retry head OSV without transitive resolution", "--output-file=new-results.json"),
+        ("Report PR-introduced OSV findings", "--output-files=results.sarif"),
+    ):
+        step = workflow_step(workflow, step_name)
+        assert output_flag in step, step_name
+        assert "\n            --output=" not in step, step_name
+
+    head_checkout = workflow_step(workflow, "Checkout head")
+    checkout_dir = re.search(r"(?m)^\s+path: (\S+)$", head_checkout).group(1)
+    upload_step = workflow_step(workflow, "Upload OSV SARIF to code scanning")
+    assert f"checkout_path: ${{{{ github.workspace }}}}/{checkout_dir}" in upload_step
 
 
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
