@@ -71,6 +71,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "fast-mlsirm": ("psychometrics", "rust"),
         "global-hs-trade": ("harmonized-system", "data-provenance"),
         "life-os": ("productivity", "project-planning"),
+        "korean-writing-skills": ("korean-language", "apa7"),
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
         "keyverse": ("identity", "openid-connect"),
