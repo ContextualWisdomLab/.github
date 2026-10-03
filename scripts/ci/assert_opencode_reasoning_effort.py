@@ -36,11 +36,12 @@ def strip_jsonc_comments(text: str) -> str:
     JSON string literals, so a string value that itself contains ``//`` (the
     ``"$schema": "https://opencode.ai/config.json"`` line) is preserved
     unchanged. Every CR and LF character inside removed content is retained in
-    order so any remaining ``json.JSONDecodeError`` keeps accurate line data.
+    order so any remaining ``json.JSONDecodeError`` keeps accurate line data;
+    a single-line block comment becomes one space so adjacent tokens cannot join.
     """
 
     def _replacer(match: re.Match[str]) -> str:
-        """Preserve strings or retain only a comment's original line endings."""
+        """Preserve strings and keep comment whitespace from joining tokens."""
         string_literal = match.group(1)
         if string_literal is not None:
             return string_literal
@@ -49,11 +50,14 @@ def strip_jsonc_comments(text: str) -> str:
             len(comment) < 4 or not comment.endswith("*/")
         ):
             return comment
-        return "".join(
+        line_endings = "".join(
             character
             for character in comment
             if character in "\r\n"
         )
+        if comment.startswith("/*") and not line_endings:
+            return " "
+        return line_endings
 
     return _JSONC_COMMENT_PATTERN.sub(_replacer, text)
 
