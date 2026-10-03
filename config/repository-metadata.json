@@ -153,6 +153,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "codec-carver": {
+      "description": "Codec Carver — metadata-preserving audio conversion, duration-bounded splitting, transcription, and evidence-aware recording-library curation.",
+      "topics": [
+        "audio-conversion",
+        "audio-analysis",
+        "audio-processing",
+        "metadata",
+        "flac",
+        "opus",
+        "transcription",
+        "rust",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
       "topics": [
