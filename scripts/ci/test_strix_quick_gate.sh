@@ -878,7 +878,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" '"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then' "opencode review model steps pass current-run identity to the normalizer"
 	assert_file_contains "$workflow_file" "normalize_opencode_output" "opencode review model steps normalize model control output"
 	assert_file_contains "$workflow_file" "opencode_review_normalize_output.py" "opencode review model steps normalize transcript-embedded JSON output"
-	if ! PYTHONPATH="$REPO_ROOT" python3 -c 'import json; from scripts.ci import opencode_review_normalize_output as norm; control_data = {"head_sha": "head", "run_id": "run", "run_attempt": "attempt"}; model_output = '"'"'Review noted a literal "{" in the log.\\n'"'"' + json.dumps(control_data); assert norm.iter_json_objects(model_output) == [control_data]'; then
+	if ! PYTHONPATH="$REPO_ROOT" python3 -c 'import json; from scripts.ci import opencode_review_normalize_output as norm; control_data = {"head_sha": "head", "run_id": "run", "run_attempt": "attempt"}; model_output = '"'"'Review noted a literal "{" in the log.\n'"'"' + json.dumps(control_data); assert norm.iter_json_objects(model_output) == [control_data]'; then
 		record_failure "opencode review normalizer must recover a control after a quoted prose delimiter"
 	fi
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "valid_control" "opencode review normalizer accepts only current-run control JSON"
