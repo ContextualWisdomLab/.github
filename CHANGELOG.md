@@ -1,5 +1,12 @@
 ### Isolated CI routing gains a runner-group authority boundary
 
+- Serialize the caller-controlled R matrix OS label with GitHub `toJSON()`
+  before inserting it into the group-scoped runner selector. Quotes,
+  backslashes, newlines, and duplicate `group`/`labels` text remain one
+  data label and cannot replace the fixed `CWL CI isolated` authority
+  boundary. The executable workflow contract covers benign and hostile values.
+  The integrated Maturin verifier now also documents its archive extraction and
+  command entry point, restoring the repository's 100% public-doc gate.
 - Scope every ordinary and non-main self-hosted fallback through the dedicated
   `CWL CI isolated` runner group as well as the existing platform/isolation
   labels. A durable regression rejects label-only isolated selectors, while

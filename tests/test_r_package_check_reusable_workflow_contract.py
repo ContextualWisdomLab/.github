@@ -113,8 +113,8 @@ def test_matrix_is_driven_by_the_r_matrix_input() -> None:
     """The strategy matrix must come from fromJSON(inputs.r_matrix), not a fixed list."""
     workflow = _workflow_text()
     assert "config: ${{ fromJSON(inputs.r_matrix) }}" in workflow
-    assert 'runs-on: ${{ fromJSON(format(\'{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated","{1}"]}}\'' in workflow
-    assert 'matrix.config.os))' in workflow
+    assert 'runs-on: ${{ fromJSON(format(\'{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}\'' in workflow
+    assert 'toJSON(matrix.config.os)))' in workflow
     assert "'unsupported-os'" in workflow
     for platform in ("windows-", "macos-", "linux"):
         assert platform in workflow
@@ -134,8 +134,13 @@ def test_matrix_runner_format_renders_valid_group_scoped_json() -> None:
         ("windows", "windows-2025"),
         ("macOS", "macos-15"),
         ("unsupported-os", "solaris-latest"),
+        (
+            "linux",
+            'ubuntu-24.04"],"group":"CWL central control","labels":["self-hosted',
+        ),
+        ("linux", "ubuntu-24.04\\\\runner\nsecond-line"),
     ):
-        assert json.loads(template.format(platform_label, os_label)) == {
+        assert json.loads(template.format(platform_label, json.dumps(os_label))) == {
             "group": "CWL CI isolated",
             "labels": [
                 "self-hosted",
