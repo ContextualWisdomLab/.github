@@ -1,3 +1,16 @@
+### OpenCode quoted prose delimiters preserve later controls
+
+- Prevent a quoted prose brace from starting a synthetic JSON container that
+  consumes a later independent exact-run control. RED commit
+  `4de4805502e0fa2cae1178919ec31eec9fcd7249` binds parser and CLI
+  regressions; GREEN commit
+  `a16431475a223d213b7e827b274282feda92286c` skips bounded or
+  line-terminated top-level prose quotations while retaining malformed outer
+  wrapper suppression.
+- Replace the stale Strix self-test for removed `decoder.raw_decode` source
+  text with an executable semantic contract against the active matched-span
+  scanner. The normalizer remains executable (`100755`).
+
 ### OpenCode separatorless invalid wrappers remain fail-closed
 
 - Preserve balanced malformed wrapper identity even when an invalid first

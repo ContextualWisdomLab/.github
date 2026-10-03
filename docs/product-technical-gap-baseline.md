@@ -1,5 +1,12 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 OpenCode quoted-prose framing closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| A quoted prose fragment containing `"{"` could start the matched-span scanner inside prose; its following quote then held string state across the newline and hid a later independent current-run control. The Strix quality self-test also asserted the removed `decoder.raw_decode` implementation detail instead of behavior | Independent PR #2564 review threads; RED `4de4805502e0fa2cae1178919ec31eec9fcd7249` reproduces the parser and CLI loss; GREEN `a16431475a223d213b7e827b274282feda92286c` passes direct quoted, unmatched-quote, valid-wrapper, and invalid-wrapper probes; Python compilation and the replacement shell assertion syntax pass | Treat only top-level prose quotation spans as non-container text, stop an unmatched prose quote at the line boundary, retain outer malformed-container suppression, and make the Strix contract execute the active scanner | **Proposed / local focused GREEN; exact-head hosted Checks, resolved current threads, and qualifying independent approval required** |
+
+
 ## 2026-10-03 Noema document-reader prerelease security-oracle closure
 
 | Gap | Exact evidence | Action | Status |
