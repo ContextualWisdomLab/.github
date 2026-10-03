@@ -1,3 +1,18 @@
+### ConceptWeave Product activation accepts substantive Draft synchronization
+
+- Replace the impossible source-neutral base-retarget canary with the supported
+  `pull_request:synchronize` evidence model. An OPEN Foundation Draft now remains
+  eligible, but activation requires the exact final timeline commit, non-empty
+  changed-file statistics, a first-attempt Product success after that commit,
+  an exact PR/head/base binding, evaluate-mode workflow-rule PASS, and a final
+  no-later-source-movement re-read. Ready/Draft toggles, reopen events, no-op
+  commits, manual reruns, predecessor evidence, and stale bases remain invalid.
+- Replace branch-selectable `workflow_dispatch` administration with a named
+  `repository_dispatch` contract that always loads protected default-branch
+  workflow code and rejects a payload whose expected protected-main SHA does
+  not equal the run SHA. Mutation remains environment-gated, serialized, and
+  disabled unless the protected variable explicitly enables reconciliation.
+
 ### Ruleset owner-plane reconciliation preserves concurrent administrator state
 
 - Preserve protected-main's scope-specific independent-review posture while reconciling live owner-plane drift: two approvals for the organization ruleset, one for the `.github` repository ruleset, and last-push approval in both scopes. The reconciler still removes routine bypass actors and rebase while retaining stale-review dismissal, thread resolution, deletion, and non-fast-forward protection.
