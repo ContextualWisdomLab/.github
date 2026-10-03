@@ -87,6 +87,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "global-hs-trade": {
+      "description": "Global HS Trade — rights-scoped company-by-HS trade observation ledger with provenance, validation, aggregation, and a local API.",
+      "topics": [
+        "international-trade",
+        "harmonized-system",
+        "trade-data",
+        "customs-data",
+        "data-provenance",
+        "data-governance",
+        "sqlite",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
       "topics": [
