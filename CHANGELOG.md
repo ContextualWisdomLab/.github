@@ -1,3 +1,20 @@
+### JSONC guard bounds unterminated construct scanning
+
+- The OpenCode reasoning-effort guard now consumes an unterminated string or
+  block comment through end-of-input in one regex match. Exact predecessor
+  `f8e55ec5` took about 4.04 seconds for 16,000 escaped quotes, 3.98 seconds
+  when that input ended in a lone backslash, and 10.77 seconds for 32,000
+  repeated unclosed block-comment openers. Repair commit `6854dab8` / tree
+  `4ef2f83a` processes those observed inputs in about 0.0008–0.0018 seconds,
+  preserving each malformed construct for `json.loads` to reject. A
+  deterministic 200,000-input differential corpus found no parse-result
+  change. The focused suite passes 19 tests, its `GITHUB_ACTIONS=true`
+  guard+consumer suite passes 73 tests, and the complete warning-fatal suite
+  passes 5,276 tests with 10 optional skips and 40 subtests. All 18,173
+  production statements and 7,468 branches are covered; public-doc coverage,
+  compileall, and diff checks pass. The change remains Draft/HOLD pending fresh
+  hosted Checks and qualifying independent review.
+
 ### JSONC guard preserves CR and LF evidence across block comments
 
 - The OpenCode reasoning-effort guard's regex comment stripper now retains

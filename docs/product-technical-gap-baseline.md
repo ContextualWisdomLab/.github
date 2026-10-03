@@ -75,6 +75,18 @@ Total output lines: 3890
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 OpenCode JSONC malformed-input runtime delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-UNTERMINATED-RUNTIME-01` — **Source repaired in `.github#2556` commit `6854dab855abfa4201d62f0e097db8c00d5d344e`, tree `4ef2f83af56e2ce647cb88dbd0a1a7df8ea40070`; complete local verification GREEN, fresh hosted Checks·독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자가 손상되거나 공격자가 만든 `opencode.jsonc`를 검증할 때 guard는 유효 구성을 수용하지 않거나 CPU를 장시간 점유하지 않고, 실패-폐쇄 오류로 다음 행동을 알려야 한다. |
+| TRD / RCA | exact predecessor `f8e55ec5d58f6cc3bbb60671396d2e3929616086`의 string arm은 닫는 quote가 있는 문자열만, block-comment arm은 닫는 `*/`가 있는 주석만 인식했다. escaped quote 또는 `/*a` opener가 반복된 미종결 입력은 각 후보 위치에서 남은 suffix를 다시 탐색해 입력 두 배마다 약 네 배가 걸렸다. 두 arm 모두 닫는 delimiter 또는 절대 EOF까지 한 번에 소비한다. replacer는 미종결 block comment를 그대로 반환해 `json.loads`의 실패-폐쇄 거부를 유지하고, 종료된 comment의 CR/LF 보존 계약은 바꾸지 않는다. |
+| Context Map | 중앙 `.github` review-control bounded context가 parser와 executable corpus를 단독 소유한다. OpenCode caller는 이 보호된 계약만 소비하며 leaf parser를 복사하지 않는다. DB·ontology·UI·외부 service 변경이 없어 ERD, ontology release, Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → terminated-comment line-ending preservation or malformed-construct preservation → json.loads → reasoning-effort validation`. 미종결 string과 block comment는 classifier가 EOF까지 보존하고 `json.loads`가 거부한다. 별도 aggregate/class/database가 없으므로 이 데이터 흐름이 기술 경계를 완전하게 표현하며 class UML과 ERD는 N/A다. |
+| RED → GREEN evidence | predecessor에서 16,000 escaped-quote 미종결 문자열은 4.0387초, 같은 입력의 dangling-backslash 변형은 3.9771초, 32,000 repeated unclosed block-comment opener는 10.7655초로 각각 새 2초 회귀를 실패했다. `6854dab8` tree에서 직접 관측은 각각 0.0018초, 0.0008초, 0.0017초였다. 결정적 200,000-input differential corpus는 predecessor와 새 구현 사이 parse acceptance/value 차이 0건이었다. focused suite는 19 passed, `GITHUB_ACTIONS=true` guard+consumer suite는 73 passed, complete warning-fatal suite는 `5,276 passed, 10 skipped, 40 subtests`, production coverage는 18,173/18,173 statements와 7,468/7,468 branches다. public-doc 100%, compileall, diff check도 GREEN이다. 이는 관측 corpus이며 보편적 배속 주장으로 승격하지 않는다. |
+| Action / 다음 gate | live PR head를 재수집해 concurrent delta가 없을 때만 force 없이 게시한다. 새 exact head의 hosted security/quality Checks, unresolved thread 0, qualifying independent approval을 다시 확인하고, predecessor 또는 queued/skipped evidence를 merge authorization으로 재사용하지 않는다. |
+
 ### 2026-10-03 OpenCode JSONC 의미 보존 delta
 
 | 항목 | 근거 / 결정 |
