@@ -8,11 +8,20 @@
 - RED `11c9c5ca2dce8d7ef32b078d76d7cd31101557e2` reproduces both false
   admissions against exact parent `420f631b3b8bc0bb3c8dae4d69134ce97d932e02`.
   GREEN `02f2763ff08d05060c66c8d6531df1aa8e49d035` generalizes the existing
-  constant-width delimiter-run classifier without adding another scanner pass.
-  Focused normalizer verification is 160/160; the warning-fatal repository
-  suite is 5,361 passed, 10 optional skips, and 40 subtests; the complete Strix
-  quick-gate harness passes. Fresh exact-head hosted Checks and a qualifying
-  independent approval remain required before ordinary merge.
+  delimiter-run classifier. Independent review then found the same bypass in
+  valid blockquote and list-item containers. RED
+  `0c226a1587b089a1ab267e48ab00ec9b0b69214c` binds four nested opening and
+  closing forms; GREEN `3ddd31841b73c6d5ae8555f6c8a838cb2b5f4e55`
+  closes those same-line forms. A second independent pass found exponential
+  regex backtracking plus four-space and ordered-list continuation gaps. RED
+  `f2aada37f6aa904442105d653d1217b834d8a18f` binds those cases and the
+  no-prefix-copy invariant; GREEN `e5ef765fb523596fdcc683876d80bc1bc644e566`
+  replaces the grammar regex with a conservative fail-closed container-marker
+  allowlist and evaluates at most one fence candidate per line. A 100,000-marker
+  failing prefix completes in about 0.03 seconds. Focused normalizer
+  verification is 171/171; the warning-fatal repository suite is 5,372 passed,
+  10 optional skips, and 40 subtests. Fresh exact-head hosted Checks and a
+  qualifying independent approval remain required before ordinary merge.
 
 ### OpenCode fence delimiter lines cannot carry approval evidence
 
