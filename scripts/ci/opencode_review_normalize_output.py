@@ -1530,10 +1530,13 @@ def iter_json_objects(text: str) -> list[Any]:
             and (text[index + 1].isalnum() or text[index + 1] == "_")
         )
 
-    def backtick_run_length_at(index: int) -> int:
-        """Return the complete backtick run length beginning at ``index``."""
+    def delimiter_run_length_at(index: int, delimiter: str) -> int:
+        """Return the complete delimiter run length beginning at ``index``."""
         run_length = 0
-        while index + run_length < len(text) and text[index + run_length] == "`":
+        while (
+            index + run_length < len(text)
+            and text[index + run_length] == delimiter
+        ):
             run_length += 1
         return run_length
 
@@ -1559,7 +1562,7 @@ def iter_json_objects(text: str) -> list[Any]:
             if prose_quote_delimiter is not None:
                 if prose_quote_delimiter.startswith("`"):
                     if character == "`":
-                        backtick_run_length = backtick_run_length_at(index)
+                        backtick_run_length = delimiter_run_length_at(index, "`")
                         prose_quote_skip_until = index + backtick_run_length
                         if backtick_run_length == len(prose_quote_delimiter):
                             prose_quote_delimiter = None
@@ -1572,19 +1575,19 @@ def iter_json_objects(text: str) -> list[Any]:
                 ):
                     prose_quote_delimiter = None
                 continue
-            if character == "`":
-                backtick_run_length = backtick_run_length_at(index)
-                prose_quote_skip_until = index + backtick_run_length
+            if character in {"`", "~"}:
+                delimiter_run_length = delimiter_run_length_at(index, character)
+                prose_quote_skip_until = index + delimiter_run_length
                 line_prefix_length = index - line_start_index
                 is_markdown_fence = (
-                    backtick_run_length >= 3
+                    delimiter_run_length >= 3
                     and line_prefix_length <= 3
                     and not text[line_start_index:index].strip()
                 )
                 if is_markdown_fence:
                     markdown_fence_line = True
-                else:
-                    prose_quote_delimiter = "`" * backtick_run_length
+                elif character == "`":
+                    prose_quote_delimiter = "`" * delimiter_run_length
                 continue
             if character in {'"', "'"} and not (
                 character == "'" and apostrophe_is_word_internal(index)
