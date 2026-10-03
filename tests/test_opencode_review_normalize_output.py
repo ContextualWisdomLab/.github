@@ -2600,6 +2600,22 @@ def test_iter_json_objects_does_not_copy_line_prefix_per_backtick_span():
     assert transcript.sliced_character_count <= len(encoded_control) + 3
 
 
+def test_iter_json_objects_does_not_copy_nested_container_prefix():
+    """Nested fence classification cannot copy or backtrack over its prefix."""
+    current_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+    encoded_control = json.dumps(current_control)
+    transcript = SliceCountingText(
+        "> " * 20 + "not-a-fence ~~~ " + encoded_control
+    )
+
+    assert norm.iter_json_objects(transcript) == [current_control]
+    assert transcript.sliced_character_count <= len(encoded_control) + 3
+
+
 def test_iter_json_objects_fails_closed_on_excessive_json_nesting():
     """Hostile nesting cannot crash the review-output normalizer."""
     deeply_nested_json = "[" * 10_000 + "0" + "]" * 10_000
@@ -2690,6 +2706,12 @@ def test_iter_json_objects_extracts_control_from_markdown_fence():
         "> ~~~json\n> review prose\n> ~~~ <control>",
         "- ~~~json <control>\n  ~~~",
         "> - ~~~json <control>\n>   ~~~",
+        "> ```json\n> review prose\n> ``` <control>",
+        "- ```json\n  review prose\n  ``` <control>",
+        "-   review prose\n    ~~~json <control>\n    ~~~",
+        "1.  review prose\n    ~~~json <control>\n    ~~~",
+        "-   review prose\n    ~~~json\n    body\n    ~~~ <control>",
+        "123456789. review prose\n           ~~~json <control>\n           ~~~",
     ],
 )
 def test_iter_json_objects_ignores_controls_on_markdown_fence_lines(
