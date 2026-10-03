@@ -47,7 +47,6 @@ def _step_index(job: str, name: str) -> int:
     return job.index(f"      - name: {name}\n")
 
 
-
 def _sidecar_upload_is_fail_closed(upload_step: str) -> bool:
     """Return whether the upload uses only the exact gate and propagates failure."""
     condition_lines = [
@@ -56,6 +55,7 @@ def _sidecar_upload_is_fail_closed(upload_step: str) -> bool:
         if line.strip().startswith("if: ")
     ]
     return condition_lines == [EXPECTED_UPLOAD_CONDITION] and "continue-on-error:" not in upload_step
+
 
 def test_live_draft_check_runs_after_head_validation_and_before_sidecar() -> None:
     """The draft decision sits between live-head validation and model provisioning."""
