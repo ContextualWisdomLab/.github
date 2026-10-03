@@ -212,10 +212,16 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 
 - Recovery posture: native PR and review events own normal progress, GitHub auto-merge owns required-check completion, and each repository keeps one daily `scan-pr-queue` recovery. The central organization-wide polling job was removed because each invocation occupied a runner, walked every repository, and amplified the same Actions and API pressure it was intended to repair. Same-PR supersession remains with trigger-aware concurrency and the repository-local exact-head coalescer.
 
-## Second-reviewer (Noema) posture
+## Independent-review (Noema) posture
 
-The org's two-reviewer merge rule needs a second approving-review identity
-independent of OpenCode. That identity is `cwl-noema-review[bot]`, supplied by
+The organization ruleset contract requires two approving reviews and
+last-push approval; the owner-repository ruleset requires one approving review
+and last-push approval. Neither scope configures a synthetic named reviewer,
+same-author CODEOWNER approval, or routine administrator bypass. Noema supplies
+a model-authored review identity independent of OpenCode as defense-in-depth
+review evidence; every accepted approval must still bind to the exact current
+head and a later push invalidates stale approval evidence.
+That identity is `cwl-noema-review[bot]`, supplied by
 the organization-owned `cwl-noema-review` GitHub App. The central workflow
 is an active organization required workflow. It runs the centrally versioned
 `noema_review_gate.py` judgement path and
@@ -296,6 +302,15 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 ## Evidence from this rollout
 
+- `.github#1644` ("ruleset owner-plane reconciler") extends `scripts/ci/audit_central_required_workflows.py`'s
+  `audit_ruleset` to validate two new structural properties the prior audit was silent on: the ruleset
+  must not configure `bypass_actors` (routine bypass actors on the central required-workflow ruleset are
+  forbidden — an actor with bypass rights could satisfy every other check while still skipping the
+  workflows/review requirements this audit exists to enforce). It also preserves protected-main's
+  scope-specific review contract: two approvals for the organization ruleset and one for the owner
+  repository, with last-push approval, stale-review dismissal, and thread resolution in both scopes.
+  Required-reviewer lists, same-author CODEOWNER approval, rebase, and routine bypass actors remain
+  forbidden. Fresh exact-head evidence and qualifying independent approval remain merge conditions.
 - On 2026-09-02 KST, live verification via `gh api repos/<org>/<repo>/rules/branches/<branch>`
   against six repositories (`aFIPC`, `bandscope`, `newsdom-api`, `naruon`,
   `xtrmLLMBatchPython`, `pg-erd-cloud`) found ruleset `18156473`'s `workflows`
