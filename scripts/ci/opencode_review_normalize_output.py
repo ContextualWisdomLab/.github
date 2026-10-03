@@ -1457,36 +1457,42 @@ def iter_json_objects(text: str) -> list[Any]:
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    start_index: int | None = None
-    container_stack: list[str] = []
-    in_string = False
-    escaped = False
-    for index, character in enumerate(text):
-        if start_index is None:
-            if character not in "{[":
-                continue
-            next_index = index + 1
-            while next_index < len(text) and text[next_index] in " \t\r\n":
-                next_index += 1
-            if next_index == len(text):
-                continue
-            next_character = text[next_index]
-            valid_object_start = character == "{" and next_character in {'"', "}"}
-            valid_array_start = character == "[" and (
+    def blocks_nested_container(index: int, character: str) -> bool:
+        """Return whether an unmatched opener still resembles JSON syntax."""
+        next_index = index + 1
+        while next_index < len(text) and text[next_index] in " \t\r\n":
+            next_index += 1
+        next_character = text[next_index] if next_index < len(text) else ""
+        return (character == "{" and next_character in {'"', "}"}) or (
+            character == "["
+            and (
                 next_character in '\"{[-0123456789]'
                 or any(
                     text.startswith(literal, next_index)
-                    for literal in ("true", "false", "null", "NaN", "Infinity")
+                    for literal in (
+                        "true",
+                        "false",
+                        "null",
+                        "NaN",
+                        "Infinity",
+                    )
                 )
             )
-            if not valid_object_start and not valid_array_start:
-                token_end = next_index
-                while token_end < len(text) and text[token_end] not in ",:]}{[":
-                    token_end += 1
-                if token_end == len(text) or text[token_end] in "{[":
-                    continue
-            start_index = index
-            container_stack.append("}" if character == "{" else "]")
+        )
+
+    matched_spans: list[tuple[int, int, int | None, bool]] = []
+    container_stack: list[tuple[str, int, bool]] = []
+    blocking_depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if not container_stack:
+            if character in "{[":
+                blocks_nested = blocks_nested_container(index, character)
+                container_stack.append(
+                    ("}" if character == "{" else "]", index, blocks_nested)
+                )
+                blocking_depth += int(blocks_nested)
             continue
 
         if in_string:
@@ -1501,15 +1507,27 @@ def iter_json_objects(text: str) -> list[Any]:
         if character == '"':
             in_string = True
         elif character in "{[":
-            container_stack.append("}" if character == "{" else "]")
-        elif container_stack and character == container_stack[-1]:
-            container_stack.pop()
-            if not container_stack:
-                try:
-                    values.append(json.loads(text[start_index : index + 1]))
-                except json.JSONDecodeError:
-                    pass
-                start_index = None
+            blocks_nested = blocks_nested_container(index, character)
+            container_stack.append(
+                ("}" if character == "{" else "]", index, blocks_nested)
+            )
+            blocking_depth += int(blocks_nested)
+        elif character in "}]" and character == container_stack[-1][0]:
+            _, start_index, blocks_nested = container_stack.pop()
+            blocking_depth -= int(blocks_nested)
+            parent_start = container_stack[-1][1] if container_stack else None
+            matched_spans.append(
+                (start_index, index + 1, parent_start, blocking_depth > 0)
+            )
+
+    matched_starts = {start for start, _, _, _ in matched_spans}
+    for start_index, end_index, parent_start, blocked in matched_spans:
+        if blocked or parent_start in matched_starts:
+            continue
+        try:
+            values.append(json.loads(text[start_index:end_index]))
+        except json.JSONDecodeError:
+            pass
 
     return values
 
