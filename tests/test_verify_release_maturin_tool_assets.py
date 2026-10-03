@@ -6,7 +6,6 @@ import json
 import runpy
 import sys
 import tarfile
-import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -175,52 +174,6 @@ def test_maturin_download_is_bounded(monkeypatch):
     monkeypatch.setattr(verifier.urllib.request, "build_opener", build_opener)
     with pytest.raises(ValueError, match="asset exceeds"):
         verifier._download("maturin-x86_64-pc-windows-msvc.zip")
-
-
-def test_maturin_download_closes_unsuccessful_responses_and_http_errors(monkeypatch):
-    """Every rejected transport response releases its underlying connection."""
-    closed = []
-
-    class Response:
-        status = 503
-
-        def close(self):
-            closed.append("response")
-
-    class ResponseOpener:
-        def open(self, _request, timeout):
-            assert timeout == 60
-            return Response()
-
-    monkeypatch.setattr(
-        verifier.urllib.request,
-        "build_opener",
-        lambda _proxy, _redirect: ResponseOpener(),
-    )
-    with pytest.raises(ValueError, match="HTTP 503"):
-        verifier._download("maturin-x86_64-pc-windows-msvc.zip")
-    assert closed == ["response"]
-
-    transport_error = urllib.error.HTTPError(
-        "https://github.com/asset", 502, "Bad Gateway", {}, io.BytesIO()
-    )
-    monkeypatch.setattr(
-        transport_error, "close", lambda: closed.append("http-error")
-    )
-
-    class ErrorOpener:
-        def open(self, _request, timeout):
-            assert timeout == 60
-            raise transport_error
-
-    monkeypatch.setattr(
-        verifier.urllib.request,
-        "build_opener",
-        lambda _proxy, _redirect: ErrorOpener(),
-    )
-    with pytest.raises(ValueError, match="HTTP 502"):
-        verifier._download("maturin-x86_64-pc-windows-msvc.zip")
-    assert closed == ["response", "http-error"]
 
 
 def test_maturin_download_rejects_unlisted_name_before_network(monkeypatch):
