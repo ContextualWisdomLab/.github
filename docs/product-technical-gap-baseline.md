@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 OpenCode tilde-fence authority boundary
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must treat every supported Markdown fence delimiter line as prose framing, never approval evidence. The PRD goal and loop remain unchanged. | `OpenCode model output → mixed-output normalizer → exact-run control candidate → review receipt gate`. Backtick and tilde delimiter lines share one non-authoritative boundary; fenced bodies and later independent lines retain their existing identity. | No persistence, schema, table, or migration change. | Draft successor `ContextualWisdomLab/.github#2564@420f631b3b8bc0bb3c8dae4d69134ce97d932e02` ignored backtick delimiter-line controls but did not recognize CommonMark tilde fences. Both `~~~json {control}` and a `{control}` suffix on a closing `~~~` line were promoted as top-level authority. RED `11c9c5ca2dce8d7ef32b078d76d7cd31101557e2` binds both false admissions. | Generalize the existing delimiter-run classifier to backticks and tildes, while retaining backtick-only inline quotation semantics and the existing transparent fenced-body contract. GREEN `02f2763ff08d05060c66c8d6531df1aa8e49d035` is the smallest owner repair. Require fresh exact-head hosted Checks, coverage, and an independent current-head review before merge. | **Proposed / local GREEN:** focused normalizer 160/160; warning-fatal repository suite 5,361 passed, 10 skipped, 40 subtests; complete Strix quick-gate harness PASS; exact-head hosted evidence remains required. |
+
 ## 2026-10-03 OpenCode fence-delimiter authority boundary
 
 | PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |

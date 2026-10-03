@@ -1,3 +1,19 @@
+### OpenCode tilde fence delimiter lines cannot carry approval evidence
+
+- Classify CommonMark tilde fence delimiters with the same line-local,
+  non-authoritative boundary as backtick fence delimiters. An exact-run control
+  in either an opening tilde-fence info string or a closing delimiter suffix can
+  no longer be promoted as top-level approval evidence; fenced-body controls
+  and later independent controls retain their existing contract.
+- RED `11c9c5ca2dce8d7ef32b078d76d7cd31101557e2` reproduces both false
+  admissions against exact parent `420f631b3b8bc0bb3c8dae4d69134ce97d932e02`.
+  GREEN `02f2763ff08d05060c66c8d6531df1aa8e49d035` generalizes the existing
+  constant-width delimiter-run classifier without adding another scanner pass.
+  Focused normalizer verification is 160/160; the warning-fatal repository
+  suite is 5,361 passed, 10 optional skips, and 40 subtests; the complete Strix
+  quick-gate harness passes. Fresh exact-head hosted Checks and a qualifying
+  independent approval remain required before ordinary merge.
+
 ### OpenCode fence delimiter lines cannot carry approval evidence
 
 - Ignore every character after a line-start Markdown fence delimiter until the
