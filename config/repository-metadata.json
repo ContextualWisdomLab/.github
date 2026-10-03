@@ -136,6 +136,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "appguardrail": {
+      "description": "AppGuardrail — security guardrails, static analysis, review evidence, and remediation workflows for AI-built applications.",
+      "topics": [
+        "application-security",
+        "ai-coding",
+        "security",
+        "guardrails",
+        "static-analysis",
+        "sarif",
+        "code-scanning",
+        "developer-tools",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
       "topics": [
