@@ -79,6 +79,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "wardnet": {
+      "description": "Wardnet — Rust-first gateway and SOC control plane for request scoring, monitor/block policy, DNSBL publication, and security-event evidence.",
+      "topics": [
+        "network-security",
+        "web-application-firewall",
+        "intrusion-detection",
+        "security-operations",
+        "api-gateway",
+        "threat-detection",
+        "dnsbl",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
