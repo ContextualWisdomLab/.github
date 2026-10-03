@@ -75,6 +75,18 @@ Total output lines: 3890
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-04 OpenCode JSONC token-separation delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-TOKEN-SEPARATION-01` — **`.github#2556@af135ea7cccff8fd8b737ae93b75c4837c9ba0fd`에서 RED 재현, canonical parser GREEN `621bf1c9273b4001e7c2e02ac0ae846a4c27a6e7`; fresh exact-head hosted Checks·독립 approval 전까지 Proposed/HOLD** |
+| PRD | 운영자는 주석 제거가 서로 다른 JSON 토큰을 결합해 손상된 설정에 새로운 값을 부여하지 않는다는 실패-폐쇄 보장을 받아야 한다. |
+| TRD / RCA | 종료된 single-line block comment를 빈 문자열로 치환해 `1/* comment */2`→`12`, `-/* comment */1`→`-1`, `1/* comment */.5`→`1.5`로 합쳤다. 이전 differential reference도 같은 삭제 동작을 공유해 결함을 검출하지 못했다. 최소 수리는 주석의 CR/LF를 원순서로 유지하고 줄바꿈이 없는 block comment에는 공백 하나를 남긴다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 실제 load regression을 소유한다. OpenCode caller는 이 canonical guard만 소비하며 leaf parser나 새 dependency는 추가하지 않는다. DB·ontology·UI 변화가 없어 ERD와 Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → malformed comment preservation 또는 terminated comment whitespace preservation → json.loads fail-closed → reasoning-effort validation`. |
+| RED → GREEN evidence | RED `b637d358d7f502e1ed7b7c1ed804f9da006e35ff`는 세 token-fusion case가 모두 `DID NOT RAISE`로 실패했다. GREEN `621bf1c9273b4001e7c2e02ac0ae846a4c27a6e7`에서 focused file 23 passed, warning-fatal repository suite `5,280 passed, 10 skipped, 40 subtests`, compileall과 `git diff --check`가 GREEN이다. local pytest-cov/interrogate가 없어 fresh coverage/docstring 수치는 주장하지 않는다. |
+| Action / 다음 gate | 문서-only child 이후 exact head의 source/test blob과 ancestry를 재확인하고 hosted security/quality Checks, unresolved thread, qualifying approval을 다시 수집한다. |
+
 ### 2026-10-03 OpenCode JSONC delimiter-identity delta
 
 | 항목 | 근거 / 결정 |
