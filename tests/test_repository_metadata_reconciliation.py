@@ -69,6 +69,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
         "inkspan": ("markdown-editor", "document-conversion"),
         "wardnet": ("network-security", "web-application-firewall"),
+        "cwl-telemetry": ("opentelemetry", "observability"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
