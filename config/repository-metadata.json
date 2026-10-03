@@ -103,6 +103,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "life-os": {
+      "description": "LifeOS — an open-source personal operating system for goals, projects, tasks, habits, and reviews with user-owned data and auditable AI assistance.",
+      "topics": [
+        "productivity",
+        "project-planning",
+        "habit-tracking",
+        "goal-setting",
+        "self-hostable",
+        "saas",
+        "microservices",
+        "typescript",
+        "postgresql",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
       "topics": [
