@@ -73,6 +73,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "life-os": ("productivity", "project-planning"),
         "korean-writing-skills": ("korean-language", "apa7"),
         "appguardrail": ("application-security", "static-analysis"),
+        "codec-carver": ("audio-conversion", "audio-analysis"),
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
         "keyverse": ("identity", "openid-connect"),
