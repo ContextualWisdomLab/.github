@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 OpenCode linear-time transcript framing contract
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The exact-head diagnostic compatibility repair called prefix-wide `str.rfind()` twice for each nested non-JSON opener. Untrusted model output could therefore drive the mixed-output scanner toward quadratic work before evidence normalization. | Independent exact-head review of #2564 `a62fe71a7573cf377da535d2dcb72e9f714b263d`; deterministic RED `e9a080f59ff6d85101c78da8ac1d4eddcd53c7b7` observes 129 reverse searches for 64 nested openers. | Preclassify exact line-local `Diagnostic:` opener positions in one linear pass, use O(1) membership during nesting, and retain the existing exact recovery grammar and fail-closed ambiguity rules. GREEN `5f5c2dc9b3ad8e7476663ce4d3c32ee49a8de4a4` observes one decoder-internal reverse search and scales from about 0.010 s at 16k openers to 0.080 s at 128k. | **Proposed / focused GREEN; exact-head hosted Checks and qualifying independent approval required.** |
+
 ## 2026-10-03 OpenCode quoted-prose and unfinished-wrapper evidence boundary
 
 | Gap | Exact evidence | Action | Status |

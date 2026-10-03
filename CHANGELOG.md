@@ -1,5 +1,14 @@
 ### OpenCode quoted prose and unfinished wrappers preserve control identity
 
+- Restore the mixed-output scanner's linear-time security contract after an
+  independent exact-head review found per-nested-opener prefix rescans. RED
+  `e9a080f59ff6d85101c78da8ac1d4eddcd53c7b7` records 129 reverse-prefix
+  searches for 64 adversarial openers; GREEN
+  `5f5c2dc9b3ad8e7476663ce4d3c32ee49a8de4a4` preclassifies exact
+  `Diagnostic:` opener positions in one pass and reduces the same probe to one
+  decoder-internal search. Exact-function scaling from 16k to 128k nested
+  openers remains linear while quoted-prose and invalid-wrapper cases stay
+  fail-closed.
 - Ignore `{` and `[` while they occur inside prose quotation state; an
   unfinished quote remains fail-closed rather than promoting a quoted
   multi-line control. Keep unfinished invalid-token wrappers fail-closed unless
