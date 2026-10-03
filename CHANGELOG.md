@@ -1,3 +1,12 @@
+### Dependency Review requires a completed authenticated comparison
+
+- The reusable Dependency Review preflight now requires both curl exit zero
+  and HTTP 200 before publishing `available=true`. A regression reproduces a
+  partial transfer that prints `200` but exits 18, preserving the fail-closed
+  gate. The bundled Security Scan already enforced both signals and remains
+  unchanged. PR #1725 stays Proposed until exact-head hosted Checks and an
+  independent approval are complete.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

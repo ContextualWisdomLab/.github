@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 Dependency Review transport-completion delta
+
+| Gap ID / 상태 | PRD / TRD / Context Map / evidence / next gate |
+|---|---|
+| `CONTROL-DEPENDENCY-REVIEW-TRANSPORT-EXIT-01` — **Source repair on `.github#1725`; Proposed/HOLD pending exact-head hosted evidence and independent approval** | **PRD:** 구매자는 불완전한 dependency comparison이 보안 gate를 통과하지 않음을 보장받아야 한다. **TRD/RCA:** reusable preflight가 curl의 nonzero 종료를 `|| true`로 숨기고 출력된 HTTP `200`만 검사해 partial transfer에도 `available=true`를 발행할 수 있었다. **Context Map:** 중앙 `.github` Dependency Review admission owner가 thin callers 앞에서 exact base/head와 authenticated transport completion을 소유하며, bundled Security Scan은 이미 curl exit와 HTTP status를 함께 검사한다. **실행 흐름:** `exact identity validation → authenticated curl → curl exit == 0 AND HTTP 200 → available=true → pinned Dependency Review`; DB/UI/ERD 변화는 N/A다. **RED→GREEN:** fake curl이 `200`을 출력한 뒤 exit `18`인 executable regression은 defect head에서 실패하고, 최소 수리 뒤 availability를 발행하지 않는다. **다음 gate:** current-head focused/full suite, hosted security/review Checks, unresolved thread 0, qualifying independent approval, ordinary protected merge가 필요하다. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
