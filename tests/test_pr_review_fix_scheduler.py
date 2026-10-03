@@ -1483,6 +1483,24 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     assert '"action": "error"' in payload_lines[-1]
 
 
+def test_inspect_pr_reuses_prefetched_comments(monkeypatch):
+    """A queue snapshot decides marker freshness without a duplicate API fetch."""
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
+    marker = {
+        "body": (
+            f"{fix.FIX_MARKER} head_sha={'a' * 40} "
+            f"epoch={int(time.time())} -->"
+        )
+    }
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+
+    assert fix.inspect_pr("owner/repo", make_pr(), args, comments=[marker]) == (
+        "wait",
+        ("recent autofix marker exists for this head",),
+    )
+
+
 def test_fix_parse_args_and_self_test(monkeypatch):
     """Fix scheduler CLI validates inputs and exposes self-test."""
     assert fix.main(["--self-test"]) == 0
