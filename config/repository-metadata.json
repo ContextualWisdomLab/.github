@@ -61,6 +61,24 @@
       "deepwiki": true,
       "pages": true
     },
+    "inkspan": {
+      "description": "Inkspan — modular Markdown and HTML authoring, collaborative editing, safe serialization, and network-free Office document rendering.",
+      "topics": [
+        "markdown-editor",
+        "wysiwyg-editor",
+        "rich-text-editor",
+        "prosemirror",
+        "tiptap",
+        "collaborative-editing",
+        "document-conversion",
+        "document-serialization",
+        "typescript",
+        "react",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
