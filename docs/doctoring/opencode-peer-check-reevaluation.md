@@ -54,3 +54,65 @@ including text after the diagram. Tests execute the actual producer printf block
 and the graph emitter rather than reproducing shortened synthetic envelopes.
 Receipt-module validation: 25 passed, 100% statements and branches; hosted
 review and deployment evidence remain outstanding.
+
+## Exact historical coverage-only refresh (#2125 / #2126)
+
+The authenticated public review `5301203359` is preserved byte-for-byte in
+`tests/fixtures/opencode_legacy_coverage_review5301203359.json`. Its historical
+producer is `e6334e2` (`opencode_review_surfaces.py` and the dispatch publisher).
+It contains the complete changed-file walkthrough, generated behavior graph,
+fixed no-product-finding prose, exact head/run/attempt identity, failed coverage,
+fixed review outcome, and appended evidence map. Protected production now posts
+this fallback as COMMENT; this repair does not alter publication or workflows.
+
+`opencode_legacy_coverage_fallback.py` shares exact classification between the
+receipt helper and scheduler retry predicate. It requires an existing trusted
+OpenCode login, matching full commit/body/current head, and positive decimal run
+and attempt. It reconstructs file-role labels and both graphs from bounded paths
+using the producer, then compares the entire envelope. The appended map may use
+the producer's ordinary or merge-conflict graph; arbitrary Mermaid nodes, changed
+labels, extra prose, mixed findings, malformed identities, unsupported format or
+source-root-dependent API diagrams are not exempted. No repository/head/run is
+hardcoded as an exception. A bare coverage substring or no-finding sentence is
+not refresh permission; the old substring-only scheduler predicate is removed.
+
+A recognized fallback is non-substantive, not APPROVED. A newer fallback,
+including COMMENTED or an incorrectly posted APPROVED envelope, prevents the
+receipt gate from resurrecting an older same-head approval. A later substantive
+source finding still deduplicates as a formal blocker. Existing peer-check-only
+fallback recognition and its regressions are preserved.
+
+Coverage retry still requires complete current-head coverage and Strix evidence,
+no failed peers, elapsed retry floor, available history, ordinary deduplication,
+admission, actor and live-head checks. Failed CodeQL stays BLOCK/WAIT without
+review dispatch or merge. Independent approval, last-push approval, repository
+protection and exact-head revalidation are unchanged. There is no privileged
+refresh override or approve/merge authority in the classifier.
+
+### Security Notes
+
+Review objects and body text are untrusted input. Recognition crosses only a
+classification boundary, never a network/mutation boundary: exact actor and
+identity validation plus full producer reconstruction fail closed on unknown
+content. Changed paths are bounded to 200 rows / 512 characters and normalized
+relative components; they are labels only, never opened from the review body.
+No source root is passed to the renderer. Producer validation errors return
+non-classification, not permission or a gate crash. No secrets, new dependencies,
+permissions, logs containing private inputs, workflow changes, dispatch/rerun,
+commit/push or merge were introduced. Tests cover identity mismatch, unknown
+actors, extra/mixed prose and graph injection, malformed run/attempt, stale
+approval resurrection, and failed peer checks.
+
+### Local verification scope
+
+Initial actual-fixture RED: both receipt and scheduler cases failed (2 failed).
+The first minimal GREEN passed both cases (2 passed). Additional RED cases caught
+a producer-validation exception and older-approval resurrection by COMMENTED;
+both were repaired fail closed. Existing scheduler gate tests now use the actual
+canonical fixture and full synthetic SHA rather than abbreviated coverage prose;
+no gate assertions were removed. Final targeted test counts and strict coverage
+are reported by the implementing lane, not by this historical record.
+
+This is local classification/regression evidence only. Remote integration,
+independent review, hosted exact-head required checks, fresh receiver execution,
+substantive current-head review and protected merge remain uncompleted gates.

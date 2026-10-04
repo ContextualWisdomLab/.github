@@ -13,6 +13,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.ci.opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
+except ModuleNotFoundError:
+    from opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
+
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_RE = re.compile(
@@ -153,6 +158,9 @@ def is_formal_receipt(
     if author not in FORMAL_AUTHORS:
         return False, f"author {author or '<empty>'} is not an OpenCode publisher"
     state = str(review.get("state") or "").upper()
+    if is_legacy_coverage_only_review(review, head_sha):
+        verdict = "approval" if state == "APPROVED" else "changes request"
+        return False, f"fallback {verdict} requires fresh substantive review"
     if state not in FORMAL_STATES:
         return False, f"state {state or '<empty>'} is not a formal review verdict"
     if not review.get("id"):

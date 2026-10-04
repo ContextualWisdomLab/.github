@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import quote
 
 try:
+    from scripts.ci.opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
     from scripts.ci.review_admission_controller import (
         WORKER_BOUNDARIES,
         AdmissionRequest,
@@ -32,6 +33,7 @@ try:
         update_state_file,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
+    from opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
     from review_admission_controller import (
         WORKER_BOUNDARIES,
         AdmissionRequest,
@@ -2216,7 +2218,9 @@ def is_deterministic_fallback_approval(review: dict[str, Any]) -> bool:
     if (review.get("state") or "").upper() != "APPROVED":
         return False
     body = (review.get("body") or "").lower()
-    return any(marker in body for marker in DETERMINISTIC_APPROVAL_MARKERS)
+    return any(marker in body for marker in DETERMINISTIC_APPROVAL_MARKERS) or (
+        is_legacy_coverage_only_review(review, str((review.get("commit") or {}).get("oid") or ""))
+    )
 
 
 def has_current_head_deterministic_fallback_approval(pr: dict[str, Any]) -> bool:
@@ -2305,8 +2309,9 @@ def latest_current_head_coverage_change_request(
             continue
         if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
             return None
-        body = (review.get("body") or "").lower()
-        return review if all(marker in body for marker in COVERAGE_REVIEW_MARKERS) else None
+        return review if is_legacy_coverage_only_review(
+            review, str(pr.get("headRefOid") or "")
+        ) else None
     return None
 
 

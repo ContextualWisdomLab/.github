@@ -1,0 +1,13 @@
+{
+  "databaseId": 5301203359,
+  "id": "PRR_kwDORjvEXs8AAAABO_nxnw",
+  "author": {
+    "login": "opencode-agent"
+  },
+  "state": "CHANGES_REQUESTED",
+  "body": "## Pull request overview\n\nOpenCode reviewed the current-head product diff. Coverage is a separate gate.\n\n## Changed files\n\n- `services/analysis-engine/tests/test_supply_chain_policy.py` — regression suite\n\n## Changed behavior\n\n```mermaid\nflowchart LR\n  PR[\"PR changed files\"] --> Evidence[\"OpenCode bounded evidence\"]\n  Evidence --> S1[\"Test: test_supply_chain_policy.py\"]\n  S1 --> I1[\"regression suite\"]\n  I1 --> R1[\"Review risk: Test: test_supply_chain_policy.py\"]\n  R1 --> V1[\"targeted test run\"]\n```\n\n## Findings\n\nNo source-backed product finding is synthesized from the coverage gate. A coverage miss belongs in the status comment.\n\n- Head SHA: `8fe6b6d99c009527ef0bcba419e6f6debdb23c23`\n- Workflow run: 35908696823\n- Workflow attempt: 1\n- Coverage gate: `failure`\n\n## Review outcome\n\nCoverage is a gate, not the review. This body reviews the changed product files.\n\n## Changed-File Evidence Map\n\n```mermaid\nflowchart LR\n  PR[\"PR changed files\"] --> Evidence[\"OpenCode bounded evidence\"]\n  Evidence --> S1[\"Test: test_supply_chain_policy.py\"]\n  S1 --> I1[\"regression suite\"]\n  I1 --> R1[\"Review risk: Test: test_supply_chain_policy.py\"]\n  R1 --> V1[\"targeted test run\"]\n```",
+  "commit": {
+    "oid": "8fe6b6d99c009527ef0bcba419e6f6debdb23c23"
+  },
+  "submittedAt": "2026-09-24T07:31:28Z"
+}
