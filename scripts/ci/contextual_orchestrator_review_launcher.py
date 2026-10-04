@@ -36,6 +36,7 @@ from typing import Any, Callable
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
+    normalize_input_modalities,
     provider_account,
 )
 
@@ -260,6 +261,9 @@ def _report_rows(
                 "model": model_id,
                 "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
                 "is_free": (provider, model_id) in free_route_identities,
+                "input_modalities": normalize_input_modalities(
+                    getattr(model, "input_modalities", None)
+                ),
                 "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
                 "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
                 "currency_code": getattr(model, "currency_code", None),

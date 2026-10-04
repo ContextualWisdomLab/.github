@@ -228,15 +228,24 @@ def list_codeql_analyses(
         raise ConfigurationIdentityError("repository must be owner/name")
     if not token:
         raise ConfigurationIdentityError("token is required to list analyses")
+    if type(per_page) is not int or not 1 <= per_page <= 100:
+        raise ConfigurationIdentityError("per_page must be an integer from 1 to 100")
     params: dict[str, str] = {"per_page": str(per_page), "tool_name": CODEQL_TOOL_NAME}
     if ref:
         params["ref"] = ref
-    query = urllib.parse.urlencode(params)
-    url = f"https://api.github.com/repos/{repository}/code-scanning/analyses?{query}"
-    payload = _request_json(url, token=token, timeout_seconds=timeout_seconds)
-    if not isinstance(payload, list):
-        raise ConfigurationIdentityError("code-scanning analyses response was not a list")
-    return [row for row in payload if isinstance(row, dict)]
+    rows: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        params["page"] = str(page)
+        query = urllib.parse.urlencode(params)
+        url = f"https://api.github.com/repos/{repository}/code-scanning/analyses?{query}"
+        payload = _request_json(url, token=token, timeout_seconds=timeout_seconds)
+        if not isinstance(payload, list):
+            raise ConfigurationIdentityError("code-scanning analyses response was not a list")
+        rows.extend(row for row in payload if isinstance(row, dict))
+        if len(payload) < per_page:
+            return rows
+        page += 1
 
 
 def wait_for_language_pairing(
