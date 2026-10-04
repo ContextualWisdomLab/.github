@@ -87,8 +87,86 @@ is separate and cannot authorize a merge.
 
 ## Continuing acceptance
 
-The durable current task plan is
-`/Users/seonghobae/orca/reports/governance-alignment-20261004/GOAL.md`.
-It retains all original operational outcomes. Document alignment and a schedule
+The durable current task plan has the access-controlled locator
+`governance-alignment-task-plan-20261004`.
+The private evidence registry retains its actual storage location and all
+original operational outcomes. Document alignment and a schedule
 are not their completion. Source/review work continues independently of the
 unresolved registration custodian and GitHub-auth publication boundary.
+
+## 2026-10-05 review repair and research applicability
+
+The current-head bot review identified public personal home-directory paths in
+both alignment documents and missing standards/paper traceability. This repair
+replaces those paths with stable access-controlled locators. The owner keeps
+an owner-readable resolution registry outside the Git tree; no raw captures,
+credentials or private repository identities are added to public documentation.
+The previously completed five-file review and eight tests per mode remain
+historical results; they are not acceptance of these new bytes.
+
+The following sources were retrieved from their publishers on 2026-10-05.
+The reading scope was ISO public catalogue/overview metadata, NIST publication
+metadata and abstract, and the USENIX abstract and bibliography. The NIST PDF
+fetch timed out; no PDF-text reading claim is made. The full ISO text was not
+reviewed; no clause-level conformity claim is made.
+This is an applicability assessment, not certification.
+
+- **Information-security governance:** ISO/IEC 27001:2022 describes an ISMS
+  requirements standard. Its public overview supports separating accountable
+  risk management from a local technical success. Here, that informs the
+  existing owner/evidence/acceptance map; it does not appoint a custodian.[1]
+- **Amendment scope:** ISO/IEC 27001:2022/Amd 1:2024 is the climate-action
+  amendment. Record it when assessing the organization's ISMS context; its
+  catalogue metadata does not define runner labels or GitHub approval rules.[2]
+- **CI/CD supply-chain evidence:** NIST SP 800-204D addresses security measures
+  across source, build, test, package and deployment stages. This record applies
+  that distinction to separate publication, executed checks and protected
+  integration, without claiming that a receipt implements every measure.[3]
+- **Research basis:** The in-toto paper describes cryptographic verification
+  across a supply chain involving distinct actors. It motivates binding actors
+  and artifacts across transitions. Local hashes in this record are not an
+  in-toto deployment or a verified signed end-to-end attestation chain.[4]
+- **Current overview edition:** The ISO catalogue lists ISO/IEC 27000:2026 as
+  an ISMS overview, not the requirements standard. It supplies context for
+  concepts and relationships, not an additional runner admission gate.[5]
+
+These references are not runner registration or live scanner/LiteLLM consumer
+acceptance. This research record is not a qualifying GitHub approval. Those
+outcomes still require executed evidence and the normal protection gates above.
+
+### APA 7th references
+
+International Organization for Standardization. (2022).
+*Information security, cybersecurity and privacy protection—Information security
+management systems—Requirements* (ISO/IEC 27001:2022).
+https://www.iso.org/standard/27001
+
+International Organization for Standardization. (2024).
+*Information security, cybersecurity and privacy protection—Information security
+management systems—Requirements—Amendment 1: Climate action changes*
+(ISO/IEC 27001:2022/Amd 1:2024). https://www.iso.org/standard/88435.html
+
+Chandramouli, R., Kautz, F., & Torres-Arias, S. (2024).
+*Strategies for the integration of software supply chain security in DevSecOps
+CI/CD pipelines* (NIST SP 800-204D). National Institute of Standards and
+Technology. https://doi.org/10.6028/NIST.SP.800-204D
+Publisher record: https://csrc.nist.gov/pubs/sp/800/204/d/final
+
+Torres-Arias, S., Afzali, H., Kuppusamy, T. K., Curtmola, R., & Cappos, J. (2019).
+in-toto: Providing farm-to-table guarantees for bits and bytes.
+In *28th USENIX Security Symposium (USENIX Security 19)* (pp. 1393–1410).
+USENIX Association.
+https://www.usenix.org/conference/usenixsecurity19/presentation/torres-arias
+
+International Organization for Standardization. (2026).
+*Information security, cybersecurity and privacy protection—Information security
+management systems—Overview* (ISO/IEC 27000:2026).
+https://www.iso.org/standard/27000
+
+## Sources
+
+[1] https://www.iso.org/standard/27001 — ISO/IEC 27001:2022
+[2] https://www.iso.org/standard/88435.html — ISO/IEC 27001:2022/Amd 1:2024
+[3] https://csrc.nist.gov/pubs/sp/800/204/d/final — NIST SP 800-204D
+[4] https://www.usenix.org/conference/usenixsecurity19/presentation/torres-arias — in-toto: Providing farm-to-table guarantees for bits and bytes
+[5] https://www.iso.org/standard/27000 — ISO/IEC 27000:2026

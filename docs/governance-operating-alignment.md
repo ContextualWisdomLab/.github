@@ -34,9 +34,10 @@ Preserve transport-specific evidence and do not rotate credentials, repeat
 exhausted REST polls, or call the whole GitHub service unavailable from one
 reported diagnostic.
 
-Private evidence packet:
-`/Users/seonghobae/.hermes/cache/scratch/governance-alignment-20261003`.
-It retains full CLI captures, paginated inventories and owner-message receipts.
+Private evidence packet (access-controlled locator):
+`governance-alignment-evidence-20261003`.
+The private evidence registry retains its actual storage location, full CLI
+captures, paginated inventories and owner-message receipts.
 The organization counts are a snapshot, not merge authorization. Do not publish
 private-repository identities or secret-bearing payloads as part of this record.
 
