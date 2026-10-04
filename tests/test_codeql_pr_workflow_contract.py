@@ -1150,7 +1150,7 @@ def test_codeql_moved_head_requires_forward_ancestry(tmp_path: Path) -> None:
 def test_codeql_control_routing_keeps_pr_workflows_hosted() -> None:
     """Only the trusted main revision may request the restricted control group."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    selectors = [line.strip() for line in workflow.splitlines() if line.strip().startswith("runs-on:")]
+    selectors = [line.strip() for line in workflow.splitlines() if line.startswith("      group:")]
     trusted = "ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main"
     assert len(selectors) == 3
     for selector in selectors:

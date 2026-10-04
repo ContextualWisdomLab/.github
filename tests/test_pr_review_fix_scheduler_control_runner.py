@@ -33,10 +33,14 @@ def _job() -> dict:
 
 def test_control_pool_only_for_central_main_caller() -> None:
     runs_on = _job()["runs-on"]
-    assert runs_on == (
-        f"${{{{ github.workflow_ref == '{CENTRAL_CALLER}' && {CONTROL} "
-        "|| fromJSON('{\"group\":\"CWL CI isolated\",\"labels\":[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]}') }}"
+    expression = (
+        f"github.workflow_ref == '{CENTRAL_CALLER}' && {CONTROL} "
+        "|| fromJSON('{\"group\":\"CWL CI isolated\",\"labels\":[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]}')"
     )
+    assert runs_on == {
+        "group": "${{ (" + expression + ").group }}",
+        "labels": "${{ (" + expression + ").labels }}",
+    }
 
 
 def test_dispatch_job_never_checks_out_pull_request_content() -> None:

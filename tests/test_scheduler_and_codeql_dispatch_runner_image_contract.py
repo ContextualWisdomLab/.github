@@ -55,7 +55,7 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         selectors = [
             line.strip() for line in workflow.splitlines()
-            if line.strip().startswith("runs-on:")
+            if line.startswith("      group:")
         ]
         self.assertEqual(len(selectors), 3)
         for selector in selectors:

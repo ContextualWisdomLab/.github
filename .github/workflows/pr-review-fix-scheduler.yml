@@ -92,7 +92,9 @@ jobs:
     # API reads and autofix dispatch only; no pull-request content is checked
     # out. The central main caller uses the idle control pool instead of the
     # saturated hosted queue; any other caller keeps hosted Ubuntu 24.04.
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/hourly-review-repair.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/hourly-review-repair.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/hourly-review-repair.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: 35
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

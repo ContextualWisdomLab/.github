@@ -92,7 +92,9 @@ permissions:
 
 jobs:
   R-CMD-check:
-    runs-on: ${{ fromJSON(format('{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}', startsWith(matrix.config.os, 'windows-') && 'windows' || startsWith(matrix.config.os, 'macos-') && 'macOS' || startsWith(matrix.config.os, 'ubuntu-') && 'linux' || 'unsupported-os', toJSON(matrix.config.os))) }}
+    runs-on:
+      group: ${{ (fromJSON(format('{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}', startsWith(matrix.config.os, 'windows-') && 'windows' || startsWith(matrix.config.os, 'macos-') && 'macOS' || startsWith(matrix.config.os, 'ubuntu-') && 'linux' || 'unsupported-os', toJSON(matrix.config.os)))).group }}
+      labels: ${{ (fromJSON(format('{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}', startsWith(matrix.config.os, 'windows-') && 'windows' || startsWith(matrix.config.os, 'macos-') && 'macOS' || startsWith(matrix.config.os, 'ubuntu-') && 'linux' || 'unsupported-os', toJSON(matrix.config.os)))).labels }}
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
 
     strategy:

@@ -113,7 +113,7 @@ def test_matrix_is_driven_by_the_r_matrix_input() -> None:
     """The strategy matrix must come from fromJSON(inputs.r_matrix), not a fixed list."""
     workflow = _workflow_text()
     assert "config: ${{ fromJSON(inputs.r_matrix) }}" in workflow
-    assert 'runs-on: ${{ fromJSON(format(\'{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}\'' in workflow
+    assert 'group: ${{ (fromJSON(format(\'{{"group":"CWL CI isolated","labels":["self-hosted","{0}","x64","cwlab-ci-isolated",{1}]}}\'' in workflow
     assert 'toJSON(matrix.config.os)))' in workflow
     assert "'unsupported-os'" in workflow
     for platform in ("windows-", "macos-", "linux"):
