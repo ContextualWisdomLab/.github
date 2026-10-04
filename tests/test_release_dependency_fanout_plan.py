@@ -43,7 +43,7 @@ def test_fanout_plan_matches_every_prescreened_fixture(tmp_path: Path) -> None:
     assert all(gate.fixture_digest(row["fixture"]) == row["fixture_sha256"] for row in plan["dependencies"])
 
 
-def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
+def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path, monkeypatch) -> None:
     capture, report_path = _allowed(tmp_path)
     archives = []
     for sha in ("a" * 64, "b" * 64):
@@ -90,6 +90,10 @@ def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
     assert {row["key"] for row in plan["dependencies"] if "build_package" in row} == {build["key"]}
     assert {row["key"] for row in plan["dependencies"] if "build_tool" in row} == {tool["key"]}
     assert plan["runtime_archive_license_sha256"] == hashlib.sha256(archive_report.read_bytes()).hexdigest()
+    with monkeypatch.context() as limits:
+        limits.setattr(gate, "STRIX_PLAN_LIMIT", len(plan["dependencies"]) - 1)
+        with pytest.raises(gate.GateError, match="dependency plan exceeds"):
+            gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
     archives[0]["fixture"]["id"] = "pypi/other@1"
     archive_report.write_text(json.dumps(payload))
     with pytest.raises(gate.GateError, match="fixture differs"):
