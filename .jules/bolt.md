@@ -1,4 +1,4 @@
-## 2024-05-19 - Pre-compile regex patterns to optimize deep label-scanning loops
+## 2026-06-27 - Pre-compile Regex Patterns for Deep Label Scanning
 **Learning:** Found a codebase-specific anti-pattern in `scripts/ci/opencode_review_normalize_output.py` where deep label-scanning loops over long review texts were redundantly recompiling regexes for verification labels inside the `label_matches` inner function. This caused measurable overhead in the CI review script.
 **Action:** When performing deep text inspection using repetitive substring or pattern matching across a known set of keys or labels, pre-compile the regex objects at the module level.
 ## 2024-06-21 - Python JSON Decoding Optimization
@@ -16,9 +16,6 @@
 ## 2026-06-27 - Pre-compile Regex Patterns for Deep Label Scanning
 **Learning:** Found a codebase-specific anti-pattern in `scripts/ci/opencode_review_normalize_output.py` where deep label-scanning loops over long review texts were redundantly recompiling regexes for verification labels inside the `label_matches` inner function. This caused measurable overhead in the CI review script.
 **Action:** When performing deep text inspection using repetitive substring or pattern matching across a known set of keys or labels, pre-compile the regex objects at the module level.
-## 2026-06-25 - Avoid N+1 API blocking in PR checks
-**Learning:** In backend processing scripts, synchronous iterations calling an external service, such as fetching `restMergeableState` per PR, cause N+1 API bottlenecks and stall pipeline execution linearly. This matters for PR schedulers handling multiple PRs.
-**Action:** Use `concurrent.futures.ThreadPoolExecutor` for independent network calls in a loop when there are multiple items, keep empty and single-item inputs on the cheaper serial path, and bound `max_workers` to avoid API rate limits.
 ## 2026-06-25 - Avoid N+1 API blocking in PR checks
 **Learning:** In backend processing scripts, synchronous iterations calling an external service, such as fetching `restMergeableState` per PR, cause N+1 API bottlenecks and stall pipeline execution linearly. This matters for PR schedulers handling multiple PRs.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` for independent network calls in a loop when there are multiple items, keep empty and single-item inputs on the cheaper serial path, and bound `max_workers` to avoid API rate limits.
@@ -51,6 +48,11 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+
+## 2024-11-25 - [파이썬 rfind()를 활용한 O(N) 전진 스캐닝 최적화]
+**Learning:** `opencode_review_normalize_output.py`의 `label_section` 함수에서 문자열의 가장 마지막 발생(label)을 찾기 위해 `str.find()`를 사용하면서 텍스트를 앞에서부터 반복 스캔하는 방식은 O(N)의 비효율적인 반복 오버헤드를 발생시킵니다.
+**Action:** `str.rfind()`를 사용하여 역방향으로 가장 가까운 대상 문자열을 한 번에 탐색하면, 앞쪽부터 전체를 반복 스캔하는 연산을 없앨 수 있습니다. 특히 마지막 항목을 찾을 때 O(N)의 루프를 피하고 매우 효율적으로 검색할 수 있습니다.
