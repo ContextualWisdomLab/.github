@@ -116,3 +116,55 @@ are reported by the implementing lane, not by this historical record.
 This is local classification/regression evidence only. Remote integration,
 independent review, hosted exact-head required checks, fresh receiver execution,
 substantive current-head review and protected merge remain uncompleted gates.
+
+## Current-head CodeRabbit graph-boundary repair (2026-10-04)
+
+The `76ab3eb5515afdc3f1d61560ad951e34d7776e3f` receipt classifier accepted
+arbitrary two-space-indented lines in a Mermaid fence, including source findings.
+The shell publisher preserved any body containing the evidence-map heading.
+Both defects were reproduced before changing production code: four indented
+finding cases failed, and three heading/arbitrary-map preservation cases failed.
+A separate non-repository-cwd fixture regression failed with FileNotFoundError
+before its workflow path was anchored to `Path(__file__).resolve().parents[1]`.
+
+Receipt recognition now reconstructs the optional fixed no-path graph with
+`emit_mermaid([])` and compares it exactly, alongside the unchanged full peer
+fallback envelope. The receipt API has no independently trusted changed-file,
+source-root or merge-state binding. Therefore even genuine path/source-dependent
+flowcharts, sequence diagrams and class diagrams remain formal blockers here;
+recognizing them would require that additional trusted contract, not parsing
+self-asserted labels as evidence. The no-graph canonical fallback still works.
+Unknown/mixed graph findings return the newer CHANGES_REQUESTED receipt instead
+of discarding it or resurrecting an older approval. The historical coverage-only
+classifier and its exact-envelope tests are unchanged.
+
+The shell publisher compares the complete terminal map against a freshly emitted
+graph using its existing changed-files, source-root and merge-state inputs.
+Duplicate maps, wrong bindings, bare headings, extra prose and arbitrary graphs
+retain all original body content and receive an explicit noncanonical-evidence
+notice plus the trusted graph. Nothing is stripped or replaced to launder a
+finding into a canonical fallback. Renderer errors propagate after temporary
+file cleanup; a dedicated RED regression caught the former cleanup-masked error.
+Source-backed canonical class graphs and ordinary/conflict maps are preserved
+only when their complete producer output matches.
+
+### Security Notes and verification boundary
+
+Bodies and review descriptions are data, not authority. No paths from receipt
+text are opened and no source-dependent trust is inferred from Mermaid syntax.
+Shell comparisons quote the literal trusted graph, preserving source prose and
+findings on mismatch. No new private-body logging, secrets, dependencies,
+workflow/scheduler, actor, credential, permission or protection changes occur.
+The escaped fixed prefix is not labeled a ReDoS vulnerability without a repro.
+
+Local focused production/receipt/surfaces/shell/gate suites: **649 passed** in
+both ordinary and `GITHUB_ACTIONS=true` environments. The receipt suite also
+reported **31 passed** when launched from a real non-repository scratch cwd.
+Receipt statements and branches: **100%** (160 statements, 66 branches, zero
+misses). Ruff, interrogate 100%, bash syntax, Python compilation and diff checks
+passed; the added-line static secret/injection/eval/deserialization scan found
+no matches. These are bounded local results, not hosted review or merge approval.
+The full 5,000-plus suite is reserved for the parent lane. Independent approval,
+exact-head required hosted checks, fresh receiver/formal review and protected
+merge remain outstanding; no commit, push, thread resolution or remote mutation
+was performed by this repair lane.

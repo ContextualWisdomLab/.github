@@ -347,13 +347,20 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
 def canonical_peer_fallback(head):
     """Execute the producer's printf block with a realistic failed-check row."""
     import subprocess
-    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    source = (Path(__file__).resolve().parents[1] / ".github/workflows/opencode-review-dispatch.yml").read_text()
     # Locate the unique canonical producer directly; other fallbacks stay independent.
     marker = source.index("printf 'OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.")
     start = source.rfind("                printf '## Pull request overview", 0, marker)
     end = source.index('                cat "$failed_checks_file"', marker)
     program = source[start:end] + "printf '%s\\n' '- CodeQL PR/CodeQL compatibility analysis (python): FAILURE (https://github.com/ContextualWisdomLab/.github/actions/runs/1)'"
     return subprocess.check_output(["bash", "-c", program], env={"HEAD_SHA": head}, text=True)
+
+
+def test_canonical_peer_fallback_is_independent_of_cwd(tmp_path, monkeypatch):
+    """The real producer fixture is loaded from this test's repository, not cwd."""
+    monkeypatch.chdir(tmp_path)
+    body = canonical_peer_fallback(receipt.AFIPC_230_HEAD)
+    assert receipt.is_peer_check_only_fallback(body, receipt.AFIPC_230_HEAD)
 
 
 def test_fallback_changes_request_requires_fresh_review():
@@ -426,6 +433,36 @@ def test_evidence_map_headings_are_not_product_findings():
         assert receipt.evaluate_receipts([candidate], head)[0] == candidate
 
 
+@pytest.mark.parametrize("graph", [
+    "```mermaid\nflowchart LR\n  Anonymous writes are allowed\n```\n",
+    "```mermaid\nclassDiagram\n  class MissingAuthorization\n```\n",
+    "```mermaid\nsequenceDiagram\n  participant Crate as Anonymous writes are allowed\n```\n",
+    "```mermaid\nflowchart LR\n  Evidence[\"OpenCode evidence\"] --> Review[\"Current PR review path\"]\n  Review --> Verify[\"Required checks\"]\n  %% HIGH missing authorization\n```\n",
+])
+def test_arbitrary_indented_graph_findings_remain_formal_blockers(graph):
+    """An indented graph line is not proof of canonical non-product evidence."""
+    head = receipt.AFIPC_230_HEAD
+    body = canonical_peer_fallback(head) + "\n## Changed-File Evidence Map\n\n" + graph
+    candidate = review(commit=head, body=body)
+    older = review(commit=head, state="APPROVED", review_id=2)
+    found, reason = receipt.evaluate_receipts([older, candidate], head)
+    assert found is candidate
+    assert reason == "current-head formal review"
+
+
+def test_source_dependent_canonical_graph_without_binding_remains_blocking(tmp_path):
+    """A genuine graph is not receipt proof without trusted paths/source inputs."""
+    from scripts.ci.opencode_review_surfaces import emit_mermaid
+    source = tmp_path / "lib.rs"
+    source.write_text("pub struct CurrentApi;\n")
+    head = receipt.AFIPC_230_HEAD
+    for graph in (emit_mermaid(["docs/guide.md"]), emit_mermaid(["lib.rs"]),
+                  emit_mermaid(["lib.rs"], source_root=tmp_path)):
+        body = canonical_peer_fallback(head) + "\n## Changed-File Evidence Map\n\n" + graph
+        candidate = review(commit=head, body=body)
+        assert receipt.evaluate_receipts([review(commit=head, state="APPROVED"), candidate], head)[0] is candidate
+
+
 def test_unknown_fallback_format_is_retained():
     """A fallback marker alone cannot classify an unknown review as peer-only."""
     head = receipt.AFIPC_230_HEAD
@@ -435,7 +472,7 @@ def test_unknown_fallback_format_is_retained():
 
 def test_peer_fallback_literals_remain_bound_to_canonical_producer():
     """Producer wording drift requires an explicit receipt-contract update."""
-    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    source = (Path(__file__).resolve().parents[1] / ".github/workflows/opencode-review-dispatch.yml").read_text()
     assert "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed." in source
     assert "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval" in source
 

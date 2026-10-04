@@ -30,7 +30,7 @@ opencode_review_surfaces_py() {
 
 emit_change_flow_mermaid_graph() {
   local merge_state="${1:-UNKNOWN}"
-  local changed_files_file
+  local changed_files_file render_status=0
 
   changed_files_file="$(mktemp)"
   if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
@@ -44,13 +44,14 @@ emit_change_flow_mermaid_graph() {
     python3 "$(opencode_review_surfaces_py)" emit-mermaid \
       --changed-files-file "$changed_files_file" \
       --source-root "$OPENCODE_SOURCE_WORKDIR" \
-      --merge-state "$merge_state"
+      --merge-state "$merge_state" || render_status=$?
   else
     python3 "$(opencode_review_surfaces_py)" emit-mermaid \
       --changed-files-file "$changed_files_file" \
-      --merge-state "$merge_state"
+      --merge-state "$merge_state" || render_status=$?
   fi
   rm -f "$changed_files_file"
+  return "$render_status"
 }
 
 append_mermaid_review_graph() {
@@ -63,12 +64,22 @@ append_mermaid_review_graph() {
 }
 
 ensure_review_body_has_change_graph() {
-  local body="$1"
+  local body="$1" trusted_graph prefix
   printf '%s\n' "$body"
+  trusted_graph="$(append_mermaid_review_graph)" || return 1
   if grep -Fq "## Changed-File Evidence Map" <<<"$body"; then
-    return 0
+    # Compare the entire terminal map with the freshly bound producer output.
+    # Never strip model/source content to manufacture a safe fallback envelope.
+    if [[ "$body" == *"$trusted_graph" ]]; then
+      prefix="${body%"$trusted_graph"}"
+      if [[ "$prefix" != *"## Changed-File Evidence Map"* ]]; then
+        return 0
+      fi
+    fi
+    printf '\n## Noncanonical evidence map\n\n'
+    printf '%s\n' 'The existing evidence map is not the trusted current producer graph; original content is retained for substantive review.'
   fi
-  append_mermaid_review_graph
+  printf '%s\n' "$trusted_graph"
 }
 
 append_merge_conflict_guidance() {

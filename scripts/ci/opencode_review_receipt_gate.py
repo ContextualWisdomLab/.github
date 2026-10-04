@@ -15,8 +15,10 @@ from typing import Any
 
 try:
     from scripts.ci.opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
+    from scripts.ci.opencode_review_surfaces import emit_mermaid
 except ModuleNotFoundError:
     from opencode_legacy_coverage_fallback import is_legacy_coverage_only_review
+    from opencode_review_surfaces import emit_mermaid
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -134,9 +136,11 @@ def is_peer_check_only_fallback(body: str, head_sha: str) -> bool:
         r"- [^\n\r]+: (?i:FAILURE|ERROR|TIMED_OUT|ACTION_REQUIRED|CANCELLED|STARTUP_FAILURE)"
         r"(?: \(https://[^\s()]+\))?"
     )
-    graph = (
-        r"\n\n## Changed-File Evidence Map\n\n```mermaid\n"
-        r"(?:flowchart LR|classDiagram|sequenceDiagram)\n(?:  [^\n`]+\n)+```"
+    # This receipt has no changed-file/source-root/merge-state binding. Only the
+    # fixed no-path graph is independently reconstructible; source-dependent
+    # diagrams remain formal blockers rather than trusting labels from the body.
+    graph = re.escape(
+        "\n\n## Changed-File Evidence Map\n\n" + emit_mermaid([]).rstrip("\n")
     )
     return re.fullmatch(
         re.escape(prefix) + check_line + r"(?:\n" + check_line + r")*"
