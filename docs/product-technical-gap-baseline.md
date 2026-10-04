@@ -7,6 +7,26 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-03 operational alignment delta
+
+The complete paginated central inventory now contains **392 open PRs and 220
+open issues**, with **389 Draft PRs**, 334 main-base PRs and 58 stacked PRs.
+All 87 organization repository count rows total **5,839 open PRs and 2,492 open
+issues**; this includes one archived repository and is not full per-PR review
+coverage. Project #1 had 499 items before existing queue incidents/migration
+work were added. Protected main remains `37b10243cec3d160ecc9c1be75c71428b160a703`.
+The earlier 107-PR inventory below is historical, not today's merge authority.
+
+| Gap ID | Current evidence | Existing owner / next gate |
+|---|---|---|
+| CONTROL-SELF-HOSTED-EXECUTION-01 | #2565 Draft, stacked on #2555; routing source is not registered isolated capacity or protected-main adoption | Existing central source/prelease operator and fleet coordinator; enforced private-service denial, per-job reset, sole registration custody, eligibility, actual event/head job execution and normal integration |
+| CONTROL-PERSONAL-LITELLM-REVIEW-01 | #2560 active at the October 3 snapshot; the originating collector reported TLS-verified public `/health/liveliness` HTTP 200. The dedicated packet lacks the original probe response, so this historical report is not independently verified and proves no authenticated inference or CI acceptance | Existing relay owner; complete source/lifecycle verdict, declared quality, serialized Secret custody, authenticated real-model consumer receipts and privacy/retention evidence |
+| CONTROL-ACTIONS-ADMISSION-01 | #2527/#2526 queue incidents and #2477 validation remain open | Existing queue/source owners; event-driven admission/continuation and exact-target terminal settlement without model deadline cuts or gate weakening |
+
+See [the operational alignment](governance-operating-alignment.md) for ordered
+execution gates and [the Project protocol](agent-github-project-protocol.md) for
+live state. No merge, operational deployment or whole-task completion is claimed.
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
