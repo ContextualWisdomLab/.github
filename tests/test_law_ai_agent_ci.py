@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 
 import pytest
 import yaml
@@ -152,6 +154,71 @@ def test_cleanup_absent_cluster_is_idempotent(tmp_path):
     assert helper('cleanup', env={**os.environ, 'RUNNER_TEMP': str(tmp_path)}).returncode == 0
 
 
+def short_temp_root():
+    """Select a canonical base leaving room for both private temporary roots."""
+    base = Path(tempfile.gettempdir()).resolve()
+    if len(str(base)) + len('/l.XXXXXXXX/lawci.XXXXXX') < 65:
+        return base
+    base = (Path.home() / '.cache/law-ci-tests').resolve()
+    if len(str(base)) + len('/l.XXXXXXXX/lawci.XXXXXX') >= 65:
+        raise ValueError('no short temporary root for law CI tests')
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = base.stat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o700:
+        raise ValueError('law CI test cache must be owned and private')
+    return base
+
+
+@pytest.mark.parametrize('layout', ['short', 'alias', 'long', 'default'])
+def test_short_temp_root_is_canonical_and_socket_bounded(tmp_path, monkeypatch, layout):
+    """Select usable defaults or home cache without forwarding temp aliases."""
+    expected = short_temp_root()
+    candidate = expected
+    if layout == 'alias':
+        candidate = tmp_path / 'alias'
+        candidate.symlink_to(expected, target_is_directory=True)
+    elif layout == 'long':
+        candidate = tmp_path / ('temp-' + 'x' * 80)
+        candidate.mkdir()
+        expected = (Path.home() / '.cache/law-ci-tests').resolve()
+    elif layout == 'default':
+        monkeypatch.delenv('TMPDIR', raising=False)
+        monkeypatch.setattr(tempfile, 'tempdir', None)
+        candidate = Path(tempfile.gettempdir()).resolve()
+        expected = candidate if len(str(candidate)) + len('/l.XXXXXXXX/lawci.XXXXXX') < 65 else (
+            Path.home() / '.cache/law-ci-tests').resolve()
+    if layout != 'default':
+        monkeypatch.setattr(tempfile, 'gettempdir', lambda: str(candidate))
+    selected = short_temp_root()
+    assert selected == expected
+    assert selected == selected.resolve()
+    assert all(not component.is_symlink() for component in (selected, *selected.parents))
+    with tempfile.TemporaryDirectory(prefix='l.', dir=selected) as temp:
+        assert len(str(Path(temp) / 'lawci.XXXXXX')) < 65
+        assert Path(temp).stat().st_uid == os.getuid()
+        assert Path(temp).stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize('stop_failure', [False, True])
+def test_synthetic_child_failure_without_hermes_home(tmp_path, stop_failure):
+    """Run the actual two cleanup cases with an empty HOME and long runner temp."""
+    home = tmp_path / 'home'
+    home.mkdir()
+    runner = tmp_path / ('runner-' + 'x' * 80)
+    runner.mkdir()
+    assert not (home / '.hermes').exists()
+    env = {**os.environ, 'HOME': str(home), 'TMPDIR': str(short_temp_root()),
+           'RUNNER_TEMP': str(runner), 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}
+    node = f'{__file__}::test_synthetic_child_failure_and_cleanup_are_not_success[{stop_failure}]'
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q',
+                             '--basetemp', str(tmp_path / 'child'), node],
+                            cwd=ROOT, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '1 passed' in result.stdout
+    assert not (home / '.hermes').exists()
+    assert not list(runner.iterdir())
+
+
 @pytest.mark.parametrize('stop_failure', [False, True])
 def test_synthetic_child_failure_and_cleanup_are_not_success(tmp_path, stop_failure):
     """Synthetic tools prove exit propagation and cleanup; not real DB evidence."""
@@ -170,9 +237,11 @@ def test_synthetic_child_failure_and_cleanup_are_not_success(tmp_path, stop_fail
         path = tools / name
         path.write_text(content)
         path.chmod(0o700)
-    # Deep pytest roots intentionally fail socket length; use a short private scratch.
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix='lf.', dir=Path.home() / '.hermes/cache/scratch') as temp:
+    # Deep pytest roots exceed socket limits; choose a portable canonical base.
+    with tempfile.TemporaryDirectory(prefix='l.', dir=short_temp_root()) as temp:
+        sentinel = Path(temp) / 'keep'
+        sentinel.write_text('unrelated')
+        assert len(str(Path(temp) / 'lawci.XXXXXX')) < 65
         env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
                'LAW_CI_SOURCE': str(ROOT), 'LAW_CI_SOURCE_SHA': SHA,
                'LAW_CI_PYTHON_VERSION': '3.14', 'RUNNER_TEMP': temp,
@@ -185,7 +254,8 @@ def test_synthetic_child_failure_and_cleanup_are_not_success(tmp_path, stop_fail
         if stop_failure:
             env['SYNTHETIC_STOP_EXIT'] = '0'
             assert helper('cleanup', env=env).returncode == 0
-        assert not list(Path(temp).iterdir())
+        assert sentinel.read_text() == 'unrelated'
+        assert list(Path(temp).iterdir()) == [sentinel]
 
 
 @pytest.mark.parametrize('unsafe', ['nested', 'public', 'symlink', 'parent-symlink', 'public-marker'])
