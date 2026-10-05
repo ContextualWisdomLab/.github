@@ -19,8 +19,44 @@ def test_public_governance_documents_use_nonidentifying_evidence_locators(
 ) -> None:
     """A public evidence pointer must not disclose a local user's home path."""
     source = document.read_text(encoding="utf-8")
-    assert not re.search(r"/(?:Users|home)/[^/\s`]+/|[A-Za-z]:\\Users\\", source)
+    assert not re.search(r"/(?:Users|home)/[^/\s`]+|[A-Za-z]:\\Users\\", source)
     assert "access-controlled locator" in source
+
+
+@pytest.mark.parametrize(
+    "private_path",
+    (
+        "/home/alice",
+        "/Users/alice",
+        "`/home/alice`",
+        "`/Users/alice`",
+        "/home/alice/evidence",
+        "/Users/alice/evidence",
+        r"C:\Users\alice",
+        r"C:\Users\alice\evidence",
+    ),
+)
+def test_public_locator_guard_rejects_bare_and_nested_home_paths(
+    tmp_path: Path,
+    private_path: str,
+) -> None:
+    """Exercise the actual document guard with private home-root counterexamples."""
+    document = tmp_path / "governance.md"
+    document.write_text(
+        f"Evidence (access-controlled locator): {private_path}\n", encoding="utf-8"
+    )
+    with pytest.raises(AssertionError):
+        test_public_governance_documents_use_nonidentifying_evidence_locators(document)
+
+
+def test_public_locator_guard_accepts_nonidentifying_locator(tmp_path: Path) -> None:
+    """A valid public locator stays admissible through the same document guard."""
+    document = tmp_path / "governance.md"
+    document.write_text(
+        "Evidence (access-controlled locator): governance-alignment-evidence.\n",
+        encoding="utf-8",
+    )
+    test_public_governance_documents_use_nonidentifying_evidence_locators(document)
 
 
 def test_doctoring_maps_retrieved_standards_without_claiming_certification() -> None:
