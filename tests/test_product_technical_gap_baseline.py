@@ -98,3 +98,37 @@ def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     assert "ContextualWisdomLab/naruon#975" in source
     assert "Done" in source
     assert "merge authorization" in source
+
+def test_baseline_preserves_protected_main_authority_sections() -> None:
+    """Partial-file replacements must not erase protected Gap evidence."""
+
+    source = BASELINE.read_text(encoding="utf-8")
+    for marker in (
+        "## 2026-08-30 sidecar-preflight outage: consolidated evidence and why it is not one deterministic bug",
+        "## 2026-08-30 ZDR/NIM-routing architecture review (owner-directed)",
+        "## 2026-09-01 OpenCode contextual-orchestrator runtime ceiling",
+        "## 6. Compliance and data boundary",
+        "## 7. APA 7th references",
+        "## Noema reviewer credential-lifetime delta — 2026-09-01",
+    ):
+        assert marker in source, marker
+
+def test_noema_multimodal_owner_row_preserves_verified_repair_lineage() -> None:
+    """Current owner evidence must retain every verified multimodal repair."""
+    source = BASELINE.read_text(encoding="utf-8")
+    owner_row = next(
+        line
+        for line in source.splitlines()
+        if line.startswith("| CONTROL-NOEMA-MULTIMODAL-OWNER-02 ")
+    )
+    required_evidence = (
+        "7f69bacb0d35f00e6902df8e440efeafbe08dbe3",
+        "37435b5e82e9fe53abc67b032c67df83425c0250",
+        "b7440092d1cda47008271ed658fe372f536dd58f",
+        "5fa1c8b8f19353d712d6578c4af4c75e96f6988b",
+        "10f96453a6050ab47575e4975aa068cb4f899e23",
+        "c3e4e94cf6566f6a0187c502d279dccc6989d4a1",
+        "ad45a74f0acdddcd023646661413e76a120b88e3",
+    )
+    assert all(evidence in owner_row for evidence in required_evidence)
+
