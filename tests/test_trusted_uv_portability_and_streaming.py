@@ -88,7 +88,7 @@ def test_trusted_uv_install_rejects_unsupported_runner_before_download(
 
 
 def test_python_310_toml_parser_fallback_is_declared() -> None:
-    """Python 3.10 receives the production fallback and conditional dependency."""
+    """Every test interpreter receives the real Python 3.10 fallback parser."""
     repository_root = Path(__file__).resolve().parents[1]
     materializer_source = (
         repository_root / "scripts" / "ci" / "materialize_base_python_requirements.py"
@@ -96,4 +96,5 @@ def test_python_310_toml_parser_fallback_is_declared() -> None:
     project_source = (repository_root / "pyproject.toml").read_text(encoding="utf-8")
 
     assert "import tomli as tomllib" in materializer_source
-    assert "python_version < '3.11'" in project_source or 'python_version < "3.11"' in project_source
+    configuration = materializer.tomllib.loads(project_source)
+    assert "tomli==2.4.1" in configuration["dependency-groups"]["dev"]
