@@ -8,6 +8,17 @@ import pytest
 
 from scripts.ci import pr_review_merge_scheduler as sched
 
+
+def canonical_coverage_body():
+    """Bind scheduler gate regressions to the actual historical producer envelope."""
+    from pathlib import Path
+    review = json.loads(
+        (Path(__file__).parent / "fixtures" / "opencode_legacy_coverage_review5301203359.json")
+        .read_text(encoding="utf-8")
+    )
+    return review["body"].replace(review["commit"]["oid"], "a" * 40)
+
+
 TOKEN_SEPARATOR = "_"
 GITHUB_TOKEN_PREFIXES = {
     "classic": "g" + "hp",
@@ -2654,14 +2665,13 @@ def test_central_coverage_retry_ignores_failed_required_workflow_placeholder(
         lambda *args, **kwargs: "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2713,15 +2723,14 @@ def test_coverage_retry_disables_auto_merge_before_dispatch(monkeypatch):
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         autoMergeRequest={"enabledAt": "now"},
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2763,14 +2772,13 @@ def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2813,14 +2821,14 @@ def test_coverage_retry_disables_auto_merge_for_visible_opencode_run(monkeypatch
         lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         autoMergeRequest={"enabledAt": "now"},
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2870,19 +2878,18 @@ def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         autoMergeRequest={"enabledAt": "now"},
         reviews={
             "nodes": [
                 {
                     **opencode_review(
                         "CHANGES_REQUESTED",
-                        "head",
+                        "a" * 40,
                         submitted_at="2999-01-01T00:00:00Z",
                     ),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2917,15 +2924,14 @@ def test_coverage_retry_floor_uses_latest_dispatch_timestamp(monkeypatch):
     coverage_review = {
         **opencode_review(
             "CHANGES_REQUESTED",
-            "head",
+            "a" * 40,
             submitted_at="2026-08-24T00:00:00Z",
         ),
         "body": (
-            "OpenCode cannot approve yet because required coverage evidence did not pass. "
-            "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+            canonical_coverage_body()
         ),
     }
-    coverage_request = make_pr(reviews={"nodes": [coverage_review]})
+    coverage_request = make_pr(headRefOid="a" * 40, reviews={"nodes": [coverage_review]})
     monkeypatch.setattr(
         sched,
         "latest_opencode_dispatch_started_at",
@@ -2956,17 +2962,17 @@ def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavai
 ):
     """Unavailable dispatch history prevents an unbounded same-head retry."""
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
                     **opencode_review(
                         "CHANGES_REQUESTED",
-                        "head",
+                        "a" * 40,
                         submitted_at="2026-08-24T00:00:00Z",
                     ),
                     "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -2990,17 +2996,17 @@ def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavai
 def test_coverage_retry_floor_keeps_newer_review_timestamp(monkeypatch):
     """An older dispatch cannot extend or replace the newer review timestamp."""
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
                     **opencode_review(
                         "CHANGES_REQUESTED",
-                        "head",
+                        "a" * 40,
                         submitted_at="2026-08-24T02:00:00Z",
                     ),
                     "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -3027,17 +3033,16 @@ def test_coverage_retry_without_timestamp_fails_closed(monkeypatch):
         "ContextualWisdomLab/.github",
     )
     monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    coverage_review = opencode_review("CHANGES_REQUESTED", "head")
+    coverage_review = opencode_review("CHANGES_REQUESTED", "a" * 40)
     coverage_review.pop("submittedAt")
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
                     **coverage_review,
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -3080,14 +3085,13 @@ def test_coverage_retry_keeps_failed_opencode_workflow_siblings_fail_closed(
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -3142,16 +3146,15 @@ def test_conflicting_coverage_retry_blocks_with_conflict_guidance(monkeypatch):
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         mergeStateStatus="CONFLICTING",
         restMergeableState="CONFLICTING",
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -3341,13 +3344,13 @@ def test_review_state_and_failed_checks():
     assert not sched.has_current_head_changes_requested(superseded)
 
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -7322,13 +7325,13 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         assert merge_state in conflict_with_stale_review.reason
     assert update_calls == []
     coverage_request = make_pr(
+        headRefOid="a" * 40,
         reviews={
             "nodes": [
                 {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    **opencode_review("CHANGES_REQUESTED", "a" * 40),
                     "body": (
-                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+                        canonical_coverage_body()
                     ),
                 }
             ]
@@ -7416,7 +7419,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert coverage_decision.reason == (
         "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
     )
-    assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+    assert dispatched == [("owner/repo", "OpenCode Review", "a" * 40, True)]
 
     coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
         {
