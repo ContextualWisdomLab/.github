@@ -35,12 +35,11 @@ def strip_jsonc_comments(text: str) -> str:
     in_string = False
     index = 0
     length = len(text)
+    last_append = 0
     while index < length:
         char = text[index]
         if in_string:
-            result.append(char)
             if char == "\\" and index + 1 < length:
-                result.append(text[index + 1])
                 index += 2
                 continue
             if char == '"':
@@ -49,15 +48,17 @@ def strip_jsonc_comments(text: str) -> str:
             continue
         if char == '"':
             in_string = True
-            result.append(char)
             index += 1
             continue
         if char == "/" and index + 1 < length and text[index + 1] == "/":
+            result.append(text[last_append:index])
             index += 2
             while index < length and text[index] not in "\r\n":
                 index += 1
+            last_append = index
             continue
         if char == "/" and index + 1 < length and text[index + 1] == "*":
+            result.append(text[last_append:index])
             index += 2
             while index + 1 < length and not (
                 text[index] == "*" and text[index + 1] == "/"
@@ -66,9 +67,10 @@ def strip_jsonc_comments(text: str) -> str:
                     result.append(text[index])
                 index += 1
             index += 2
+            last_append = index
             continue
-        result.append(char)
         index += 1
+    result.append(text[last_append:])
     return "".join(result)
 
 
