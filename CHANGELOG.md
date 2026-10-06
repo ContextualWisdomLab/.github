@@ -66,6 +66,9 @@
 ### OpenCode coverage image materializes every Dockerfile lock input
 
 - Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
+### Strix CI pins anyio 4.14.2 for CVE remediation
+
+- Exact-head `pip-audit` failed on transitive `anyio==4.14.0` (CVE-2026-63374 / CVE-2026-64847 / CVE-2026-63349). Pin `anyio==4.14.2` in `requirements-strix-ci.txt` and regenerate `requirements-strix-ci-hashes.txt`. Overlaps Dependabot `#2278`. Refs `#834`.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
@@ -1425,6 +1428,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Consume Noema's stable OIDC exchange `data.token` envelope instead of the
+  nonexistent top-level `token`, and fail closed unless the response is bound
+  to the requested repository, exact executing workflow ref, non-expired token
+  timestamp, and trace identifier before masking and exporting the credential.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
