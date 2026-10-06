@@ -262,6 +262,7 @@ def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_
         "EXPECTED_HEAD_SHA": head,
         "EXPECTED_BASE_SHA": base,
         "DELAY_SECONDS": "1",
+        "CURRENT_ATTEMPT": "0",
         "NEXT_ATTEMPT": "1",
         "PROVIDER_ATTEMPT_COUNT": "2",
         "TRANSPORT_HTTP_STATUS": "429",
@@ -291,6 +292,10 @@ def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_
         "transport_retry_attempt": 1,
     }
     assert "repos/ContextualWisdomLab/.github/dispatches" in endpoint.read_text()
+    calls.unlink()
+    assert run({**env, "CURRENT_ATTEMPT": "1"}).returncode != 0
+    assert not calls.exists()
+    assert run({**env, "CURRENT_ATTEMPT": "1", "NEXT_ATTEMPT": "2"}).returncode == 0
     calls.unlink()
     central = {**env, "GITHUB_REPOSITORY": "ContextualWisdomLab/.github"}
     assert run(central).returncode == 0
