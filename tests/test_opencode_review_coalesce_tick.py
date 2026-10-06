@@ -6,14 +6,20 @@ scripts/ci/pr_review_merge_scheduler_core.py's coalesce_enabled()/
 head_stable_for_seconds() for the gate this tick's own dispatches pass
 through -- the same gate used by every other scheduler invocation, so it
 stays inert everywhere else unless this workflow's own env explicitly
-turns it on.
+turns it on. Fail-open horizon N and re-enable criteria live in
+docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md (#2233).
 """
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 WORKFLOW_PATH = Path(".github/workflows/opencode-review-coalesce-tick.yml")
+FAIL_OPEN_DOCTORING = Path(
+    "docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md"
+)
+SCHEDULER_CORE = Path("scripts/ci/pr_review_merge_scheduler_core.py")
 
 
 def _workflow_text() -> str:
@@ -23,6 +29,11 @@ def _workflow_text() -> str:
 def _job_block() -> str:
     workflow = _workflow_text()
     return workflow.split("\njobs:\n", 1)[1]
+
+
+def _scheduler_core():
+    """Import the live scheduler module for constant/contract checks."""
+    return importlib.import_module("scripts.ci.pr_review_merge_scheduler_core")
 
 
 def test_tick_is_inert_by_default():
@@ -107,3 +118,41 @@ def test_tick_permissions_match_the_existing_scheduler_scan_job():
         "id-token: write",
     ):
         assert line in job_permissions
+
+
+def test_tick_documents_fail_open_instead_of_sole_schedule_dispatch():
+    """Coalesce must never claim synchronize reviews depend only on this cron."""
+    workflow = _workflow_text()
+    assert "fail-open to immediate dispatch" in workflow
+    assert "never depend solely on this schedule" in workflow
+    assert "the only thing that dispatches" not in workflow
+    assert "coalesce-fail-open-tick-max-age-20260918.md" in workflow
+
+
+def test_fail_open_horizon_n_is_two_healthy_cron_periods():
+    """N=600s is two */5 periods; not the measured multi-hour schedule lag."""
+    sched = _scheduler_core()
+    assert sched.DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS == 600
+    assert sched.DEFAULT_COALESCE_WINDOW_SECONDS == 300
+    assert sched.coalesce_tick_max_age_seconds() == 600
+    core = SCHEDULER_CORE.read_text(encoding="utf-8")
+    assert "NOT the measured" in core
+    assert "coalesce-fail-open-tick-max-age-20260918.md" in core
+    assert "def recent_coalesce_tick_completed(" in core
+    assert '!= "success"' in core
+
+
+def test_fail_open_doctoring_records_measured_n_and_reenable_gate():
+    """Operator flip stays blocked until ≥3 success ticks + one push burst."""
+    assert FAIL_OPEN_DOCTORING.is_file(), f"missing {FAIL_OPEN_DOCTORING}"
+    text = FAIL_OPEN_DOCTORING.read_text(encoding="utf-8")
+    assert "DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 600" in text
+    assert "N = **600 seconds**" in text
+    assert "not** the observed schedule-delivery lag" in text
+    assert "~40m" in text and "~97m" in text
+    assert "≥3 live successful ticks" in text
+    assert "One real push-burst verification" in text
+    assert "OPENCODE_REVIEW_COALESCE_ENABLED=false" in text
+    assert "actions-capacity-root-cause-20260917.md" in text
+    assert "coalesce-tick-post-2242-live-verify-20260917.md" in text
+    assert "schedule-queue-post-2242" in text
