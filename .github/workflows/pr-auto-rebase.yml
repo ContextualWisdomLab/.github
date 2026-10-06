@@ -68,9 +68,7 @@ permissions:
 
 jobs:
   auto-rebase:
-    runs-on:
-      group: CWL MCP remediation
-      labels: [self-hosted, linux, x64]
+    runs-on: ${{ github.repository == 'ContextualWisdomLab/.github' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read         # checkout only; force-push uses the app or PR-write token below
       pull-requests: write   # read PR queue and manage labels
