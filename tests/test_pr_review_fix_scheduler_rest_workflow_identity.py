@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import threading
 from typing import Any
 
 import pytest
@@ -49,10 +51,16 @@ def test_rest_fallback_preserves_renamed_opencode_workflow_identity(
                 "workflow_runs": [
                     {
                         "check_suite_id": 777,
-                        "name": "Required OpenCode Review",
+                        "workflow_id": 11,
+                        # GitHub renders run-name: into the run's own name.
+                        "name": (
+                            "Required OpenCode Review owner/repo#42@" + head_sha
+                        ),
                     }
                 ]
             }
+        if path == "repos/owner/repo/actions/workflows/11":
+            return {"name": "Required OpenCode Review"}
         return payloads[path]
 
     monkeypatch.setattr(merge, "gh_api_json", fake_api)
@@ -162,9 +170,10 @@ def test_fetch_workflow_names_by_check_suite_rest_paginates_past_100(
     """A first page of exactly 100 runs must fetch a second page and merge both."""
     head_sha = "e" * 40
     page1 = [
-        {"check_suite_id": i, "name": f"workflow-{i}"} for i in range(100)
+        {"check_suite_id": i, "workflow_id": i, "name": f"rendered-{i}"}
+        for i in range(100)
     ]
-    page2 = [{"check_suite_id": 100, "name": "workflow-100"}]
+    page2 = [{"check_suite_id": 100, "workflow_id": 100, "name": "rendered-100"}]
     calls: list[str] = []
 
     def fake_api(path: str) -> Any:
@@ -174,14 +183,19 @@ def test_fetch_workflow_names_by_check_suite_rest_paginates_past_100(
             return {"workflow_runs": page1}
         if path.endswith("page=2"):
             return {"workflow_runs": page2}
+        prefix = "repos/owner/repo/actions/workflows/"
+        if path.startswith(prefix):
+            return {"name": f"workflow-{path[len(prefix):]}"}
         raise AssertionError(f"unexpected path {path}")
 
     monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
 
     names = merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
 
     assert names == {i: f"workflow-{i}" for i in range(101)}
-    assert calls == [
+    run_list_calls = [path for path in calls if "/actions/runs?" in path]
+    assert run_list_calls == [
         f"repos/owner/repo/actions/runs?head_sha={head_sha}&per_page=100&page=1",
         f"repos/owner/repo/actions/runs?head_sha={head_sha}&per_page=100&page=2",
     ]
@@ -190,24 +204,54 @@ def test_fetch_workflow_names_by_check_suite_rest_paginates_past_100(
 def test_fetch_workflow_names_by_check_suite_rest_skips_entries_missing_suite_id_or_name(
     monkeypatch: Any,
 ) -> None:
-    """A run with no check-suite id or a blank name must not populate the map."""
+    """A run missing a check-suite id, a workflow id, or a name must not populate the map."""
     head_sha = "f" * 40
 
     def fake_api(path: str) -> Any:
         """Return workflow runs that exercise incomplete-identity filtering."""
+        if path.startswith("repos/owner/repo/actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": None, "workflow_id": 1, "name": "orphaned"},
+                    {"check_suite_id": 900, "workflow_id": 2, "name": "blank"},
+                    {"check_suite_id": 902, "name": "no workflow id"},
+                    {"check_suite_id": 901, "workflow_id": 3, "name": "rendered"},
+                ]
+            }
         return {
-            "workflow_runs": [
-                {"check_suite_id": None, "name": "orphaned run"},
-                {"check_suite_id": 900, "name": ""},
-                {"check_suite_id": 901, "name": "kept run"},
-            ]
-        }
+            "repos/owner/repo/actions/workflows/1": {"name": "orphaned run"},
+            "repos/owner/repo/actions/workflows/2": {"name": ""},
+            "repos/owner/repo/actions/workflows/3": {"name": "kept run"},
+        }[path]
 
     monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
 
     names = merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
 
     assert names == {901: "kept run"}
+
+
+def test_fetch_workflow_names_by_check_suite_rest_skips_a_deleted_workflow(
+    monkeypatch: Any,
+) -> None:
+    """A deleted workflow contributes no check-suite identity to the result map."""
+    head_sha = "9" * 40
+
+    def fake_api(path: str) -> Any:
+        """Return one run whose immutable workflow resource was deleted."""
+        if "/actions/runs?" in path:
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": 903, "workflow_id": 4, "name": "rendered"}
+                ]
+            }
+        raise RuntimeError("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha) == {}
 
 
 def test_fetch_workflow_names_by_check_suite_rest_propagates_non_access_errors(
@@ -224,3 +268,397 @@ def test_fetch_workflow_names_by_check_suite_rest_propagates_non_access_errors(
 
     with pytest.raises(RuntimeError, match="HTTP 502"):
         merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
+
+
+def test_rest_fallback_identifies_strix_behind_a_rendered_run_name(
+    monkeypatch: Any,
+) -> None:
+    """A workflow declaring run-name: stays identifiable through the REST fallback.
+
+    GitHub renders ``run-name:`` into a run's own ``name``, so the Actions run
+    list reports a title carrying the pull request and head SHA. Reading that
+    as workflow identity leaves it matching none of the declared names the
+    policy predicates compare against, and the fail-closed sentinel does not
+    engage because a name is present -- it is simply the wrong one.
+    """
+    head_sha = "1" * 40
+    payloads: dict[str, Any] = {
+        "repos/owner/repo/pulls/44/reviews?per_page=100&page=1": [],
+        f"repos/owner/repo/commits/{head_sha}/check-runs?per_page=100": {
+            "check_runs": [
+                {
+                    "name": "strix",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-09-01T05:00:00Z",
+                    "details_url": (
+                        "https://github.com/owner/repo/actions/runs/900/job/901"
+                    ),
+                    "check_suite": {"id": 779},
+                    "app": {"slug": "github-actions"},
+                }
+            ]
+        },
+        f"repos/owner/repo/commits/{head_sha}/check-suites?per_page=100": {
+            "check_suites": [{"id": 779, "created_at": "2026-09-01T05:00:00Z"}]
+        },
+        f"repos/owner/repo/commits/{head_sha}/status": {"statuses": []},
+        "repos/owner/repo/pulls/44/files?per_page=20": [],
+    }
+
+    def fake_api(path: str) -> Any:
+        """Serve a Strix run whose name has been rewritten by run-name:."""
+        if path.startswith("repos/owner/repo/actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {
+                        "check_suite_id": 779,
+                        "workflow_id": 55,
+                        "name": f"Strix Security Scan owner/repo#44@{head_sha}",
+                    }
+                ]
+            }
+        if path == "repos/owner/repo/actions/workflows/55":
+            return {"name": "Strix Security Scan"}
+        return payloads[path]
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    pr = merge.rest_pr_node(
+        "owner/repo",
+        {
+            "number": 44,
+            "title": "REST fallback rendered run name",
+            "draft": False,
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "maintainer_can_modify": True,
+            "auto_merge": None,
+            "user": {"login": "author"},
+            "head": {
+                "ref": "feature",
+                "sha": head_sha,
+                "repo": {"full_name": "owner/repo"},
+            },
+            "base": {"ref": "main", "sha": "2" * 40},
+        },
+    )
+
+    context = merge.context_nodes(pr)[0]
+    workflow = context["checkSuite"]["workflowRun"]["workflow"]
+    assert workflow["name"] == "Strix Security Scan"
+    assert merge.is_strix_context(context)
+
+
+def test_workflow_static_name_caches_each_workflow_once(monkeypatch: Any) -> None:
+    """Workflow identity is immutable per run, so it is read at most once."""
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        """Count workflow-resource reads."""
+        calls.append(path)
+        return {"name": "Strix Security Scan"}
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.workflow_static_name("owner/repo", 55) == "Strix Security Scan"
+    assert merge.workflow_static_name("owner/repo", 55) == "Strix Security Scan"
+
+    assert calls == ["repos/owner/repo/actions/workflows/55"]
+
+
+def test_workflow_static_name_caches_an_unreadable_workflow_as_no_identity(
+    monkeypatch: Any,
+) -> None:
+    """A workflow the integration cannot read yields no identity, and is not re-read."""
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        """Deny the workflow resource the way a scoped token does."""
+        calls.append(path)
+        raise RuntimeError("Resource not accessible by integration")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.workflow_static_name("owner/repo", 56) == ""
+    assert merge.workflow_static_name("owner/repo", 56) == ""
+
+    assert calls == ["repos/owner/repo/actions/workflows/56"]
+
+
+def test_workflow_static_name_caches_a_deleted_workflow_as_no_identity(
+    monkeypatch: Any,
+) -> None:
+    """A deleted workflow is absent identity, while unrelated failures propagate."""
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        """Return the exact 404 shape emitted by ``gh api`` for a deleted workflow."""
+        calls.append(path)
+        raise RuntimeError("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.workflow_static_name("owner/repo", 59) == ""
+    assert merge.workflow_static_name("owner/repo", 59) == ""
+
+    assert calls == ["repos/owner/repo/actions/workflows/59"]
+
+
+def test_workflow_static_name_coalesces_concurrent_reads_per_workflow(
+    monkeypatch: Any,
+) -> None:
+    """Concurrent REST hydration performs one immutable workflow-resource read."""
+    worker_count = 12
+    start = threading.Barrier(worker_count)
+    first_read = threading.Event()
+    release_read = threading.Event()
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def fake_api(path: str) -> Any:
+        """Hold the first resource read while competing callers reach the cache."""
+        nonlocal call_count
+        if "/actions/runs?" in path:
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": 904, "workflow_id": 60, "name": "rendered"}
+                ]
+            }
+        with count_lock:
+            call_count += 1
+        first_read.set()
+        assert release_read.wait(timeout=5)
+        return {"name": "Strix Security Scan"}
+
+    def read_name() -> dict[int, str]:
+        """Release all callers into the same empty-cache window."""
+        start.wait(timeout=5)
+        return merge.fetch_workflow_names_by_check_suite_rest(
+            "owner/repo", "8" * 40
+        )
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(read_name) for _ in range(worker_count)]
+        assert first_read.wait(timeout=5)
+        release_read.set()
+        assert [future.result(timeout=5) for future in futures] == [
+            {904: "Strix Security Scan"}
+        ] * worker_count
+
+    assert call_count == 1
+
+
+def test_workflow_static_name_keeps_different_workflow_reads_parallel(
+    monkeypatch: Any,
+) -> None:
+    """Single-flight locking for one workflow does not serialize other identities."""
+    concurrent_reads = threading.Barrier(2)
+
+    def fake_api(path: str) -> Any:
+        """Both different workflow resources must enter before either can return."""
+        concurrent_reads.wait(timeout=5)
+        return {"name": path.rsplit("/", 1)[-1]}
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(merge.workflow_static_name, "owner/repo", workflow_id)
+            for workflow_id in (61, 62)
+        ]
+        assert [future.result(timeout=5) for future in futures] == ["61", "62"]
+
+
+def test_workflow_static_name_propagates_non_access_errors(monkeypatch: Any) -> None:
+    """An unrelated REST failure must not be recorded as absent identity."""
+
+    def fake_api(path: str) -> Any:
+        """Simulate a non-access REST failure that must propagate."""
+        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        merge.workflow_static_name("owner/repo", 57)
+
+
+def test_reset_active_workflow_runs_cache_clears_workflow_identity(
+    monkeypatch: Any,
+) -> None:
+    """The reset entry point must not leave stale identity behind for a later run."""
+    names = iter(["First Name", "Second Name"])
+
+    def fake_api(path: str) -> Any:
+        """Return a different declared name on each read."""
+        return {"name": next(names)}
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.workflow_static_name("owner/repo", 58) == "First Name"
+    merge.reset_active_workflow_runs_cache()
+    assert merge.workflow_static_name("owner/repo", 58) == "Second Name"
+
+
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [
+        ("Resource not accessible by integration", "integration permission"),
+        (
+            "gh: HTTP 502 (bad gateway)",
+            "transient API error after exhausted retries",
+        ),
+        # GraphQL answers a partial failure with 200 and an `errors` array, so a
+        # forbidden field and a server-error marker can arrive in one message.
+        (
+            "Resource not accessible by integration (server error while resolving)",
+            "integration permission + transient API error after exhausted retries",
+        ),
+    ],
+)
+def test_warn_graphql_rest_fallback_names_every_cause_that_applies(
+    capsys: Any, error: str, cause: str
+) -> None:
+    """Both causes are reported when both hold; neither is silently dropped.
+
+    Reporting only the first would under-count the other in exactly the log
+    this line exists to make countable.
+    """
+    merge.warn_graphql_rest_fallback("owner/repo", "pull request #7", RuntimeError(error))
+
+    captured = capsys.readouterr().out
+    assert "::warning::GraphQL pull request #7 read for owner/repo" in captured
+    assert f"fell back to REST ({cause})" in captured
+
+
+def test_fetch_pr_announces_its_rest_fallback(monkeypatch: Any, capsys: Any) -> None:
+    """A single-PR fallback leaves a trace; gh_graphql raises before printing one."""
+
+    def fake_graphql(query: str, **fields: Any) -> Any:
+        """Deny the GraphQL read the way a scoped token does."""
+        raise RuntimeError("Resource not accessible by integration")
+
+    monkeypatch.setattr(merge, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(merge, "fetch_pr_rest", lambda repo, number: ["rest"])
+
+    assert merge.fetch_pr("owner/repo", 7) == ["rest"]
+
+    captured = capsys.readouterr().out
+    assert "::warning::GraphQL pull request #7 read for owner/repo" in captured
+    assert "(integration permission)" in captured
+
+
+def test_fetch_open_prs_announces_its_rest_fallback(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    """The queue scan's fallback is silent otherwise, and carries no pragma-covered trace."""
+
+    def fake_graphql(query: str, **fields: Any) -> Any:
+        """Fail the GraphQL read with a transient error."""
+        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
+
+    monkeypatch.setattr(merge, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(
+        merge,
+        "fetch_open_prs_rest",
+        lambda repo, max_prs, offset=0, window_size=None: ["rest"],
+    )
+
+    assert merge.fetch_open_prs("owner/repo", 5) == ["rest"]
+
+    captured = capsys.readouterr().out
+    assert "::warning::GraphQL open pull request read for owner/repo" in captured
+    assert "(transient API error after exhausted retries)" in captured
+
+
+def test_rest_fallback_still_excludes_non_authoritative_coverage_evidence(
+    monkeypatch: Any,
+) -> None:
+    """Central metadata-only coverage evidence stays excluded behind a rendered run name.
+
+    ``is_non_authoritative_coverage_check_run`` is a negative predicate and
+    ``coverage_evidence_indices`` keeps a check only when it returns False, so
+    a contaminated workflow name does not withhold evidence here -- it admits
+    evidence the GraphQL path rejects. This consumer therefore fails *open*,
+    which is the opposite direction from ``is_strix_context``.
+    """
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "owner/central")
+    head_sha = "3" * 40
+    payloads: dict[str, Any] = {
+        "repos/owner/repo/pulls/45/reviews?per_page=100&page=1": [],
+        f"repos/owner/repo/commits/{head_sha}/check-runs?per_page=100": {
+            "check_runs": [
+                {
+                    "name": "coverage-evidence",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-09-01T06:00:00Z",
+                    "details_url": (
+                        "https://github.com/owner/repo/actions/runs/910/job/911"
+                    ),
+                    "check_suite": {"id": 780},
+                    "app": {"slug": "github-actions"},
+                }
+            ]
+        },
+        f"repos/owner/repo/commits/{head_sha}/check-suites?per_page=100": {
+            "check_suites": [{"id": 780, "created_at": "2026-09-01T06:00:00Z"}]
+        },
+        f"repos/owner/repo/commits/{head_sha}/status": {"statuses": []},
+        "repos/owner/repo/pulls/45/files?per_page=20": [],
+    }
+
+    def fake_api(path: str) -> Any:
+        """Serve a coverage-evidence run whose name has been rewritten by run-name:."""
+        if path.startswith("repos/owner/repo/actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {
+                        "check_suite_id": 780,
+                        "workflow_id": 66,
+                        "name": (
+                            f"Required OpenCode Review owner/repo#45@{head_sha}"
+                        ),
+                    }
+                ]
+            }
+        if path == "repos/owner/repo/actions/workflows/66":
+            return {"name": "Required OpenCode Review"}
+        return payloads[path]
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    pr = merge.rest_pr_node(
+        "owner/repo",
+        {
+            "number": 45,
+            "title": "REST fallback coverage evidence",
+            "draft": False,
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "maintainer_can_modify": True,
+            "auto_merge": None,
+            "user": {"login": "author"},
+            "head": {
+                "ref": "feature",
+                "sha": head_sha,
+                "repo": {"full_name": "owner/repo"},
+            },
+            "base": {"ref": "main", "sha": "4" * 40},
+        },
+    )
+
+    checks = merge.context_nodes(pr)
+    assert merge.is_non_authoritative_coverage_check_run(checks[0])
+    assert merge.coverage_evidence_indices(checks) == []
