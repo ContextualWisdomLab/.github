@@ -45,6 +45,18 @@ def test_document_input_limits_and_unsupported_formats(monkeypatch: pytest.Monke
         document.extract_review_document("a.hwp", b"ok")
 
 
+def test_document_input_accepts_the_exact_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented input ceiling is inclusive and rejects only the next byte."""
+    payload = _docx(_body("<w:p><w:r><w:t>ok</w:t></w:r></w:p>"))
+    monkeypatch.setattr(document, "MAX_DOCUMENT_BYTES", len(payload))
+    assert document.extract_review_document("a.docx", payload) == "ok"
+    monkeypatch.setattr(document, "MAX_DOCUMENT_BYTES", len(payload) - 1)
+    with pytest.raises(document.DocumentReadError, match="8 MiB"):
+        document.extract_review_document("a.docx", payload)
+
+
 def test_docx_archive_and_xml_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reject partial archives and XML without visible document content."""
     valid = _docx(_body("<w:p><w:r><w:t>ok</w:t></w:r></w:p>"))
