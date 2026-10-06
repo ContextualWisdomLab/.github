@@ -430,8 +430,9 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
     """HTTP and transport failures become ConfigurationIdentityError."""
 
     class _HTTPError(identity.urllib.error.HTTPError):
-        def read(self) -> bytes:
-            return b"denied"
+        def read(self, size: int = -1) -> bytes:
+            body = b"denied"
+            return body if size is None or size < 0 else body[:size]
 
     def raise_http(request, timeout=30):
         del request, timeout

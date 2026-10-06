@@ -75,3 +75,46 @@ def test_full_page_filtered_rows_still_requires_next_page(monkeypatch):
     monkeypatch.setattr(identity, '_request_json', request)
     assert identity.list_codeql_analyses('ContextualWisdomLab/example', token='synthetic-fixture') == [row(BASE)]
     assert calls == [1, 2]
+
+@pytest.mark.parametrize("boundary", ["codeql-body", "launcher-close", "launcher-long-header"])
+def test_http_exception_custody_and_bounded_classification(monkeypatch, boundary):
+    """Real modules must bound HTTP diagnostics and settle error streams offline."""
+    import io
+    import urllib.error
+    from scripts.ci import contextual_orchestrator_review_launcher as launcher
+    from types import SimpleNamespace
+
+    class Stream(io.BytesIO):
+        def __init__(self):
+            super().__init__(b"synthetic diagnostic " * 100)
+            self.read_sizes = []
+
+        def read(self, size=-1):
+            self.read_sizes.append(size)
+            return super().read(size)
+
+    stream = Stream()
+    error = urllib.error.HTTPError("https://api.github.com/fixture", 429, "synthetic", {"Retry-After": "12"}, stream)
+    try:
+        if boundary == "codeql-body":
+            def refuse(*args, **kwargs):
+                raise error
+            monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", refuse)
+            with pytest.raises(identity.ConfigurationIdentityError):
+                identity._request_json("https://api.github.com/fixture", token="synthetic-only", timeout_seconds=1)
+            assert stream.read_sizes == [400], "HTTP diagnostic read must be bounded"
+            assert stream.closed, "HTTP error must close before propagation"
+        elif boundary == "launcher-close":
+            row = {"finish_reason": "stale", "reasoning_without_content": True}
+            launcher._record_provider_exception(row, error)
+            assert row == {"status": "rejected", "error_type": "HTTPError", "http_status": 429, "retry_after_s": 12}
+            assert stream.closed, "provider HTTP error must close after classification"
+        else:
+            try:
+                value = launcher._safe_retry_after_seconds(SimpleNamespace(headers={"Retry-After": "9" * 5000}))
+            except ValueError:
+                pytest.fail("long decimal header escaped safe classification")
+            assert value is None
+            assert launcher._safe_retry_after_seconds(error) == 12
+    finally:
+        error.close()
