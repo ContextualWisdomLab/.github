@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import runpy
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -81,3 +83,37 @@ def test_invalid_base_sha_is_rejected(tmp_path: Path) -> None:
 
 def test_central_release_is_itself_exact() -> None:
     assert resolver.EXACT_RELEASE_RE.fullmatch(resolver.CENTRAL_RUST_TOOLCHAIN)
+
+
+def test_cli_prints_resolved_release_and_rejects_untrusted_sha(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI prints a trusted-base pin and reports malformed revision input."""
+
+    base = _commit(tmp_path, {"rust-toolchain": "1.97.1\n"})
+    assert resolver.main(["--repo-root", str(tmp_path), "--base-sha", base]) == 0
+    assert capsys.readouterr().out == "1.97.1\n"
+
+    assert resolver.main(["--repo-root", str(tmp_path), "--base-sha", "HEAD"]) == 1
+    assert "base SHA must be" in capsys.readouterr().err
+
+
+def test_script_entrypoint_uses_the_trusted_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The executable script resolves and prints the exact base-commit toolchain."""
+
+    base = _commit(tmp_path, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.97.1"\n'})
+    _commit(tmp_path, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.80.0"\n'})
+    script = Path(resolver.__file__)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(script), "--repo-root", str(tmp_path), "--base-sha", base],
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_path(str(script), run_name="__main__")
+
+    assert exited.value.code == 0
+    assert capsys.readouterr().out == "1.97.1\n"
