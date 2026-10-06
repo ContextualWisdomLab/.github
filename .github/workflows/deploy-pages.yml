@@ -100,13 +100,21 @@ jobs:
             fi
           fi
 
+      # Caller inputs reach the shell through env, never through ${{ }}
+      # interpolation into the script body: a project name containing shell
+      # metacharacters would otherwise execute here. Same defect class that
+      # Semgrep's run-shell-injection rule flags elsewhere in this repo.
       - name: Summary
         if: always()
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+          CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
         run: |
           {
             echo "## Cloudflare Pages deploy"
             echo ""
-            echo "- **Project:** \`${{ inputs.project_name }}\`"
-            echo "- **Build dir:** \`${{ inputs.build_dir }}\`"
-            echo "- **Custom domain:** \`${{ inputs.custom_domain || '(none)' }}\`"
+            echo "- **Project:** \`${PROJECT_NAME}\`"
+            echo "- **Build dir:** \`${BUILD_DIR}\`"
+            echo "- **Custom domain:** \`${CUSTOM_DOMAIN:-(none)}\`"
           } >> "$GITHUB_STEP_SUMMARY"

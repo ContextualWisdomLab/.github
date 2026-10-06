@@ -51,7 +51,10 @@ carry an independent proof and source-line digest; it never invents observed
 results. The scheduler updates a PR branch in two cases: after approval, when no current-head check
 has failed and GitHub reports the PR as behind; and before review dispatch, when the PR is behind and
 no current-head check is still queued or running (an in-flight check is evidence the update would
-discard; see #1935). The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
+discard; see #1935). Daily `schedule` recovery is the exception: it may update (or, if the update
+budget is exhausted, dispatch review on) an outdated OpenCode-needing head despite in-flight checks,
+with a loud warning, so recovery is not inert under queue saturation (see
+`docs/doctoring/schedule-recovery-inflight-update-bypass-20260918.md`). The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
 PRs repair guidance. A separate edit-capable autofix flow
 (`scripts/ci/pr_review_fix_scheduler.py` → `.github/workflows/pr-review-autofix.yml`) may, for an
 approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
