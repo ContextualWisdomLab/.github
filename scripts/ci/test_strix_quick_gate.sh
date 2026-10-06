@@ -505,6 +505,8 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 assert_strix_evidence_binding_contract() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
 	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" 'local binder="$SCRIPT_DIR/strix_evidence_binding.py"' "strix gate resolves its trusted evidence binder from the central script directory"
+	assert_file_not_contains "$GATE_SCRIPT" 'local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"' "strix gate never resolves the trusted binder from the consumer repository root"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
@@ -3317,6 +3319,9 @@ run_gate_case() {
 		# Consumer source under scan; execution still uses the separate trusted runtime.
 		cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 		cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	fi
+	if [ -e "$repo_root_dir/scripts/ci/strix_evidence_binding.py" ]; then
+		record_failure "scenario=$scenario consumer fixture must not own the trusted evidence binder"
 	fi
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
@@ -7002,6 +7007,9 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	pull-request-target-job-analysis-authority-context)
+		run_pull_request_target_job_analysis_authority_context_scope_case
+		;;
 	repository-dispatch-pr-scope-uses-head-blob)
 		run_pull_request_target_head_scope_case \
 			"repository-dispatch-pr-scope-uses-head-blob" \
@@ -8088,6 +8096,196 @@ EOF
 
 	assert_equals "0" "$rc" "case=$case_name exit code"
 	assert_file_contains "$output_log" "scan ok with frontend email trusted backend authorization context" "case=$case_name output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_job_analysis_authority_context_scope_case() {
+	local changed_file="packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py"
+	local case_name="pull-request-target-job-analysis-authority-context"
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
+
+	local context_files=(
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/http.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py"
+	)
+	local context_files_text
+	context_files_text="$(printf '%s\n' "${context_files[@]}")"
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${FAKE_STRIX_CALLS_FILE:-}" ]; then
+	printf 'call\n' >>"$FAKE_STRIX_CALLS_FILE"
+fi
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+
+changed_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if ! grep -Fq -- 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' "$changed_file"; then
+	echo "Error: Job Analysis kernel PR-head content was not scanned" >&2
+	exit 93
+fi
+
+while IFS= read -r context_file; do
+	[ -n "$context_file" ] || continue
+	context_path="$target_path/$context_file"
+	if [ ! -f "$context_path" ]; then
+		echo "Error: Job Analysis authorization context missing: $context_file" >&2
+		exit 94
+	fi
+	if ! grep -Fqx -- "BASE_JOB_ANALYSIS_AUTHORITY_CONTEXT:$context_file" "$context_path"; then
+		echo "Error: Job Analysis context did not use trusted base content: $context_file" >&2
+		exit 95
+	fi
+	if grep -Fq -- "HEAD_JOB_ANALYSIS_CONTEXT_SHOULD_NOT_BE_SCANNED:$context_file" "$context_path"; then
+		echo "Error: unchanged Job Analysis context leaked PR-head content: $context_file" >&2
+		exit 96
+	fi
+done <<<"${FAKE_STRIX_EXPECTED_CONTEXT_FILES:?}"
+
+if [ -e "$target_path/services/job-analysis-api/src/orgmetra_job_analysis_api/unrelated_admin.py" ]; then
+	echo "Error: unrelated service source leaked into bounded Job Analysis scope" >&2
+	exit 97
+fi
+
+echo "scan ok with trusted Job Analysis authorization and persistence context"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			mkdir -p "$(dirname -- "$context_file")"
+			printf 'BASE_JOB_ANALYSIS_AUTHORITY_CONTEXT:%s\n' "$context_file" >"$context_file"
+		done
+		mkdir -p "$(dirname -- "$changed_file")" \
+			services/job-analysis-api/src/orgmetra_job_analysis_api
+		printf '%s\n' 'BASE_JOB_ANALYSIS_KERNEL_SHOULD_NOT_BE_SCANNED' >"$changed_file"
+		printf '%s\n' 'UNRELATED_SERVICE_SHOULD_NOT_BE_SCANNED' \
+			>services/job-analysis-api/src/orgmetra_job_analysis_api/unrelated_admin.py
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			printf 'HEAD_JOB_ANALYSIS_CONTEXT_SHOULD_NOT_BE_SCANNED:%s\n' "$context_file" >"$context_file"
+		done
+		printf '%s\n' 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' >"$changed_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILES="$context_files_text" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" \
+		"scan ok with trusted Job Analysis authorization and persistence context" \
+		"case=$case_name output"
+
+	local missing_context_file="${context_files[0]}"
+	local missing_output_log="$tmp_dir/missing-context-output.log"
+	local strix_calls_file="$tmp_dir/strix-calls.log"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+	git -C "$repo_root_dir" rm -q -- "$missing_context_file"
+	git -C "$repo_root_dir" commit -qm 'base without required Job Analysis auth context'
+	local missing_context_base_sha
+	missing_context_base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	printf '%s\n' 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' >"$repo_root_dir/$changed_file"
+	git -C "$repo_root_dir" add "$changed_file"
+	git -C "$repo_root_dir" commit -qm 'head changes Job Analysis kernel'
+	local missing_context_head_sha
+	missing_context_head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$missing_context_base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$missing_context_base_sha" \
+			PR_HEAD_SHA="$missing_context_head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_CALLS_FILE="$strix_calls_file" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILES="$context_files_text" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$missing_output_log" 2>&1
+	)
+	local missing_context_rc=$?
+	set -e
+
+	assert_equals "2" "$missing_context_rc" "case=$case_name missing required context exits closed"
+	assert_file_contains "$missing_output_log" \
+		"required Job Analysis trusted context file is unavailable: $missing_context_file" \
+		"case=$case_name missing required context output"
+	local strix_call_count=0
+	if [ -f "$strix_calls_file" ]; then
+		strix_call_count="$(wc -l <"$strix_calls_file" | tr -d '[:space:]')"
+	fi
+	assert_equals "0" "$strix_call_count" "case=$case_name missing required context must not invoke Strix"
 
 	rm -rf "$tmp_dir"
 }
@@ -9896,6 +10094,8 @@ run_pull_request_target_frontend_email_context_scope_case \
 
 run_pull_request_target_frontend_email_context_scope_case \
 	"frontend/src/lib/email-threading.ts"
+
+run_pull_request_target_job_analysis_authority_context_scope_case
 
 run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"pull-request-target-added-file-pr-head-blob-read-failure" \

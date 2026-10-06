@@ -1,12 +1,14 @@
 """Regression contract for owner-qualified cross-repository evidence identities."""
 
 from pathlib import Path
+import re
 import unittest
 
 
 BASELINE_PATH = (
     Path(__file__).resolve().parents[1] / "docs" / "product-technical-gap-baseline.md"
 )
+CHANGELOG_PATH = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
 
 
 class ProductTechnicalGapBaselineRepositoryIdentityContractTests(unittest.TestCase):
@@ -32,6 +34,19 @@ class ProductTechnicalGapBaselineRepositoryIdentityContractTests(unittest.TestCa
         for token in durable_tokens:
             with self.subTest(token=token):
                 self.assertIn(token, baseline)
+
+    def test_orgmetra_evidence_uses_owner_qualified_issue_identity(self) -> None:
+        """Keep the Job Analysis evidence linked to its owning repository."""
+        baseline = BASELINE_PATH.read_text(encoding="utf-8")
+        changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
+
+        self.assertNotIn("Orgmetra #63", changelog)
+        self.assertNotIn("Orgmetra #63", baseline)
+        self.assertIsNone(re.search(r"Orgmetra\s+#63 consumer run", baseline))
+        self.assertIn("ContextualWisdomLab/orgmetra#63", changelog)
+        self.assertGreaterEqual(
+            baseline.count("ContextualWisdomLab/orgmetra#63"), 3
+        )
 
 
 if __name__ == "__main__":
