@@ -761,6 +761,28 @@ def test_runtime_tool_claim_blocks_browser_alias_and_negation_bypasses(
     assert norm.claimed_runtime_tool(claim) == tool_slug
 
 
+def test_runtime_boundaries_are_compiled_once_and_slugs_stay_stable() -> None:
+    """Tool slugs and nearby clause splits do not recompile on every call."""
+    assert norm.runtime_tool_slug("  Chrome   DevTools\t") == "chrome-devtools"
+    assert norm.runtime_tool_slug("Playwright") == "playwright"
+    assert norm.runtime_tool_slug(" \n ") == ""
+    assert "sub" not in norm.runtime_tool_slug.__code__.co_names
+    assert isinstance(norm.CLAUSE_BOUNDARY_PATTERN, norm.re.Pattern)
+    assert norm.CLAUSE_BOUNDARY_PATTERN.pattern == r"[,;]|\bbut\b|\bhowever\b"
+    assert norm.CLAUSE_BOUNDARY_PATTERN.flags & norm.re.IGNORECASE
+    assert (
+        norm.CLAUSE_BOUNDARY_PATTERN.split("installed, BUT verified")[-1]
+        == " verified"
+    )
+    assert isinstance(norm.SENTENCE_BOUNDARY_PATTERN, norm.re.Pattern)
+    assert norm.SENTENCE_BOUNDARY_PATTERN.pattern == r"[.;\n]"
+    assert (
+        norm.CLAUSE_BOUNDARY_PATTERN.split("was not installed, but verified")[-1]
+        == " verified"
+    )
+    assert norm.SENTENCE_BOUNDARY_PATTERN.split("done. Chrome")[-1] == " Chrome"
+
+
 @pytest.mark.parametrize(
     "limitation",
     [

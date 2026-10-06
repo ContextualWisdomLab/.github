@@ -300,6 +300,23 @@ def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> 
     )
 
 
+def test_requirement_splits_are_compiled_once_and_keep_pin_behavior() -> None:
+    """Hash and package-name splits stay exact when compiled at import."""
+    digest = "a" * 64
+    line = f"demo.pkg-name==1.2.3 \t --hash=sha256:{digest}  --hash=sha256:{digest}"
+
+    assert isinstance(materializer.HASH_DELIMITER_PATTERN, materializer.re.Pattern)
+    assert materializer.HASH_DELIMITER_PATTERN.pattern == r"\s+(?=--hash=)"
+    assert isinstance(
+        materializer.NORMALIZED_PACKAGE_NAME_PATTERN, materializer.re.Pattern
+    )
+    assert materializer.NORMALIZED_PACKAGE_NAME_PATTERN.pattern == r"[-_.]+"
+    assert materializer._is_fully_hash_pinned_requirement(line) is True
+    assert materializer.NORMALIZED_PACKAGE_NAME_PATTERN.sub(
+        "_", "rank.weave-extra"
+    ) == "rank_weave_extra"
+
+
 def test_materialized_bounded_include_is_resolvable_by_pip(tmp_path: Path) -> None:
     """A safe base-owned include survives flattening and pip hash preflight."""
     repo = tmp_path / "repo"
