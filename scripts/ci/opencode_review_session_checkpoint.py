@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Host-managed OpenCode same-model session checkpoints and continuations.
+
+The trusted review host records partial attempt state and injects bounded
+resume context on same-model retries. Checkpoints never grant approval
+authority and never replay provider-controlled bodies into prompts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:  # pragma: no cover - bootstrap only on direct script execution
+    sys.path.insert(0, str(_REPO_ROOT))
+
+CHECKPOINT_SCHEMA = 1
+CONTROL_SENTINEL = "opencode-review-control-v1"
+REQUIRED_OUTPUT_MARKERS = (
+    CONTROL_SENTINEL,
+    "adversarial_validation",
+    '"result"',
+    "Developer experience:",
+    "User experience:",
+)
+TERMINATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("provider-fatal", re.compile(r"contextoverflowerror|tokens_limit_reached|model_not_found|no endpoints", re.I)),
+    ("provider-timeout", re.compile(r"timed?\ ?out|timeout", re.I)),
+    ("provider-rate-limit", re.compile(r"rate.?limit|too many requests|\b429\b", re.I)),
+    ("provider-error", re.compile(r'"type"\s*:\s*"error"', re.I)),
+    ("export-empty", re.compile(r"assistant-empty-export", re.I)),
+    ("invalid-control", re.compile(r"invalid-control-output", re.I)),
+    ("sessionless", re.compile(r"sessionless-json", re.I)),
+    ("nonzero-exit", re.compile(r"exit", re.I)),
+)
+MAX_PARTIAL_DIGEST_CHARS = 64
+MAX_CONTINUATION_BYTES = 8192
+MAX_SESSION_EXPORT_BYTES = 2 * 1024 * 1024
+
+
+def _read_bounded_text(path: Path, max_bytes: int) -> str:
+    """Read at most ``max_bytes`` from a file as UTF-8 replacement text."""
+    if not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as bounded_stream:
+            data = bounded_stream.read(max_bytes)
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _read_bounded_session_export(path: Path) -> str:
+    """Read a complete session export within the owner evidence byte bound."""
+    if not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as bounded_stream:
+            data = bounded_stream.read(MAX_SESSION_EXPORT_BYTES + 1)
+    except OSError:
+        return ""
+    if len(data) > MAX_SESSION_EXPORT_BYTES:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def classify_termination(
+    *,
+    json_path: Path,
+    export_path: Path,
+    exit_code: int,
+    stderr_path: Path | None = None,
+    log_hint: str = "",
+) -> str:
+    """Return a bounded termination reason for one OpenCode attempt."""
+    structured_error_events: list[str] = []
+    for line in _read_bounded_text(json_path, 65536).splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, Mapping) and event.get("type") == "error":
+            structured_error_events.append(line)
+    combined = "\n".join(
+        part
+        for part in (
+            "\n".join(structured_error_events),
+            _read_bounded_text(stderr_path, 65536) if stderr_path else "",
+            log_hint,
+        )
+        if part
+    )
+    for label, pattern in TERMINATION_PATTERNS:
+        if pattern.search(combined):
+            return label
+    if exit_code != 0:
+        return "nonzero-exit"
+    if not summarize_partial_assistant(export_path).get("assistant_text_present"):
+        return "export-empty"
+    return "incomplete-control"
+
+
+def summarize_partial_assistant(export_path: Path) -> dict[str, str | int | bool]:
+    """Return bounded metadata about partial assistant output, never raw text."""
+    encoded_export = _read_bounded_session_export(export_path)
+    if not encoded_export:
+        return {
+            "assistant_text_present": False,
+            "assistant_line_count": 0,
+            "assistant_sha256": "",
+            "has_control_sentinel": False,
+        }
+    try:
+        payload = json.loads(encoded_export)
+    except json.JSONDecodeError:
+        return {
+            "assistant_text_present": False,
+            "assistant_line_count": 0,
+            "assistant_sha256": "",
+            "has_control_sentinel": False,
+        }
+    texts: list[str] = []
+    if isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                info = message.get("info")
+                if not isinstance(info, dict) or info.get("role") != "assistant":
+                    continue
+                parts = message.get("parts")
+                if not isinstance(parts, list):
+                    continue
+                for part in parts:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = part.get("text")
+                        if isinstance(text, str) and text.strip():
+                            texts.append(text)
+    joined = "\n".join(texts)
+    digest = hashlib.sha256(joined.encode("utf-8")).hexdigest() if joined else ""
+    return {
+        "assistant_text_present": bool(joined.strip()),
+        "assistant_line_count": len(joined.splitlines()) if joined else 0,
+        "assistant_sha256": digest[:MAX_PARTIAL_DIGEST_CHARS],
+        "has_control_sentinel": CONTROL_SENTINEL in joined,
+    }
+
+
+def missing_required_outputs(partial_text: str) -> list[str]:
+    """Return required review output markers absent from partial assistant text."""
+    missing: list[str] = []
+    for marker in REQUIRED_OUTPUT_MARKERS:
+        if marker not in partial_text:
+            missing.append(marker)
+    return missing
+
+
+def _load_checkpoint(path: Path) -> dict[str, Any]:
+    """Load an existing checkpoint or return an empty document."""
+    if not path.is_file():
+        return {"schema": CHECKPOINT_SCHEMA, "attempts": []}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {"schema": CHECKPOINT_SCHEMA, "attempts": []}
+    if not isinstance(loaded, dict):
+        return {"schema": CHECKPOINT_SCHEMA, "attempts": []}
+    attempts = loaded.get("attempts")
+    if not isinstance(attempts, list):
+        loaded["attempts"] = []
+    loaded.setdefault("schema", CHECKPOINT_SCHEMA)
+    return loaded
+
+
+def record_attempt_checkpoint(
+    *,
+    checkpoint_path: Path,
+    model_candidate: str,
+    attempt: int,
+    head_sha: str,
+    run_id: str,
+    run_attempt: str,
+    json_path: Path,
+    export_path: Path,
+    exit_code: int,
+    stderr_path: Path | None = None,
+    log_hint: str = "",
+) -> dict[str, Any]:
+    """Append one bounded attempt record to the host checkpoint ledger."""
+    partial_summary = summarize_partial_assistant(export_path)
+    partial_text = ""
+    encoded_export = _read_bounded_session_export(export_path)
+    if encoded_export:
+        try:
+            payload = json.loads(encoded_export)
+            if isinstance(payload, dict):
+                messages = payload.get("messages")
+                if isinstance(messages, list):
+                    chunks: list[str] = []
+                    for message in messages:
+                        if not isinstance(message, dict):
+                            continue
+                        info = message.get("info")
+                        if not isinstance(info, dict) or info.get("role") != "assistant":
+                            continue
+                        parts = message.get("parts")
+                        if not isinstance(parts, list):
+                            continue
+                        for part in parts:
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "text"
+                                and isinstance(part.get("text"), str)
+                            ):
+                                chunks.append(part["text"])
+                    partial_text = "\n".join(chunks)
+        except json.JSONDecodeError:
+            partial_text = ""
+    entry = {
+        "attempt": attempt,
+        "model_candidate": model_candidate,
+        "head_sha": head_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "termination_reason": classify_termination(
+            json_path=json_path,
+            export_path=export_path,
+            exit_code=exit_code,
+            stderr_path=stderr_path,
+            log_hint=log_hint,
+        ),
+        "exit_code": exit_code,
+        "partial_summary": partial_summary,
+        "missing_required_outputs": missing_required_outputs(partial_text),
+    }
+    document = _load_checkpoint(checkpoint_path)
+    attempts = document.setdefault("attempts", [])
+    if isinstance(attempts, list):
+        attempts.append(entry)
+    document["pinned_model"] = model_candidate
+    document["head_sha"] = head_sha
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return entry
+
+
+def continuation_budget_remaining(checkpoint_path: Path, *, budget: int) -> int:
+    """Return how many same-model continuations remain for this checkpoint."""
+    document = _load_checkpoint(checkpoint_path)
+    attempts = document.get("attempts")
+    used_continuations = (
+        len(attempts) - 1 if isinstance(attempts, list) and attempts else 0
+    )
+    return max(0, budget - used_continuations)
+
+
+def build_continuation_appendix(checkpoint_path: Path, *, budget: int) -> str:
+    """Build a bounded same-model continuation appendix from checkpoint evidence."""
+    document = _load_checkpoint(checkpoint_path)
+    attempts = document.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        return ""
+    remaining_budget = continuation_budget_remaining(checkpoint_path, budget=budget)
+    if remaining_budget <= 0:
+        return ""
+    latest_attempt = attempts[-1]
+    if not isinstance(latest_attempt, Mapping):
+        return ""
+    lines = [
+        "",
+        "## Same-model continuation (host checkpoint; not approval evidence)",
+        f"- Pinned model: `{document.get('pinned_model', 'unknown')}`",
+        f"- Prior attempt: `{latest_attempt.get('attempt', '?')}`",
+        f"- Termination reason: `{latest_attempt.get('termination_reason', 'unknown')}`",
+        f"- Continuation budget remaining after this attempt: `{remaining_budget}`",
+    ]
+    partial_summary = latest_attempt.get("partial_summary")
+    if isinstance(partial_summary, Mapping):
+        lines.append(
+            "- Partial assistant digest: "
+            f"lines=`{partial_summary.get('assistant_line_count', 0)}` "
+            f"sha256=`{partial_summary.get('assistant_sha256', '')}` "
+            f"control_sentinel=`{partial_summary.get('has_control_sentinel', False)}`"
+        )
+    missing_outputs = latest_attempt.get("missing_required_outputs")
+    if isinstance(missing_outputs, list) and missing_outputs:
+        lines.append(
+            "- Required outputs still missing from the prior attempt: "
+            + ", ".join(f"`{item}`" for item in missing_outputs[:8])
+        )
+    lines.extend(
+        [
+            "- Resume from the trusted evidence packet and complete every required output.",
+            "- Do not treat this appendix as approval evidence or permission to omit probes.",
+            "- Return exactly one final control block for the current head when complete.",
+            "",
+        ]
+    )
+    appendix = "\n".join(lines)
+    encoded = appendix.encode("utf-8")
+    if len(encoded) <= MAX_CONTINUATION_BYTES:
+        return appendix
+    return encoded[:MAX_CONTINUATION_BYTES].decode("utf-8", errors="ignore")
+
+
+def append_continuation_to_prompt(
+    prompt_path: Path, checkpoint_path: Path, *, budget: int
+) -> int:
+    """Append the continuation appendix to ``prompt_path`` when budget allows."""
+    appendix = build_continuation_appendix(checkpoint_path, budget=budget)
+    if not appendix:
+        return continuation_budget_remaining(checkpoint_path, budget=budget)
+    existing = prompt_path.read_text(encoding="utf-8") if prompt_path.is_file() else ""
+    prompt_path.write_text(existing + appendix, encoding="utf-8")
+    return continuation_budget_remaining(checkpoint_path, budget=budget)
+
+
+def non_negative_integer(raw_value: str) -> int:
+    """Parse a non-negative integer for an explicit CLI authority."""
+    parsed_value = int(raw_value)
+    if parsed_value < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed_value
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse checkpoint CLI commands."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    record_parser = subparsers.add_parser(
+        "record", help="Record one failed attempt checkpoint."
+    )
+    record_parser.add_argument("--checkpoint", required=True, type=Path)
+    record_parser.add_argument("--model-candidate", required=True)
+    record_parser.add_argument("--attempt", required=True, type=int)
+    record_parser.add_argument("--head-sha", required=True)
+    record_parser.add_argument("--run-id", required=True)
+    record_parser.add_argument("--run-attempt", required=True)
+    record_parser.add_argument("--json-path", required=True, type=Path)
+    record_parser.add_argument("--export-path", required=True, type=Path)
+    record_parser.add_argument("--exit-code", required=True, type=int)
+    record_parser.add_argument("--stderr-path", type=Path)
+    record_parser.add_argument("--log-hint", default="")
+
+    append_parser = subparsers.add_parser(
+        "append-continuation", help="Append a bounded continuation appendix to a prompt."
+    )
+    append_parser.add_argument("--prompt", required=True, type=Path)
+    append_parser.add_argument("--checkpoint", required=True, type=Path)
+    append_parser.add_argument("--budget", required=True, type=non_negative_integer)
+
+    budget_parser = subparsers.add_parser(
+        "budget-remaining", help="Print remaining same-model continuation budget."
+    )
+    budget_parser.add_argument("--checkpoint", required=True, type=Path)
+    budget_parser.add_argument("--budget", required=True, type=non_negative_integer)
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Execute one checkpoint subcommand."""
+    args = parse_args(argv)
+    if args.command == "record":
+        entry = record_attempt_checkpoint(
+            checkpoint_path=args.checkpoint,
+            model_candidate=args.model_candidate,
+            attempt=args.attempt,
+            head_sha=args.head_sha,
+            run_id=args.run_id,
+            run_attempt=args.run_attempt,
+            json_path=args.json_path,
+            export_path=args.export_path,
+            exit_code=args.exit_code,
+            stderr_path=args.stderr_path,
+            log_hint=args.log_hint,
+        )
+        print(
+            json.dumps(
+                {"termination_reason": entry["termination_reason"]},
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    if args.command == "append-continuation":
+        remaining_budget = append_continuation_to_prompt(
+            args.prompt, args.checkpoint, budget=args.budget
+        )
+        print(remaining_budget)
+        return 0
+    if args.command == "budget-remaining":
+        print(continuation_budget_remaining(args.checkpoint, budget=args.budget))
+        return 0
+    raise SystemExit(f"unknown command: {args.command}")
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via subprocess in tests
+    raise SystemExit(main())
