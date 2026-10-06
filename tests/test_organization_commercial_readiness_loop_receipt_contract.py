@@ -56,9 +56,14 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "if-no-files-found: error" in source
     assert "retention-days: 3" in source
     endpoints = _harden_runner_allowed_endpoints(source)
-    assert {
+    assert endpoints == {
+        "api.github.com:443",
+        "api.opencode.ai:443",
+        "github.com:443",
+        "objects.githubusercontent.com:443",
+        "release-assets.githubusercontent.com:443",
         "results-receiver.actions.githubusercontent.com:443",
         "*.actions.githubusercontent.com:443",
         "*.blob.core.windows.net:443",
-    }.issubset(endpoints)
+    }
     assert "- name: Checkout exact trusted coordinator source" not in endpoints
