@@ -1453,26 +1453,23 @@ def iter_json_objects(text: str) -> list[Any]:
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    index = 0
-    while True:
-        index = text.find("{", index)
-        if index == -1:
-            break
+    index = text.find("{")
+    while index != -1:
         next_index = index + 1
         while next_index < len(text) and text[next_index] in " \t\r\n":
             next_index += 1
         if next_index < len(text) and text[next_index] not in {'"', "}"}:
-            index += 1
+            index = text.find("{", index + 1)
             continue
         try:
             value, new_index = decoder.raw_decode(text, index)
             values.append(value)
             # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
-            index = new_index
+            index = text.find("{", new_index)
             continue
         except json.JSONDecodeError:
             pass
-        index += 1
+        index = text.find("{", index + 1)
 
     return values
 
