@@ -583,6 +583,22 @@ def test_build_snapshot_refuses_unlisted_native_file(tmp_path: Path, monkeypatch
         _build_packages(row, folder)
 
 
+def test_build_snapshot_refuses_unknown_universal_interpreter_architecture(
+    tmp_path: Path,
+) -> None:
+    """A universal build receipt must bind one recognized interpreter architecture."""
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = next(row for row in scope_rows if row["leg"].startswith("universal2-apple-darwin-"))
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    receipt_path = artifact_folder / f"{scope_row['leg']}.build-first.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["build_env"] = "/opt/python/UNKNOWN"
+    receipt_path.write_text(json.dumps(receipt))
+
+    with pytest.raises(gate.GateError, match="build interpreter architecture is missing"):
+        _build_packages(scope_row, artifact_folder)
+
+
 def test_runtime_archive_refuses_unknown_native_link(tmp_path: Path, monkeypatch) -> None:
     """A runtime archive with an unlicensed dynamic target cannot pass prescreen."""
     root, rows = _prescreen_case(tmp_path)
@@ -761,6 +777,26 @@ def test_build_package_prescreen_refuses_incomplete_build_evidence(
         _build_packages(scope_row, artifact_folder)
 
 
+def test_build_package_prescreen_refuses_unknown_macos_build_architecture(
+    tmp_path: Path,
+) -> None:
+    """Universal2 build evidence must identify its ARM64 or X64 interpreter."""
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = next(
+        row for row in scope_rows
+        if row["leg"].startswith("universal2-apple-darwin-")
+    )
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    receipt_path = artifact_folder / f"{build_leg}.build-first.json"
+    build_receipt = json.loads(receipt_path.read_text())
+    build_receipt["build_env"] = "runner:macos/15/macOS/RISCV64"
+    receipt_path.write_text(json.dumps(build_receipt))
+
+    with pytest.raises(gate.GateError, match="build interpreter architecture is missing"):
+        _build_packages(scope_row, artifact_folder)
+
+
 @pytest.mark.parametrize("mutation_name", ["missing", "oversized"])
 def test_build_package_prescreen_refuses_missing_or_oversized_text(
     tmp_path: Path, mutation_name: str,
@@ -912,9 +948,15 @@ def test_prescreen_refuses_malformed_scope_and_runtime_rows(tmp_path: Path) -> N
     with pytest.raises(gate.GateError, match="verified scope evidence is incomplete"):
         prescreen({}, tmp_path)
 
-    for mutation_name in ("scope-row", "runtime-set", "archive-row"):
+    for mutation_name in ("scope-count", "duplicate-leg", "scope-row", "runtime-set", "archive-row"):
         scope_root, scope_rows = _prescreen_case(tmp_path / mutation_name)
-        if mutation_name == "scope-row":
+        if mutation_name == "scope-count":
+            scope_rows.pop()
+            expected_message = "verified scope evidence is incomplete"
+        elif mutation_name == "duplicate-leg":
+            scope_rows[1]["leg"] = scope_rows[0]["leg"]
+            expected_message = "scope evidence row is malformed"
+        elif mutation_name == "scope-row":
             scope_rows[0]["leg"] = ".."
             expected_message = "scope evidence row is malformed"
         elif mutation_name == "runtime-set":
@@ -925,6 +967,36 @@ def test_prescreen_refuses_malformed_scope_and_runtime_rows(tmp_path: Path) -> N
             expected_message = "archive identity is malformed"
         with pytest.raises(gate.GateError, match=expected_message):
             prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
+
+
+@pytest.mark.parametrize(("mutation_name", "expected_message"), [
+    ("oversized", "runtime receipt is oversized"),
+    ("changed", "runtime receipt changed after transport"),
+    ("wrong-architecture", "runtime interpreter differs from required target architecture"),
+])
+def test_prescreen_refuses_untrusted_runtime_receipt(
+    tmp_path: Path, mutation_name: str, expected_message: str,
+) -> None:
+    """Runtime identity must stay bounded, transported-byte-bound, and target-correct."""
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(scope_rows, scope_root)
+    scope_row = scope_rows[0]
+    runtime_name = f"{scope_row['leg']}.runtime.json"
+    runtime_path = scope_root / scope_row["artifact_name"] / runtime_name
+    if mutation_name == "oversized":
+        runtime_path.write_bytes(b"x" * (1024 * 1024 + 1))
+    elif mutation_name == "changed":
+        scope_row["members"][runtime_name] = "0" * 64
+    else:
+        runtime = json.loads(runtime_path.read_text())
+        runtime["machine"] = "foreign"
+        runtime_path.write_text(json.dumps(runtime))
+        scope_row["members"][runtime_name] = hashlib.sha256(
+            runtime_path.read_bytes()
+        ).hexdigest()
+
+    with pytest.raises(gate.GateError, match=expected_message):
+        prescreen(scope, scope_root)
 
 
 def test_prescreen_coalesces_duplicate_archive_identity(tmp_path: Path) -> None:
@@ -956,26 +1028,77 @@ def test_prescreen_refuses_rebound_license_evidence(
         prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
+@pytest.mark.parametrize(("replacement_leg", "expected_message"), [
+    ("extra-py3.12", "runtime archive coverage is incomplete"),
+    (
+        "x86_64-unknown-linux-gnu-py3.15",
+        "runtime interpreter differs from required target architecture",
+    ),
+])
 def test_prescreen_refuses_complete_rows_without_sdist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_leg: str,
+    expected_message: str,
 ) -> None:
     scope_root, scope_rows = _prescreen_case(tmp_path)
     sdist_row = scope_rows[-1]
     first_archive = dict(scope_rows[0]["archives"][0])
     first_path = scope_root / scope_rows[0]["artifact_name"] / first_archive["file"]
-    sdist_row["leg"] = "extra-py3.12"
-    sdist_row["artifact_name"] = "repro-digest-extra-py3.12"
+    sdist_row["leg"] = replacement_leg
+    sdist_row["artifact_name"] = f"repro-digest-{replacement_leg}"
     sdist_row["archives"] = [first_archive]
     extra_folder = scope_root / sdist_row["artifact_name"]
     extra_folder.mkdir()
     (extra_folder / first_archive["file"]).write_bytes(first_path.read_bytes())
+    if replacement_leg.endswith("py3.15"):
+        runtime_name = f"{sdist_row['leg']}.runtime.json"
+        runtime = json.loads(
+            (scope_root / scope_rows[0]["artifact_name"]
+             / f"{scope_rows[0]['leg']}.runtime.json").read_text()
+        )
+        runtime.update(leg=sdist_row["leg"], python_version="3.15")
+        runtime_path = extra_folder / runtime_name
+        runtime_path.write_text(json.dumps(runtime))
+        sdist_row["members"][runtime_name] = hashlib.sha256(
+            runtime_path.read_bytes()
+        ).hexdigest()
     monkeypatch.setattr(prescreen_module, "_build_packages", lambda item, folder: [])
     monkeypatch.setattr(prescreen_module, "_maturin_tool", lambda item, folder: {
         "key": "github-release/maturin@1.15.0/sha256/" + "a" * 64,
         "legs": [item["leg"]], "build_envs": {item["leg"]: "fixture"},
     })
-    with pytest.raises(gate.GateError, match="runtime archive coverage is incomplete"):
+    with pytest.raises(gate.GateError, match=expected_message):
         prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
+
+
+@pytest.mark.parametrize("mutation_name", ["oversized", "digest", "architecture"])
+def test_prescreen_refuses_untrusted_runtime_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation_name: str,
+) -> None:
+    """Runtime receipts are bounded, hash-bound, and structurally validated."""
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(scope_rows, scope_root)
+    row = next(item for item in scope_rows if item["leg"] != "sdist")
+    runtime_name = f"{row['leg']}.runtime.json"
+    runtime_path = scope_root / row["artifact_name"] / runtime_name
+    if mutation_name == "oversized":
+        runtime_path.write_bytes(b"x" * (1024 * 1024 + 1))
+    elif mutation_name == "digest":
+        row["members"][runtime_name] = "0" * 64
+    else:
+        def invalid_architecture(*args, **kwargs):
+            del args, kwargs
+            raise DistributionSetError("untrusted architecture")
+
+        monkeypatch.setattr(prescreen_module, "_runtime_target_architecture", invalid_architecture)
+
+    with pytest.raises(gate.GateError, match={
+        "oversized": "runtime receipt is oversized",
+        "digest": "runtime receipt changed after transport",
+        "architecture": "untrusted architecture",
+    }[mutation_name]):
+        prescreen(scope, scope_root)
 
 
 def test_prescreen_cli_writes_once_and_refuses_existing_output(

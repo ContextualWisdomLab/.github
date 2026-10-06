@@ -19,10 +19,14 @@ EXTENSION_SUFFIXES = (".so", ".pyd")
 
 
 def _inside(path: pathlib.Path, root: pathlib.Path) -> bool:
+    """Return whether path is root or is contained by root."""
+
     return path == root or root in path.parents
 
 
 def place(wheel: pathlib.Path, project_dir: pathlib.Path) -> list[pathlib.Path]:
+    """Copy wheel extensions into existing project package directories."""
+
     project = project_dir.resolve()
     pyproject = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
     python_source = pyproject.get("tool", {}).get("maturin", {}).get("python-source", ".")
@@ -48,6 +52,8 @@ def place(wheel: pathlib.Path, project_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 def main(argv: list[str]) -> int:
+    """Run extension placement and return its process status."""
+
     if len(argv) != 2:
         print("usage: place_maturin_extension.py WHEEL PROJECT_DIR", file=sys.stderr)
         return 2
