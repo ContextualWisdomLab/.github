@@ -73,9 +73,11 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   configuration (GitHub Models provider, CodeGraph/DeepWiki/Context7/web-search MCP). All reviewer
   agents have `"edit": "deny"`: they are reviewers, never implementers. Keep it that way.
 - `requirements-{bandit,pip-audit,strix,opencode-review}-ci.txt` + `*-hashes.txt` — pinned CI
-  dependency sets (see below). `requirements-strix-ci-overrides.txt` documents one deliberate
-  `uv pip compile --override` (strix-agent's declared `cryptography<49` vs. this repo's
-  `cryptography==50.0.0` security pin; see #952) — re-verify it whenever strix-agent bumps again.
+  dependency sets (see below). `requirements-strix-ci-overrides.txt` documents deliberate
+  `uv pip compile --override` boundaries: strix-agent's declared `cryptography<49` vs. this repo's
+  `cryptography==50.0.0` security pin (#952), plus exact temporary patched lower bounds for
+  `litellm`, `PyJWT`, `pypdf`, and `urllib3` from Python Security run `36923052046`. Re-verify and
+  remove only the superseded lines whenever a released strix-agent graph carries those bounds.
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
@@ -142,7 +144,10 @@ repeatable compile command.
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **Central review routes through the vendored contextual-orchestrator gateway.**
   `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
-  (the five provider secrets flow into its KV; the writer runs
+  (the five provider secrets flow into its KV; immediately after registration,
+  the launcher erases their Linux initial-environment value bytes and removes
+  their live names before auth lookup, discovery, or serving, so procfs and
+  child processes cannot recover them; the writer runs
   `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
   exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
