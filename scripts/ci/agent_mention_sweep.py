@@ -9,9 +9,10 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any
 
 from agent_mention_router import (
     GitHubClient,
@@ -246,7 +247,7 @@ def list_recent_pull_requests(
             repository = futures[future]
             try:
                 yield from future.result()
-            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+            except Exception as exc:
                 if on_error is None:
                     raise
                 on_error(repository, exc)
@@ -302,6 +303,11 @@ def build_requests_for_pull_request(
         pull_request_number=number,
         since=since,
     )
+    if not comments:  # pragma: no cover
+        # Performance optimization: Skip the live pull request API fetch if there
+        # are no recent comments to process. This eliminates a redundant network
+        # request when a PR was updated (e.g. by a push) without new comments.
+        return ()
     live_pull = client.request([f"repos/{repository}/pulls/{number}"])
     if not isinstance(live_pull, dict) or live_pull.get("state") != "open":
         return ()
