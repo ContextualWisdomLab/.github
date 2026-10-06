@@ -16,6 +16,11 @@ source-line receipt because the prose omitted the duplicated `path:line` citatio
 Noema is intentionally dispatched only after an exact-head OpenCode approval,
 so this publication failure suppressed both review identities.
 
+The model may also copy a trusted bare-digit sentinel into JSON as a number.
+The normalizer accepted that equivalent `run_id`/`run_attempt` representation
+but originally republished the raw number. The downstream approval gate requires
+those identity fields to be strings and therefore rejected the normalized output.
+
 ## Safety boundary
 
 Repair is attempted only when original model evidence already contains an
@@ -26,15 +31,24 @@ runtime-receipt, duplicate-probe, outcome, finding-location, coverage,
 language, and publication gates still run afterward. Unsupported prose
 continues to return `NO_CONCLUSION`.
 
+After numeric identity equality is proven, publication uses the trusted expected
+decimal strings rather than the untrusted representation. This changes JSON type,
+not identity or verdict, and keeps the independent downstream gate strict.
+
 ## Verification
 
 The regression suite proves canonical path/line repair only when an exact receipt
 already exists, refusal to invent an observed result, rejection of missing or mismatched
 receipts, and preservation of malformed and
 unverifiable shapes, full normalizer behavior, branch coverage, docstrings,
-compileability, and a clean worktree.
+compileability, and a clean worktree. An end-to-end regression now passes a
+numeric model control through normalization and the real shell approval gate.
 
 ## References
+
+Bray, T. (2017). *The JavaScript Object Notation (JSON) data interchange
+format* (RFC 8259). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC8259
 
 MITRE. (n.d.). *CWE-22: Improper limitation of a pathname to a restricted
 directory ('path traversal')*. Retrieved August 13, 2026, from
