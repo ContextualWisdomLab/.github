@@ -9,6 +9,17 @@ import pytest
 from scripts.ci import sandboxed_verify
 
 
+def test_direct_file_import_bootstraps_the_repository_path() -> None:
+    """Direct-file loading covers the installed workflow entrypoint boundary."""
+
+    namespace = runpy.run_path(
+        str(Path(sandboxed_verify.__file__)),
+        run_name="sandboxed_verify_import_probe",
+    )
+
+    assert namespace["RESULT_MARKER"] == sandboxed_verify.RESULT_MARKER
+
+
 def test_scrubbed_env_uses_sandbox_paths_and_drops_secrets(monkeypatch, tmp_path):
     """Sandbox env keeps basic runtime variables but drops credentials."""
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -168,6 +179,29 @@ def test_copy_workspace_rejects_missing_repo_root(tmp_path):
         sandboxed_verify.copy_workspace(tmp_path / "missing", tmp_path / "sandbox", [])
 
 
+def test_main_reports_invalid_repo_root_without_boundary_evidence(tmp_path, capsys):
+    """An invalid root is a generic input failure, not a symlink rejection."""
+    missing = tmp_path / "host-secret-root"
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(missing), "--", "verify"]
+    )
+    captured = capsys.readouterr()
+    result_line = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+
+    assert exit_code == 1
+    assert payload["exit_code"] == 1
+    assert payload["path_boundary_rejected"] is False
+    assert "repository root is not a directory" in captured.err
+    assert str(missing) not in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path):
     """A workspace symlink pointing at a host path outside the copy fails the whole copy closed.
 
@@ -186,7 +220,7 @@ def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path)
     repo.mkdir()
     (repo / "escape-link").symlink_to(outside)
 
-    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
@@ -200,7 +234,7 @@ def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(t
     # Once copied to sandbox/repo/escape-link, two ".." segments reach tmp_path.
     (repo / "escape-link").symlink_to(Path("../../outside-secret.txt"))
 
-    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox"):
         sandboxed_verify.copy_workspace(repo, sandbox, [])
 
 
@@ -219,7 +253,7 @@ def test_copy_workspace_rejects_directory_symlink_escaping_sandbox_root(tmp_path
     repo.mkdir()
     (repo / "escape-dir").symlink_to(outside_dir, target_is_directory=True)
 
-    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
@@ -241,7 +275,7 @@ def test_copy_workspace_rejects_escape_via_intermediate_directory_alias(tmp_path
     (repo / "self-alias").symlink_to(".", target_is_directory=True)
     (repo / "link").symlink_to("self-alias/../outside-secret.txt")
 
-    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
@@ -259,7 +293,7 @@ def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
     (repo / "a").symlink_to("b")
     (repo / "b").symlink_to("a")
 
-    with pytest.raises(ValueError, match="workspace symlink could not be resolved"):
+    with pytest.raises(ValueError, match="symlink chain could not be resolved"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
@@ -383,7 +417,7 @@ def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_sy
     repo.mkdir()
     (repo / "evil.txt").symlink_to("/etc/passwd")
 
-    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
         sandboxed_verify.copy_workspace(repo, linked_root, [])
 
 
@@ -401,7 +435,7 @@ def test_copy_workspace_rejects_symlink_chain_past_the_hop_limit(tmp_path):
         (repo / f"hop-{index}").symlink_to(f"hop-{index + 1}")
     (repo / f"hop-{chain_length}").write_text("payload", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="workspace symlink could not be resolved"):
+    with pytest.raises(ValueError, match="symlink chain exceeds the supported hop limit"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
@@ -554,6 +588,9 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     on stderr and Python's default uncaught-exception exit status, instead of
     the clean ``sandboxed-verify: ...`` message and coded exit this module
     uses for every other config-time rejection (e.g. the timeout path's 124).
+    A path-boundary rejection is now its own typed ``RepositoryPathBoundaryError``,
+    classified with the dedicated ``PATH_BOUNDARY_EXIT_CODE`` rather than the
+    generic workspace-copy-rejected code.
     """
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("host-only-content", encoding="utf-8")
@@ -566,13 +603,13 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     )
     captured = capsys.readouterr()
 
-    assert exit_code == 125
+    assert exit_code == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
     assert "Traceback" not in captured.err
-    assert "workspace copy rejected" in captured.err
-    assert "workspace symlink escapes the sandbox root" in captured.err
+    assert "repository path boundary rejected" in captured.err
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
-    assert payload["exit_code"] == 125
+    assert payload["exit_code"] == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert payload["path_boundary_rejected"] is True
 
 
 def test_parse_args_rejects_invalid_inputs():

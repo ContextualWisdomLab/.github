@@ -131,7 +131,11 @@ def test_sandboxed_verify_timeout_with_no_streams_is_bounded(
     repo.mkdir()
 
     def timeout_runner(
-        command: list[str], _cwd: Path, _env: dict[str, str], timeout: int
+        command: list[str],
+        _cwd: Path,
+        _env: dict[str, str],
+        timeout: int,
+        _output_limit_bytes: int,
     ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
 
@@ -196,6 +200,7 @@ def test_web_readiness_retries_5xx_and_timeout_without_streams(
         _cwd: Path,
         _env: dict[str, str],
         logs_dir: Path,
+        _log_limit_bytes: int,
     ) -> sandboxed_web_e2e.Service:
         log_path = logs_dir / f"{label}.log"
         log_path.write_text("", encoding="utf-8")
@@ -204,7 +209,11 @@ def test_web_readiness_retries_5xx_and_timeout_without_streams(
         )
 
     def timeout_runner(
-        command: str, _cwd: Path, _env: dict[str, str], timeout: int
+        command: str,
+        _cwd: Path,
+        _env: dict[str, str],
+        timeout: int,
+        _output_limit_bytes: int,
     ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
 
