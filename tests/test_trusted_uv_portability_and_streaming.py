@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import errno
+import io
 import platform
+import socket
+import ssl
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -13,8 +18,8 @@ from scripts.ci import materialize_base_python_requirements as materializer
 class _ChunkedResponse:
     """Return deterministic short reads from one trusted final URL."""
 
-    def __init__(self, chunks: list[bytes]) -> None:
-        """Store response chunks in the order an HTTP stream would expose them."""
+    def __init__(self, chunks: list[bytes | BaseException]) -> None:
+        """Store response outcomes in the order an HTTP stream exposes them."""
         self._chunks = iter(chunks)
 
     def __enter__(self) -> "_ChunkedResponse":
@@ -30,8 +35,41 @@ class _ChunkedResponse:
         return materializer.TRUSTED_UV_ARCHIVE_URL
 
     def read(self, _size: int) -> bytes:
-        """Return one short chunk, followed by EOF when chunks are exhausted."""
-        return next(self._chunks, b"")
+        """Return one short chunk, raise a scripted failure, or return EOF."""
+        outcome = next(self._chunks, b"")
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _http_error(status: int) -> urllib.error.HTTPError:
+    """Return one file-like HTTP failure for the fixed trusted archive URL."""
+
+    return urllib.error.HTTPError(
+        materializer.TRUSTED_UV_ARCHIVE_URL,
+        status,
+        "synthetic failure",
+        None,
+        io.BytesIO(b""),
+    )
+
+
+def _scripted_urlopen(
+    outcomes: list[object],
+    calls: list[tuple[str, int]],
+):
+    """Return a fake urlopen that records the immutable request contract."""
+
+    remaining = iter(outcomes)
+
+    def fake_urlopen(url: str, *, timeout: int) -> object:
+        calls.append((url, timeout))
+        outcome = next(remaining)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    return fake_urlopen
 
 
 def test_trusted_uv_download_collects_short_reads(
@@ -62,6 +100,282 @@ def test_trusted_uv_download_rejects_oversize_across_short_reads(
 
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+
+
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504, 522])
+def test_trusted_uv_download_retries_only_closed_http_status_set(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    """Every explicitly transient HTTP status receives one bounded retry."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [_http_error(status), _ChunkedResponse([b"archive", b""])],
+            calls,
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"archive"
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+    ]
+    assert sleeps == [1.0]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 405, 410, 422])
+def test_trusted_uv_download_does_not_retry_permanent_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    """Permanent source and authorization responses fail immediately."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([_http_error(status)], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=rf"HTTP {status}$"):
+        materializer._download_trusted_uv_archive()
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_trusted_uv_download_retries_temporary_dns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the DNS resolver's temporary failure signal is retried."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    failure = urllib.error.URLError(
+        socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure")
+    )
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [failure, _ChunkedResponse([b"archive", b""])], calls
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"archive"
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+
+
+def test_trusted_uv_download_retries_timeout_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real timeout receives one bounded retry with the exact request."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [TimeoutError(errno.ETIMEDOUT, "timed out"), _ChunkedResponse([b"ok", b""])],
+            calls,
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"ok"
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+    ]
+    assert sleeps == [1.0]
+
+
+def test_trusted_uv_download_retries_connection_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection reset receives one bounded retry with the same request."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [ConnectionResetError(errno.ECONNRESET, "reset"), _ChunkedResponse([b"ok", b""])],
+            calls,
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"ok"
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+
+
+def test_trusted_uv_download_does_not_retry_tls_certificate_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Certificate verification is an integrity failure, never availability noise."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    failure = urllib.error.URLError(
+        ssl.SSLCertVerificationError(1, "certificate verify failed")
+    )
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([failure], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"SSLCertVerificationError$"):
+        materializer._download_trusted_uv_archive()
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_trusted_uv_download_does_not_retry_non_temporary_dns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown host is a permanent source failure rather than transient DNS."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    failure = urllib.error.URLError(
+        socket.gaierror(socket.EAI_NONAME, "name not known")
+    )
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([failure], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"gaierror$"):
+        materializer._download_trusted_uv_archive()
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_trusted_uv_download_does_not_retry_malformed_urlerror_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-exception URL reason fails once without leaking arbitrary text."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([urllib.error.URLError("malformed")], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"trusted uv archive download failed: URLError$",
+    ) as raised:
+        materializer._download_trusted_uv_archive()
+
+    assert "malformed" not in str(raised.value)
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    ]
+    assert sleeps == []
+
+
+def test_trusted_uv_download_does_not_retry_unclassified_os_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local or malformed OS failures cannot be promoted to network availability."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([OSError(errno.EINVAL, "invalid local state")], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"OSError$"):
+        materializer._download_trusted_uv_archive()
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_trusted_uv_download_exhausts_bounded_transient_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persistent transient failures stop after three total network attempts."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([_http_error(503), _http_error(503), _http_error(503)], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"HTTP 503 after 3 attempts"):
+        materializer._download_trusted_uv_archive()
+
+    assert len(calls) == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_trusted_uv_download_discards_partial_bytes_before_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bytes read from a failed attempt never contaminate the next response."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    first = _ChunkedResponse(
+        [b"partial-", ConnectionResetError(errno.ECONNRESET, "reset")]
+    )
+    second = _ChunkedResponse([b"fresh", b""])
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([first, second], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"fresh"
+    assert len(calls) == 2
+    assert sleeps == [1.0]
 
 
 @pytest.mark.parametrize(
