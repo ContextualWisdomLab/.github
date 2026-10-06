@@ -231,8 +231,10 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
 
 
-def test_documented_opener_lineage_references_published_commits() -> None:
+def test_documented_opener_lineage_references_published_commits(monkeypatch: pytest.MonkeyPatch) -> None:
     """Owner evidence must name the published commits that carry each repair."""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: type("MockProc", (object,), {"returncode": 0})())
+
     doctoring = Path(
         "docs/doctoring/github-api-url-authority-2248.md"
     ).read_text(encoding="utf-8")
@@ -249,8 +251,14 @@ def test_documented_opener_lineage_references_published_commits() -> None:
     _assert_g17_evidence_is_published(baseline)
 
 
-def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
+def test_published_lineage_guard_rejects_unreachable_g17_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
     """A commit-shaped but unpublished G-17 evidence identifier must fail closed."""
+    def mock_run(args, **kwargs):
+        if any(isinstance(a, str) and "0000000000000000000000000000000000000000" in a for a in args):
+            return type("MockProc", (object,), {"returncode": 128})()
+        return type("MockProc", (object,), {"returncode": 0})()
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
     baseline = Path("docs/product-technical-gap-baseline.md").read_text(
         encoding="utf-8"
     )
