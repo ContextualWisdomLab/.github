@@ -20,6 +20,89 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+@pytest.mark.parametrize(
+    ("response", "gh_exit", "expected_files", "expected_code", "expected_deps"),
+    [
+        ("docs/only.md\n", 0, 1, "false", "false"),
+        ("scripts/ci/review.py\n", 0, 1, "true", "false"),
+        ("", 1, 1, "unknown", "true"),
+        ("docs/only.md\n", 0, 2, "unknown", "true"),
+        ("", 0, 1, "unknown", "true"),
+    ],
+)
+def test_noema_changed_scope_requires_a_complete_file_list(
+    tmp_path, response, gh_exit, expected_files, expected_code, expected_deps
+):
+    """Run the production classifier with complete and failed fake API reads."""
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    step = workflow.index("      - name: Classify changed paths")
+    start = workflow.index("        run: |\n", step) + len("        run: |\n")
+    end = workflow.index("\n  cancel-closed-pr-runs:", start)
+    script = textwrap.dedent(workflow[start:end])
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    gh.write_text(
+        "#!/bin/sh\nprintf %s "
+        + shlex.quote(response)
+        + ("\necho 'gh: HTTP 403' >&2" if gh_exit else "")
+        + f"\nexit {gh_exit}\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    sleep = fake_bin / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    sleep.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "REPO": "ContextualWisdomLab/.github",
+            "PR": "2364",
+            "EXPECTED_FILES": str(expected_files),
+            "GITHUB_OUTPUT": str(output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("HTTP 403") == (3 if gh_exit else 0)
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"code={expected_code}",
+        f"deps={expected_deps}",
+    ]
+
+
+def test_noema_unknown_scope_fails_before_secrets_without_defeating_cancellation():
+    """Failed dependencies remain a red required job; cancellation stays final."""
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  changed-scope:\n", 1
+    )[0]
+    job = workflow.split("\n  noema-review:\n", 1)[1]
+    header, steps = job.split("    steps:\n", 1)
+    reject = steps.split("      - name: Skip events without pull request context", 1)[0]
+
+    assert "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}" in admission
+    assert "!cancelled()" in header
+    assert "always()" not in header
+    assert "needs.admit-current-head.result != 'success'" in header
+    assert "needs.changed-scope.result != 'success'" in reject
+    assert "needs.changed-scope.outputs.code != 'true'" in reject
+    assert "needs.changed-scope.outputs.code != 'false'" in reject
+    assert "exit 1" in reject
+    assert steps.index("Reject unverified Noema admission or changed scope") < steps.index(
+        "Select fail-closed Noema reviewer credential"
+    )
+    assert "needs.changed-scope.outputs.code == 'true'" in header
+    assert "cancel-in-progress: true" in workflow.split("\npermissions:\n", 1)[0]
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
