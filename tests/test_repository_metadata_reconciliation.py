@@ -70,6 +70,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "inkspan": ("markdown-editor", "document-conversion"),
         "wardnet": ("network-security", "web-application-firewall"),
         "cwl-telemetry": ("opentelemetry", "observability"),
+        "mightyETL": ("etl", "change-data-capture"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
