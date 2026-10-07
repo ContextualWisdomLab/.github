@@ -19,6 +19,7 @@ def test_valid_identity_controls(text, tmp_path):
 
 @pytest.mark.parametrize("text", [
     "Reviewed scripts/ci/strix_quick_gate.sh@backup.",
+    "Reviewed scripts/ci/strix_quick_gate.sh:backup.",
     "Reviewed scripts/ci/strix_quick_gate.sh追加.",
     "Reviewed scripts/ci/strix_quick_gate.sh\\notes.",
     "Reviewed scripts/ci/strix_quick_gate.sh/notes.",
@@ -27,6 +28,7 @@ def test_valid_identity_controls(text, tmp_path):
     "Scope: scripts/ci追加. Reviewed strix_quick_gate.sh.",
     "Scope: scripts/ci/../unrelated. Reviewed strix_quick_gate.sh.",
     "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/../unrelated.",
+    "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh:backup.",
     "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh/notes.",
 ])
 def test_invalid_identity_controls(text, tmp_path):
