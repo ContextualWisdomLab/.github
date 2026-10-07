@@ -166,6 +166,29 @@ def _bytez_non_token_price_evidence(
     return None
 
 
+def normalize_input_modalities(value: object) -> list[str]:
+    """Preserve explicit input evidence as normalized tag-safe tokens.
+
+    Match the input:<modality> grammar read in pinned01bf model_discovery
+    and TaskOrchestrator. Missing evidence remains empty, never guessed text.
+    Malformed nonempty evidence fails closed instead of losing exclusion tags.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise PolicyError("input_modalities must be a list or tuple of tokens")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise PolicyError("input_modalities contains a non-string token")
+        token = item.strip().casefold()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", token):
+            raise PolicyError("input_modalities contains an invalid token")
+        if token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
 def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate and normalize a contextual-orchestrator discovery report."""
     rows = report.get("models")
@@ -240,6 +263,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "provider": provider,
                 "model": model,
                 "agent_id": str(candidate_id),
+                "input_modalities": normalize_input_modalities(row.get("input_modalities")),
                 "is_free": is_free,
                 "cost_evidence": cost_evidence,
                 "prompt_price_per_1k": prompt_price,
@@ -395,6 +419,9 @@ def build_zdr_prioritized_catalog(
                     "review",
                     f"cost:{evidence}",
                     "zdr" if zdr else "non-zdr",
+                    *(f"input:{value}" for value in normalize_input_modalities(
+                        row.get("input_modalities")
+                    )),
                 ],
                 "priority": -rank,
                 "disabled": False,

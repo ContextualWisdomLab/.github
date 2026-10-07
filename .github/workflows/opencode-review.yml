@@ -517,6 +517,7 @@ jobs:
           PR_ACTION: ${{ github.event.action }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           CHANGED_SCOPE_CODE: ${{ needs.changed-scope.outputs.code }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           if [ "$PR_ACTION" = "closed" ]; then
@@ -558,35 +559,42 @@ jobs:
           if [ "$PR_DRAFT" = "true" ]; then
             echo "Event draft snapshot is stale; checking the verdict for the live ready PR."
           fi
-          reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
-            (add // [])
-            | [
-                .[]
-                | select(
-                    (.user.login // "" | ascii_downcase) as $user
-                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
-                  )
-                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
-              ]
-            | (last // {}) as $review
-            | ($review.body // "" | ascii_downcase) as $body
-            | if $review.state == "CHANGES_REQUESTED" then
-                "CHANGES_REQUESTED"
-              elif $review.state == "APPROVED"
-                and ($body | contains("deterministic current-head evidence") | not)
-                and ($body | contains("deterministic fallback approval") | not)
-                and ($body | contains("model-unavailable evidence fallback") | not)
-                and ($body | contains("did not emit a usable current-head control block") | not)
-                and ($body | contains("scope: `unsupported`") | not)
-                and ($body | contains("model-pool outcome: `unknown`") | not)
-              then
-                "APPROVED"
-              else
-                empty
-              end
-          ')"
+          helper="$(mktemp)"
+          reviews_file="$(mktemp)"
+          trap 'rm -f "$helper" "$reviews_file"' EXIT
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$helper"
+          gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" >"$reviews_file"
+          verdict="$(python3 - "$helper" "$reviews_file" "$HEAD_SHA" <<'PY'
+          import importlib.machinery
+          import importlib.util
+          import json
+          import sys
+
+          helper_path, reviews_path, head_sha = sys.argv[1:]
+          loader = importlib.machinery.SourceFileLoader("trusted_opencode_receipt_gate", helper_path)
+          spec = importlib.util.spec_from_loader(loader.name, loader)
+          if spec is None or spec.loader is None:
+              raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
+          gate = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(gate)
+          with open(reviews_path, encoding="utf-8") as stream:
+              pages = json.load(stream)
+          if not isinstance(pages, list) or not all(
+              isinstance(page, list) and all(isinstance(review, dict) for review in page)
+              for page in pages
+          ):
+              raise ValueError("formal review lookup returned malformed paginated JSON")
+          reviews = [review for page in pages for review in page
+                     if str((review.get("user") or {}).get("login") or "").lower()
+                     in {"opencode-agent", "opencode-agent[bot]"}]
+          receipt, reason = gate.evaluate_receipts(reviews, head_sha, is_draft=False)
+          if receipt is None:
+              print(f"No current-head formal OpenCode verdict: {reason}", file=sys.stderr)
+              raise SystemExit(1)
+          print(receipt["state"])
+          PY
+          )"
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
             exit 1

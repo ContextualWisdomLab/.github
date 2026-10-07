@@ -3,6 +3,7 @@
 from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
+import base64
 import json
 import os
 from pathlib import Path
@@ -58,14 +59,18 @@ def test_native_cancellation_runs_before_runner_admission() -> None:
 def test_missing_verdict_fails_after_one_review_read(tmp_path: Path) -> None:
     calls = tmp_path / "calls"
     fake_gh = tmp_path / "gh"
+    workflow_sha = "c" * 40
+    helper = Path("scripts/ci/opencode_review_receipt_gate.py").read_bytes()
     fake_gh.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$CALLS"
 if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
   printf '%s' "$LIVE_PR"
-elif [[ "$*" == *"/pulls/7/reviews?per_page=100"* ]]; then
-  printf '[]'
+elif [[ "$*" == "api repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA} --jq .content" ]]; then
+  printf '%s' "$HELPER_BASE64"
+elif [[ "$*" == "api --paginate --slurp repos/owner/repo/pulls/7/reviews?per_page=100" ]]; then
+  printf '[[]]'
 else
   exit 19
 fi
@@ -85,6 +90,8 @@ fi
             "HEAD_SHA": HEAD,
             "PR_ACTION": "synchronize",
             "PR_DRAFT": "false",
+            "WORKFLOW_SHA": workflow_sha,
+            "HELPER_BASE64": base64.b64encode(helper).decode("ascii"),
             "LIVE_PR": json.dumps(
                 {"draft": False, "head": {"sha": HEAD}, "state": "open"}
             ),
@@ -95,8 +102,11 @@ fi
     )
 
     assert result.returncode == 1
-    assert "will rerun this failed job" in result.stdout
+    assert "No current-head formal OpenCode verdict:" in result.stderr
+    assert "Current-head OpenCode verdict:" not in result.stdout
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "api repos/owner/repo/pulls/7",
-        "api --paginate repos/owner/repo/pulls/7/reviews?per_page=100",
+        "api repos/ContextualWisdomLab/.github/contents/scripts/ci/"
+        f"opencode_review_receipt_gate.py?ref={workflow_sha} --jq .content",
+        "api --paginate --slurp repos/owner/repo/pulls/7/reviews?per_page=100",
     ]

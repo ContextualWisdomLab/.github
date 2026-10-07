@@ -750,3 +750,30 @@ def test_build_catalog_interleaving_skips_exhausted_accounts() -> None:
         "nvidia_nim",
         "nvidia_nim",
     ]
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, []),
+    ([], []),
+    ((" TEXT ", "image", "text", "audio_2", "video-1"),
+     ["text", "image", "audio_2", "video-1"]),
+])
+def test_valid_modality_evidence_retains_order_and_deduplicates(value, expected):
+    """Missing evidence stays empty; valid explicit evidence is preserved."""
+    assert policy.normalize_input_modalities(value) == expected
+
+
+@pytest.mark.parametrize("value, message", [
+    ("text", "must be a list or tuple"),
+    ({"text": True}, "must be a list or tuple"),
+    ([False], "non-string token"),
+    (["text", 1], "non-string token"),
+    ([""], "invalid token"),
+    (["image extra"], "invalid token"),
+    (["../image"], "invalid token"),
+    (["追加"], "invalid token"),
+])
+def test_malformed_evidence_fails_closed(value, message):
+    """Malformed evidence cannot lose filtering tags and become a valid model."""
+    with pytest.raises(policy.PolicyError, match=message):
+        policy.normalize_input_modalities(value)

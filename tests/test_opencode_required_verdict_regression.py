@@ -12,6 +12,8 @@ import re
 import shutil
 import subprocess
 import textwrap
+import tempfile
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,9 @@ def fail_closed_script() -> str:
     step = workflow.split(
         "      - name: Fail closed without a current-head OpenCode verdict\n", 1
     )[1]
-    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+    return textwrap.dedent(step.split("        run: |\n", 1)[1].split(
+        "\n  cancel-superseded-opencode-review-runs:", 1
+    )[0])
 
 
 def admission_script() -> str:
@@ -97,31 +101,53 @@ def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
     """Build one Reviews API record from the OpenCode GitHub App."""
     return {
+        "id": 1,
         "user": {"login": "opencode-agent[bot]"},
         "state": state,
         "commit_id": commit_id,
-        "body": body,
+        "body": body or f"## Pull request overview\n- Head SHA: `{commit_id}`\n",
     }
 
 
 def runtime_verdict(reviews: list[dict[str, object]], head_sha: str = HEAD) -> str:
-    """Execute the jq program embedded in the required workflow."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required to execute the production verdict filter")
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    marker = """jq -r -s --arg sha "$HEAD_SHA" '"""
-    start = workflow.index(marker) + len(marker)
-    end = workflow.index("\n          ')", start)
-    result = subprocess.run(
-        [jq, "-r", "-s", "--arg", "sha", head_sha, workflow[start:end]],
-        input=json.dumps(reviews),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
+    """Execute the exact production step with explicit offline read fixtures."""
+    import base64
+
+    fixture_cli = Path(__file__).with_name('fixture_github_reads.py')
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        fake_gh = root / 'gh'
+        fake_gh.write_text(f'#!{sys.executable}\n' + fixture_cli.read_text())
+        fake_gh.chmod(0o700)
+        fixture = root / 'fixture.json'
+        fixture.write_text(json.dumps({
+            'pull': {'head': {'sha': head_sha}, 'draft': False, 'state': 'open'},
+            'reviews': reviews, 'lookup_fail': False, 'malformed': False,
+            'calls': str(root / 'calls.jsonl'),
+            'helper_base64': base64.b64encode(RECEIPT_HELPER.read_bytes()).decode(),
+        }))
+        env = {
+            'PATH': str(root) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+            'HOME': str(root), 'TMPDIR': str(root), 'FIXTURE_FILE': str(fixture),
+            'TARGET_REPOSITORY': 'ContextualWisdomLab/fast-mlsirm', 'PR_NUMBER': '2018',
+            'HEAD_SHA': head_sha, 'PR_ACTION': 'synchronize', 'PR_DRAFT': 'false',
+            'CHANGED_SCOPE_CODE': 'true', 'WORKFLOW_SHA': '6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3',
+            'PYTHONDONTWRITEBYTECODE': '1',
+        }
+        result = subprocess.run(
+            [shutil.which('bash') or '/bin/bash', '-c', fail_closed_script()], cwd=root, env=env,
+            text=True, capture_output=True, check=False, timeout=15,
+        )
+        calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        assert len(calls) == 3, result.stdout + result.stderr
+        assert all('POST' not in call and '-X' not in call for call in calls)
+    assert result.returncode in (0, 1), result.stderr
+    if result.returncode:
+        assert 'No current-head formal OpenCode verdict:' in result.stderr
+        return ''
+    match = re.search(r'Current-head OpenCode verdict: (APPROVED|CHANGES_REQUESTED)\.', result.stdout)
+    assert match is not None, result.stdout + result.stderr
+    return match.group(1)
 
 
 @pytest.mark.parametrize("state", ("APPROVED", "CHANGES_REQUESTED"))
@@ -324,7 +350,14 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "while :; do" not in target_job
     assert "poll_interval_seconds" not in target_job
     assert "180 minutes of polling" not in target_job
-    assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in workflow
+    admission = fail_closed_script()
+    assert 'gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in admission
+    assert 'contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}' in admission
+    assert 'gate.evaluate_receipts(reviews, head_sha, is_draft=False)' in admission
+    step_env = workflow.split(
+        '      - name: Fail closed without a current-head OpenCode verdict\n', 1
+    )[1].split('        run: |\n', 1)[0]
+    assert 'WORKFLOW_SHA: ${{ github.workflow_sha }}' in step_env
     assert "github.event.pull_request.head.sha" in workflow
     assert "will rerun this failed job" in workflow
     assert (
@@ -386,6 +419,7 @@ def _run_fail_closed_step(
             "HEAD_SHA": head_sha,
             "PR_ACTION": pr_action,
             "PR_DRAFT": pr_draft,
+            "WORKFLOW_SHA": "6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3",
             "LIVE_PR_JSON": json.dumps(
                 {
                     "draft": pr_draft.lower() == "true",

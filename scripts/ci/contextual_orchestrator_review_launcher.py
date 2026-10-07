@@ -33,9 +33,11 @@ import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
+    normalize_input_modalities,
     provider_account,
 )
 
@@ -260,6 +262,9 @@ def _report_rows(
                 "model": model_id,
                 "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
                 "is_free": (provider, model_id) in free_route_identities,
+                "input_modalities": normalize_input_modalities(
+                    getattr(model, "input_modalities", None)
+                ),
                 "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
                 "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
                 "currency_code": getattr(model, "currency_code", None),
@@ -329,10 +334,15 @@ def _safe_retry_after_seconds(exc: Exception) -> int | None:
     # runs inside the probe walk's exception handler, so a ValueError here
     # would escape ``_preflight_review_agents`` -- whose callers catch only
     # ``ReviewPreflightError`` -- and kill the boot before any evidence file
-    # is written. Every ``isdecimal`` string is accepted by ``int``.
-    if not isinstance(raw, str) or not raw.strip().isdecimal():
+    # is written. Reject more than five decimal characters before conversion:
+    # the accepted ceiling is 86400, and Python deliberately rejects very
+    # long integer strings before ``int`` can return a value.
+    if not isinstance(raw, str):
         return None
-    seconds = int(raw.strip())
+    normalized = raw.strip()
+    if len(normalized) > 5 or not normalized.isdecimal():
+        return None
+    seconds = int(normalized)
     return seconds if 0 <= seconds <= 86400 else None
 
 
@@ -389,19 +399,25 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row: The in-progress per-route evidence row to update.
         exc: The exception a probe attempt raised.
     """
-    row["status"] = "rejected"
-    error_type = type(exc).__name__
-    row["error_type"] = (
-        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
-    )
-    http_status = _safe_http_status(exc)
-    if http_status is not None:
-        row["http_status"] = http_status
-    retry_after = _safe_retry_after_seconds(exc)
-    if retry_after is not None:
-        row["retry_after_s"] = retry_after
-    row.pop("finish_reason", None)
-    row.pop("reasoning_without_content", None)
+    try:
+        row["status"] = "rejected"
+        error_type = type(exc).__name__
+        row["error_type"] = (
+            error_type
+            if error_type.isidentifier() and len(error_type) <= 64
+            else "provider_error"
+        )
+        http_status = _safe_http_status(exc)
+        if http_status is not None:
+            row["http_status"] = http_status
+        retry_after = _safe_retry_after_seconds(exc)
+        if retry_after is not None:
+            row["retry_after_s"] = retry_after
+        row.pop("finish_reason", None)
+        row.pop("reasoning_without_content", None)
+    finally:
+        if isinstance(exc, HTTPError):
+            exc.close()
 
 
 def _demote_agent(agent: object, penalty: int) -> object:

@@ -2,10 +2,18 @@
 
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
+현재 보호된 `main`: `7554587c2e3106a388998bcad048a3d7121de25e`
+현재 열린 PR 수: **107** (아래 기준선 인벤토리 행 수; 이 스냅샷의 기계 계약)
+
+2026-10-07 live connector 조회는 반환 상한 100개를 모두 채웠으므로 현재 열린 PR은 **최소 100개**다. 이 관측값을 전체 수로 외삽하거나 아래 기준선 행 수를 재작성하지 않는다.
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-10-07 Strix report-identity boundary delta
+
+| Gap ID | 상태 | exact-tree evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STRIX-REPORT-PATH-IDENTITY-01 | **Source repaired on Draft `.github#2574`; protected integration pending** | RED `d8aeb759f780d58b13c8692fe52dd39cd4f60d80` proved that both `scripts/ci/strix_quick_gate.sh:backup` and its private-scope-root form were accepted as the changed file. GREEN `983e31ff828baeca9873042d8c3faf1b949f2df8` restricts colon suffixes to numeric `path:line[:column]` evidence. Focused evidence is 39 passed with 55/55 statements and 26/26 branches covered. Protected `main@7554587c2e3106a388998bcad048a3d7121de25e` was integrated by ordinary two-parent merge `d1cd94627279e1bcb9b5cd5fddbad9a0056d6e1a`. | Central `.github` owns the Strix report-to-changed-source identity boundary. Keep the PR Draft until its final exact head has hosted source-executing security/runtime Checks, no unresolved actionable review, and qualifying independent current-head approval. Do not treat zero-step runner failures as source evidence or use bypass. |
 
 ### 2026-09-19 exact-head incident delta
 
