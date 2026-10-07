@@ -154,7 +154,7 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/variables
   `GITHUB_ACTIONS=true` runs.
 - Exact head adds one documentation contract plus four Markdown-boundary
   cases. Direct execution passes all three defect reproductions, five adjacent
-  regression cases, Python compilation and the four citation assertions. The
+  regression cases, Python compilation and the six citation assertions. The
   complete 60-test pytest rerun remains required before merge.
 - The new module has 100% statement and branch coverage, and `interrogate`
   reports 100% docstring coverage for it.
