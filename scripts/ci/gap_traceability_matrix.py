@@ -58,7 +58,6 @@ INLINE_CODE_RUN_PATTERN = re.compile(r"`+")
 # Every pattern below must stay linear on hostile PR bodies: unclosed
 # comments run to the end, link targets cannot restart inside themselves and
 # URL schemes are bounded so a long hyphenated token cannot backtrack.
-HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|\\Z)", re.S)
 LINK_TARGET_PATTERN = re.compile(r"\\]\\([^()\\s]*(?:\\s[^()]*)?\\)")
 URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.\-]{0,31}://[^\s<>()\[\]]+", re.I)
 
@@ -166,6 +165,24 @@ def _strip_fenced_blocks(text: str) -> str:
     return "".join(output)
 
 
+def _strip_html_comments(text: str) -> str:
+    """Remove HTML comments in one forward scan; an unclosed comment runs to EOF."""
+    output: list[str] = []
+    cursor = 0
+    while True:
+        start = text.find("<!--", cursor)
+        if start < 0:
+            output.append(text[cursor:])
+            break
+        output.append(text[cursor:start])
+        output.append(" ")
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break
+        cursor = end + 3
+    return "".join(output)
+
+
 def _strip_inline_code(text: str) -> str:
     """Remove code spans of any backtick-run length, keeping exact Gap IDs."""
     output: list[str] = []
@@ -262,7 +279,7 @@ def mention_text(text: str) -> str:
     """
     text = text.replace("\\r\\n", "\\n")
     text = _strip_fenced_blocks(text)
-    text = HTML_COMMENT_PATTERN.sub(" ", text)
+    text = _strip_html_comments(text)
     text = _strip_inline_code(text)
     text = LINK_TARGET_PATTERN.sub("]", text)
     return URL_PATTERN.sub(" ", text)
