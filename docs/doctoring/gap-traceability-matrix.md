@@ -154,11 +154,14 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/variables
   the focused suite passed 55 tests in
   `tests/test_gap_traceability_matrix.py`, under both normal and
   `GITHUB_ACTIONS=true` runs.
-- Exact head adds one documentation contract plus four Markdown-boundary
-  cases. Direct execution passes all three defect reproductions, five adjacent
-  regression cases, all six hostile-input performance fixtures (worst:
-  0.029 seconds), Python compilation and the six citation assertions. The
-  complete 60-test pytest rerun remains required before merge.
+- Implementation head `951534fa0825786550b2f002ca88f86028d1363c`
+  adds the repaired Markdown-link target case plus unmatched-fence and
+  unmatched-inline-run boundaries. The focused suite passes 63 tests under
+  both normal and `GITHUB_ACTIONS=true` runs. Direct probes also pass all
+  defect reproductions, adjacent regressions and six hostile-input performance
+  fixtures (worst: 0.029 seconds).
+- On the same implementation tree, the warning-fatal full suite reports 5,221
+  passed and 11 skipped, with 40 subtests passed; `git diff --check` passes.
 - The new module has 100% statement and branch coverage, and `interrogate`
   reports 100% docstring coverage for it.
 - One test parses the repository's own baseline and requires its register
