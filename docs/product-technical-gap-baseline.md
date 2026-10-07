@@ -5,6 +5,12 @@
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
+### 2026-10-07 repository identifier trust-boundary delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUEUE-REPOSITORY-SEGMENT-01 | **Source repaired on `.github#2595`; hosted exact-head acceptance pending** | Current-head review found that the first negative lookahead inspected the whole `owner/repository` string, so `owner./repo` bypassed the promised owner-segment trailing-dot rejection. RED `c3963dc88` binds that case and valid `.github`/punctuation inputs; GREEN `2f29c4b30` validates owner and repository segments independently. The focused direct regression, byte compilation, and `GITHUB_ACTIONS=true` execution pass locally. | Canonical owner is `scripts/ci/actions_queue_health_core.py` in central `.github`. Fresh hosted security Checks, full-suite evidence, resolved current-head review threads, qualifying independent approval, and ordinary protected merge remain mandatory; no bypass is authorized. |
+
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
 ### 2026-09-19 exact-head incident delta
