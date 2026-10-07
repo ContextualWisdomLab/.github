@@ -1,3 +1,20 @@
+### Security scanner setup no longer inherits runner-local failures
+
+- Disable `trivy-action`'s binary cache on the heterogeneous `CWL CI isolated`
+  runner group. Exact run `37242578328`, job `112314054734`, restored a
+  `trivy-binary-v0.70.0-Linux-X64` cache entry but then failed before scanning
+  with `trivy: command not found`; installing the pinned binary per job removes
+  that runner-local path and executable-bit dependency.
+- Treat the always-run OSV debug artifact upload as observability rather than a
+  security verdict. Exact job `112314054619` completed the base/head comparison,
+  reported no PR-introduced finding, and uploaded SARIF before GitHub artifact
+  quota exhaustion failed the debug upload. The scanner and SARIF gates remain
+  unchanged and fail closed; only that optional retention step is non-blocking.
+- RED `cc42969ba8ed4abeb1819412c146af2a9dadae8f` adds both workflow contracts;
+  GREEN `26f993c0bbe88d50bf81473e31d179ad7b317657` passes 5,488 tests, 10 skips,
+  and 40 subtests. PR #2565 remains Draft/HOLD for fresh hosted evidence,
+  isolated-capacity canary, and qualifying independent approval.
+
 ### Isolated CI routing gains a runner-group authority boundary
 
 - Serialize the caller-controlled R matrix OS label with GitHub `toJSON()`
