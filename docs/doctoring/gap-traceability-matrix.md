@@ -140,9 +140,13 @@ World Wide Web Consortium. (2013, April 30). *PROV-O: The PROV ontology*
 
 ## Verification
 
-- The focused suite passes: 56 tests in
+- On predecessor head `1ec9c665b47dd3fe7320e1db7db569dd06ea6e7c`,
+  the focused suite passed 55 tests in
   `tests/test_gap_traceability_matrix.py`, under both normal and
   `GITHUB_ACTIONS=true` runs.
+- Exact head adds one documentation contract. Its four assertions directly
+  passed against the exact-head doctoring file; the complete 56-test pytest
+  rerun remains required before merge.
 - The new module has 100% statement and branch coverage, and `interrogate`
   reports 100% docstring coverage for it.
 - One test parses the repository's own baseline and requires its register
