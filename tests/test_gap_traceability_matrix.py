@@ -64,6 +64,21 @@ def test_parse_register_ignores_fenced_examples():
     assert [e.gap_id for e in gtm.parse_register(text)] == ["G-01"]
 
 
+def test_parse_register_requires_separator_row():
+    """A header-like line does not define a register without a delimiter row."""
+    text = "| Gap ID | x |\n| G-90 | not a Markdown table body |\n"
+    assert gtm.parse_register(text) == []
+
+
+def test_parse_register_rejects_text_after_fence_closer():
+    """A fence with trailing text stays open and hides later table-like rows."""
+    text = (
+        "```md\n| Gap ID | x |\n|---|---|\n| G-90 | hidden |\n"
+        "```not-a-closer\n| Gap ID | x |\n|---|---|\n| G-91 | hidden |\n```\n"
+    )
+    assert gtm.parse_register(text) == []
+
+
 def test_split_cells_respects_escaped_pipes():
     """An escaped pipe stays inside its cell."""
     assert gtm.split_cells("| a \\| b | c |") == ["a \\| b", "c"]
@@ -83,7 +98,9 @@ def test_shorten_marks_cut_text():
         ("G-15를 보강한다", {"G-15"}),
         ("`CONTROL-OPENCODE-LATEST-REVIEW-01` evidence", {"CONTROL-OPENCODE-LATEST-REVIEW-01"}),
         ("`see G-01 here` only", set()),
+        ("``see G-01 here`` only", set()),
         ("```\nG-01\n```\nG-02", {"G-02"}),
+        ("```\nG-01\n```not-a-closer\nG-02\n```", set()),
         ("<!-- G-01 -->", set()),
         ("https://x.test/G-01 and [G-02](https://x.test/G-03)", {"G-02"}),
         ("/G-01 foo.G-02 file-G-03 x_G-04", set()),
