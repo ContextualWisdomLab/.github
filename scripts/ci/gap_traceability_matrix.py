@@ -58,7 +58,7 @@ INLINE_CODE_RUN_PATTERN = re.compile(r"`+")
 # Every pattern below must stay linear on hostile PR bodies: unclosed
 # comments run to the end, link targets cannot restart inside themselves and
 # URL schemes are bounded so a long hyphenated token cannot backtrack.
-LINK_TARGET_PATTERN = re.compile(r"\\]\\([^()\\s]*(?:\\s[^()]*)?\\)")
+LINK_TARGET_PATTERN = re.compile(r"\]\([^()\s]*(?:\s[^()]*)?\)")
 URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.\-]{0,31}://[^\s<>()\[\]]+", re.I)
 
 REGISTER_HEADERS = frozenset({"gap id", "id"})
