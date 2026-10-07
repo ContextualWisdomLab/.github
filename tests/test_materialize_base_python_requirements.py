@@ -9,10 +9,7 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
-<<<<<<< HEAD
-=======
 from urllib.error import HTTPError
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 import pytest
 
@@ -815,8 +812,6 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
         materializer._download_trusted_uv_archive()
 
 
-<<<<<<< HEAD
-=======
 def test_download_trusted_uv_archive_closes_transformed_http_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -841,7 +836,6 @@ def test_download_trusted_uv_archive_closes_transformed_http_error(
     assert error_body.closed
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_verified_uv_binary_accepts_exact_archive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

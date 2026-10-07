@@ -23,10 +23,7 @@ def _names_scoped_ancestor(report: str, changed_paths: list[str]) -> bool:
 
 
 def validate(output: Path, changed_paths: list[str]) -> None:
-<<<<<<< HEAD
-=======
     """Require one completed report that names the scanned PR source scope."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if not output.is_dir() or output.is_symlink():
         raise ValueError("scan output directory is missing")
     runs = [path for path in output.iterdir() if path.is_dir() and not path.is_symlink()]

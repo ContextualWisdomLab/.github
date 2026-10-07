@@ -9,15 +9,8 @@ input-validation path that must fail closed rather than degrade.
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-import builtins
 import hashlib
 import json
-import runpy
-=======
-import hashlib
-import json
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from pathlib import Path
 from typing import Any
 
@@ -42,11 +35,6 @@ from tests.test_release_dependency_gate import (
 
 
 def test_gate_import_and_toml_parsing_without_stdlib_tomllib(monkeypatch):
-<<<<<<< HEAD
-    """Exercise the complete module import with the Python 3.10 TOML parser."""
-    tomli = pytest.importorskip("tomli")
-    original = builtins.__import__
-=======
     """Select the declared Python 3.10 TOML parser when stdlib lacks one."""
     class BackportParser:
         @staticmethod
@@ -56,26 +44,16 @@ def test_gate_import_and_toml_parsing_without_stdlib_tomllib(monkeypatch):
 
     tomli = BackportParser()
     original = gate.importlib.import_module
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     def import_without_tomllib(name, *args, **kwargs):
         if name == "tomllib":
             raise ModuleNotFoundError("No module named 'tomllib'", name="tomllib")
-<<<<<<< HEAD
-        return original(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", import_without_tomllib)
-    loaded = runpy.run_path(gate.__file__)
-    assert loaded["tomllib"] is tomli
-    assert loaded["tomllib"].loads('[package]\nlicense="MIT"')['package']['license'] == "MIT"
-=======
         return tomli if name == "tomli" else original(name, *args, **kwargs)
 
     monkeypatch.setattr(gate.importlib, "import_module", import_without_tomllib)
     parser = gate._import_toml_parser()
     assert parser is tomli
     assert parser.loads('[package]\nlicense="MIT"')['package']['license'] == "MIT"
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_binder_resolves_next_to_this_script() -> None:

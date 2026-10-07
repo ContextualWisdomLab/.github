@@ -467,13 +467,6 @@ def _github_open_json(url: str, token: str) -> object:
         with github_opener.open(request, timeout=30) as response:
             payload = response.read(MAX_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
-<<<<<<< HEAD
-        if isinstance(exc, HTTPError) and exc.code == 404:
-            raise ArtifactDeclarationNotFoundError(
-                f"GitHub API reported no resource for policy evidence at {url}"
-            ) from exc
-        raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
-=======
         try:
             if isinstance(exc, HTTPError) and exc.code == 404:
                 raise ArtifactDeclarationNotFoundError(
@@ -485,7 +478,6 @@ def _github_open_json(url: str, token: str) -> object:
         finally:
             if isinstance(exc, HTTPError):
                 exc.close()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if len(payload) > MAX_RESPONSE_BYTES:
         raise PolicyError("GitHub API policy response exceeded the bounded response size")
     try:
@@ -511,9 +503,6 @@ def _github_open_raw_bytes(url: str, token: str, max_bytes: int) -> bytes:
         with github_opener.open(request, timeout=30) as response:
             raw = response.read(max_bytes + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
-<<<<<<< HEAD
-        raise PolicyError(f"GitHub raw blob request failed: {type(exc).__name__}") from exc
-=======
         try:
             raise PolicyError(
                 f"GitHub raw blob request failed: {type(exc).__name__}"
@@ -521,7 +510,6 @@ def _github_open_raw_bytes(url: str, token: str, max_bytes: int) -> bytes:
         finally:
             if isinstance(exc, HTTPError):
                 exc.close()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if len(raw) > max_bytes:
         raise PolicyError("GitHub raw blob exceeded the bounded response size")
     return raw
@@ -638,11 +626,6 @@ def _load_raw_file_bytes(
         return raw
     if encoding == "none":
         raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
-<<<<<<< HEAD
-    if encoding != "base64":
-        raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
-=======
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     encoded = payload.get("content")
     if not isinstance(encoded, str):
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")

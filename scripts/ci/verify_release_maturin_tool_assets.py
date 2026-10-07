@@ -32,10 +32,7 @@ MAX_BINARY_BYTES = 32 * 1024 * 1024
 
 
 def _download(filename: str) -> bytes:
-<<<<<<< HEAD
-=======
     """Download one bounded asset from the pinned maturin release."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
     # Fixed https origin and tag; verify_assets admits only five literal asset names.
     with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
@@ -48,10 +45,7 @@ def _download(filename: str) -> bytes:
 
 
 def _binary(raw: bytes, filename: str) -> bytes:
-<<<<<<< HEAD
-=======
     """Extract the sole bounded maturin executable from a release asset."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if filename.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
@@ -106,10 +100,7 @@ def verify_assets(evidence: dict, reader: str, fetch=_download) -> None:
 
 
 def main() -> None:
-<<<<<<< HEAD
-=======
     """Verify pinned maturin evidence using local or official asset bytes."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     parser = argparse.ArgumentParser()
     parser.add_argument("--asset-root", type=Path)
     args = parser.parse_args()

@@ -96,8 +96,6 @@ def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
         gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
 
 
-<<<<<<< HEAD
-=======
 def test_archive_rows_cannot_expand_a_bounded_base_plan_past_the_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,7 +146,6 @@ def test_archive_rows_cannot_expand_a_bounded_base_plan_past_the_limit(
         gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_plan_refuses_denied_missing_extra_and_duplicate_scope(tmp_path: Path) -> None:
     mutators = {
         "denied": lambda capture, report: report.__setitem__("result", "FAIL"),

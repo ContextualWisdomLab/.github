@@ -584,12 +584,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
                 if 200 <= response.status < 500:
                     return True
                 time.sleep(1)
-<<<<<<< HEAD
-=======
         except urllib.error.HTTPError as exc:
             exc.close()
             time.sleep(1)
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         except (urllib.error.URLError, TimeoutError):
             time.sleep(1)
     return False

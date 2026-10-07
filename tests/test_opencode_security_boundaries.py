@@ -507,10 +507,7 @@ def test_dispatch_status_requires_live_current_head_approval_and_coverage(
     decision = dispatch_status.decide_status(
         model_outcome="success",
         coverage_result="success",
-<<<<<<< HEAD
-=======
         coverage_summary="- Result: PASS",
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         expected_head=head,
         pull_request={"head": {"sha": head}},
         reviews=[review],
@@ -533,10 +530,7 @@ def test_dispatch_status_latest_current_head_decision_is_authoritative(
     decision = dispatch_status.decide_status(
         model_outcome="success",
         coverage_result="success",
-<<<<<<< HEAD
-=======
         coverage_summary="- Result: PASS",
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         expected_head=head,
         pull_request={"head": {"sha": head}},
         reviews=reviews,
@@ -554,10 +548,7 @@ def test_dispatch_status_reuses_verified_approval_after_current_pool_exhaustion(
     decision = dispatch_status.decide_status(
         model_outcome="exhausted",
         coverage_result="success",
-<<<<<<< HEAD
-=======
         coverage_summary="- Result: PASS",
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         expected_head=head,
         pull_request={"head": {"sha": head}},
         reviews=[approval_review(head)],
@@ -591,10 +582,7 @@ def test_dispatch_status_fails_closed_without_validated_approval(
     decision = dispatch_status.decide_status(
         model_outcome=model_outcome,
         coverage_result=coverage_result,
-<<<<<<< HEAD
-=======
         coverage_summary="- Result: PASS",
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         expected_head=head,
         pull_request={"head": {"sha": observed_head}},
         reviews=[approval_review(head, **review_overrides)],
@@ -604,8 +592,6 @@ def test_dispatch_status_fails_closed_without_validated_approval(
     assert decision["description"]
 
 
-<<<<<<< HEAD
-=======
 @pytest.mark.parametrize(
     "coverage_summary",
     ("- Result: NOT MEASURED", "", "- Result: PASS\n- Result: PASS"),
@@ -655,7 +641,6 @@ def test_dispatch_status_rejects_non_pass_coverage_decisions(
     assert decision["state"] == "failure"
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_dispatch_status_cli_and_evidence_shape_validation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -673,11 +658,8 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
         "success",
         "--coverage-result",
         "success",
-<<<<<<< HEAD
-=======
         "--coverage-summary",
         "- Result: PASS",
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         "--expected-head",
         head,
         "--pull-request-file",

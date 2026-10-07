@@ -99,20 +99,12 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 No codeql-action reference and no
                                 repository_dispatch. On attempt one it
                                 re-checks the live head, consumes an
-<<<<<<< HEAD
-                                authenticated codeql-dispatch/<language>
-                                status when one exists, and otherwise fails
-                                pending to release the runner. The trusted
-                                handler publishes the terminal status and
-                                reruns only that failed job. On the woken
-=======
                                 authenticated base-bound
                                 codeql-dispatch/<language>/<base_sha>
                                 status when one exists, and otherwise fails
                                 pending to release the runner. The trusted
                                 handler publishes the terminal status and
                                 later settles the failed run once. On the woken
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                                 attempt the shard reads the authenticated
                                 current-head status once and reflects it as
                                 this job's own exit code.
@@ -120,25 +112,15 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 of an open current-head PR after the shards
                                 have job ids. Collects those ids from this
                                 run's jobs API, POSTs event_type codeql-scan
-<<<<<<< HEAD
-                                once with the remaining language matrix and
-=======
                                 once with the complete rerun language matrix and
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                                 required_jobs: [{language, job_id}, ...], and
                                 fails closed if any shard job id is missing.
                                 Skips the POST when every language already
                                 has a terminal verdict. github.run_attempt == 1
-<<<<<<< HEAD
-                                is required: a single-job wake re-runs
-                                dependents, and a second POST would cancel
-                                the in-flight multi-language handler.
-=======
                                 is required: a run-wide wake re-runs
                                 dependents, and a second dispatch would cancel
                                 the in-flight multi-language handler. A partial
                                 matrix cannot authorize unscanned job ids.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -167,15 +149,6 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 handler).
                               -- Publish the result as a commit status on the
                                 TARGET repository at context
-<<<<<<< HEAD
-                                "codeql-dispatch/<language>" using the
-                                target-scoped token (identical mechanism to
-                                strix.yml's "Publish same-head manual Strix
-                                status" multi-token fallback chain), state
-                                success/failure, description carrying a short
-                                finding count, target_url pointing at this
-                                .github run's own log for full evidence.
-=======
                                 "codeql-dispatch/<language>/<base_sha>" using the
                                 target-scoped token (identical mechanism to
                                 strix.yml's "Publish same-head manual Strix
@@ -183,19 +156,10 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 success/failure, a structured description bound
                                 to head/run/producer-source, and target_url
                                 pointing at this .github run's own log.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                               -- Upload the SARIF as an artifact on this
                                 .github-side run for audit trail (mirrors
                                 strix.yml's "Preserve CodeQL SARIF evidence"
                                 / artifact retention today).
-<<<<<<< HEAD
-                              -- Re-fetch the open PR, exact required workflow
-                                run, and exact failed language job;
-                                require matching path/head/run/job/name before
-                                calling the single-job rerun endpoint. Missing,
-                                stale, closed, or mismatched identity fails
-                                closed and leaves the required job failed.
-=======
   settle-required-run        -- After every matrix job is terminal, re-fetch
                                 the open PR and exact failed required workflow
                                 run; require matching repository/base/head,
@@ -205,7 +169,6 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 then calls the run-wide rerun endpoint. Missing,
                                 stale, closed, or mismatched identity fails
                                 closed and leaves the required run failed.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 ```
 
 ### Concurrency identity is per pull request; language independence is the job matrix
@@ -219,11 +182,6 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-<<<<<<< HEAD
-matrix. Each scan job still publishes `codeql-dispatch/<language>` and wakes
-only its own required job. One language's failure cannot cancel or skip a
-sibling.
-=======
 matrix. Each scan job publishes `codeql-dispatch/<language>` and preserves its
 SARIF evidence. A single non-matrix settlement job runs only after the complete
 matrix is terminal, revalidates every required job and language artifact, and
@@ -231,7 +189,6 @@ issues one run-wide rerun. A partial matrix is rejected because it cannot prove
 an omitted required language without duplicating the producer's receipt trust
 logic in the mutation owner. One language's failure cannot cancel or skip a
 sibling, and two siblings cannot race mutations on the same required run.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -255,14 +212,6 @@ superseded HEAD of the same pull request, and a language suffix is
 forbidden.
 
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
-<<<<<<< HEAD
-superseded. The sibling-cancel failure mode is gone because siblings are
-jobs in one run, not runs in one concurrency group. The exact-job wake
-contract is preserved: `required_jobs` is a 1:1 map of language to canonical
-job id, each scan shard looks up only its own id, and a missing, stale, or
-mismatched identity still fails closed. The old scalar
-`required_job_id`/`required_language` payload is retired.
-=======
 superseded. The sibling-cancel failure mode is gone because siblings are jobs
 in one run, not runs in one concurrency group. `required_jobs` remains a 1:1
 map of language to distinct canonical job ids. The settlement owner validates
@@ -392,7 +341,6 @@ of the same successor and publishes only the base-bound context. The producer an
 advance atomically, without either an unsafe compatibility receipt or a circular deployment order.
 Publication additionally requires a preserved SARIF artifact and verifies that the status response
 was created by the credential identity permitted for that target repository.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

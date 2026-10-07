@@ -337,10 +337,7 @@ def collect_bindings(
 
 
 def main() -> None:
-<<<<<<< HEAD
-=======
     """Collect CLI inputs and write the authenticated Strix binding verdict."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     parser = argparse.ArgumentParser()
     for name in (
         "capture", "license-report", "plan", "metadata", "attempt", "repository",

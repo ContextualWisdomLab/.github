@@ -430,13 +430,8 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
     """HTTP and transport failures become ConfigurationIdentityError."""
 
     class _HTTPError(identity.urllib.error.HTTPError):
-<<<<<<< HEAD
-        def read(self) -> bytes:
-            return b"denied"
-=======
         def read(self, size: int = -1) -> bytes:
             return b"denied"[:size]
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
     def raise_http(request, timeout=30):
         del request, timeout

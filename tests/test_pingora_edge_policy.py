@@ -766,14 +766,6 @@ def test_declared_prefix_for_path_matches_by_path_segment() -> None:
 def test_github_open_json_maps_not_found_to_artifact_declaration_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 404 from the GitHub API is distinguished from every other transport failure."""
 
-<<<<<<< HEAD
-    monkeypatch.setattr(
-        policy.github_opener, "open",
-        lambda _request, timeout: (_ for _ in ()).throw(HTTPError("x", 404, "not found", {}, BytesIO())),
-    )
-    with pytest.raises(policy.ArtifactDeclarationNotFoundError):
-        policy._github_open_json("https://api.github.com/repos/a/b", "token")
-=======
     error_body = BytesIO()
     monkeypatch.setattr(
         policy.github_opener, "open",
@@ -784,7 +776,6 @@ def test_github_open_json_maps_not_found_to_artifact_declaration_error(monkeypat
     with pytest.raises(policy.ArtifactDeclarationNotFoundError):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
     assert error_body.closed
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
@@ -1075,10 +1066,7 @@ def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
         ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
         ({"type": "file", "encoding": "none", "size": "not-an-int"}, "malformed size"),
         ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "invalid encoding"),
-<<<<<<< HEAD
-=======
         ({"type": "file", "encoding": "base64", "size": 1, "content": 1}, "malformed size"),
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
@@ -1264,8 +1252,6 @@ def test_github_open_raw_bytes_is_bounded_and_requests_raw_blob(monkeypatch: pyt
         policy._github_open_raw_bytes(url, "token", 3)
 
 
-<<<<<<< HEAD
-=======
 @pytest.mark.parametrize("exc", [URLError("dns"), TimeoutError(), HTTPError("x", 500, "bad", {}, BytesIO())])
 def test_github_open_raw_bytes_sanitizes_transport_failures(
     monkeypatch: pytest.MonkeyPatch, exc: Exception,
@@ -1283,7 +1269,6 @@ def test_github_open_raw_bytes_sanitizes_transport_failures(
     assert str(raised.value) == f"GitHub raw blob request failed: {type(exc).__name__}"
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 @pytest.mark.parametrize(
     "url",
     [
@@ -1305,14 +1290,9 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-<<<<<<< HEAD
-    with pytest.raises(HTTPError):
-        policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
-=======
     with pytest.raises(HTTPError) as exc_info:
         policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
     exc_info.value.close()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

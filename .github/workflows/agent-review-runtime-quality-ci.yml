@@ -2,11 +2,7 @@ name: Agent Review Runtime Quality CI
 
 on:
   pull_request:
-<<<<<<< HEAD
-    branches: [main]
-=======
     # Scan every PR base ref, including stacked feature branches.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
       - ".github/workflows/noema-review.yml"
@@ -26,10 +22,7 @@ on:
       - "scripts/ci/ensure_rust_llvm19.sh"
       - "tests/test_opencode_rust_coverage_toolchain_contract.py"
       - "tests/test_rust_coverage_timeout_not_measured.py"
-<<<<<<< HEAD
-=======
       - "tests/test_coverage_incomplete_summary.py"
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
       - "scripts/ci/resolve_base_rust_toolchain.py"
       - "tests/test_resolve_base_rust_toolchain.py"
       - "scripts/ci/place_maturin_extension.py"
@@ -219,10 +212,7 @@ jobs:
               scripts/ci/ensure_rust_llvm19.sh|\
               tests/test_opencode_rust_coverage_toolchain_contract.py|\
               tests/test_rust_coverage_timeout_not_measured.py|\
-<<<<<<< HEAD
-=======
               tests/test_coverage_incomplete_summary.py|\
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
               scripts/ci/resolve_base_rust_toolchain.py|\
               tests/test_resolve_base_rust_toolchain.py|\
               scripts/ci/place_maturin_extension.py|\
@@ -403,13 +393,8 @@ jobs:
         if: steps.affected_suites.outputs.opencode == 'true'
         run: |
           set -euo pipefail
-<<<<<<< HEAD
-          python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_rust_coverage_timeout_not_measured.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
-          python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
-=======
           python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_rust_coverage_timeout_not_measured.py tests/test_coverage_incomplete_summary.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
           python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py tests/test_coverage_incomplete_summary.py tests/test_resolve_base_rust_toolchain.py tests/test_place_maturin_extension.py
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
       - name: Verify JavaScript materializer documentation contract
         if: steps.affected_suites.outputs.opencode == 'true'

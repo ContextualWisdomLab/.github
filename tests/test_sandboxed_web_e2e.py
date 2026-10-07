@@ -6,10 +6,7 @@ import shutil
 import socket
 import subprocess
 import sys
-<<<<<<< HEAD
-=======
 from io import BytesIO
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from pathlib import Path
 
 import pytest
@@ -675,10 +672,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
         sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
 
     assert exc_info.value.code == 302
-<<<<<<< HEAD
-=======
     exc_info.value.close()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
@@ -703,8 +697,6 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service) is False
 
 
-<<<<<<< HEAD
-=======
 def test_wait_for_url_closes_redirect_response(monkeypatch, tmp_path):
     """A rejected readiness redirect releases its file-like HTTP response."""
 
@@ -742,7 +734,6 @@ def test_wait_for_url_closes_redirect_response(monkeypatch, tmp_path):
     assert error_body.closed
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     """Main records success evidence without requiring real POSIX services."""
     repo = tmp_path / "repo"

@@ -96,8 +96,6 @@ carefully-scoped rewrite (dynamic per-language check names, target-repo
 checkout security boundary) deliberately not attempted in the same tick as
 the emergency ruleset fix above — tracked as a follow-up, not silently
 dropped.
-<<<<<<< HEAD
-=======
 
 ## Run-wide settlement credential chain (2026-09-08)
 
@@ -142,4 +140,3 @@ can be reused after a same-head base or required-run change. #2040 instead integ
 evidence-complete producer in the same non-force successor and publishes only the base-bound
 context. Status publication also requires preserved SARIF evidence and verifies the creator returned
 by the status API before treating a credential attempt as successful.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)

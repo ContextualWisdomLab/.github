@@ -51,18 +51,12 @@ def named_packages(report: str) -> set[str]:
 
 
 def _is_requirements(name: str) -> bool:
-<<<<<<< HEAD
-=======
     """Return whether a filename is a supported pip requirements manifest."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     return name.startswith("requirements") and name.endswith((".txt", ".in"))
 
 
 def _manifest_text(repo_root: Path) -> str:
-<<<<<<< HEAD
-=======
     """Collect bounded dependency-manifest text beneath the repository root."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     chunks = []
     for path in repo_root.rglob("*"):
         if any(part in SKIP_DIRS for part in path.relative_to(repo_root).parts[:-1]):
@@ -90,10 +84,7 @@ def unverified_dependency_finding(report: str, repo_root: Path) -> bool:
 
 
 def main(argv: list[str]) -> int:
-<<<<<<< HEAD
-=======
     """Return success only for a finding absent from all dependency manifests."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2

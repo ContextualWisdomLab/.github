@@ -17,11 +17,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-<<<<<<< HEAD
-REVIEW_DISPATCH_BLOB_SHA = "09bbf8181a443f7a5630ec91ca958440c5dcfc68"
-=======
 REVIEW_DISPATCH_BLOB_SHA = "4aed28460325c40ee479d77e645e6140f548570c"
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def _workflow_text(path: Path) -> str:

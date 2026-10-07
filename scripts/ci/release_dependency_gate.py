@@ -48,10 +48,7 @@ import argparse
 import ast
 import email.parser
 import hashlib
-<<<<<<< HEAD
-=======
 import importlib
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import io
 import json
 import os
@@ -67,12 +64,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
-<<<<<<< HEAD
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
-    import tomli as tomllib
-=======
 def _import_toml_parser():
     """Return the stdlib TOML parser, or the declared Python 3.10 backport."""
     try:
@@ -82,7 +73,6 @@ def _import_toml_parser():
 
 
 tomllib = _import_toml_parser()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 try:
     from scripts.ci.spdx_license_policy import (
@@ -1851,10 +1841,7 @@ def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
             raise GateError(CAPTURE_INCOMPLETE, "Cargo source checkout cannot be bound") from error
 
     def source_blob(path: Path) -> bytes:
-<<<<<<< HEAD
-=======
         """Read a regular source declaration bound to the selected Git commit."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         try:
             relative = path.relative_to(bound_root)
             if any((bound_root / parent).is_symlink() for parent in (relative, *relative.parents)):
@@ -2146,10 +2133,7 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
         raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
 
     def blob(path: str) -> bytes:
-<<<<<<< HEAD
-=======
         """Read one bounded regular blob from the selected source commit."""
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         entry = subprocess.check_output(
             ["git", "-C", str(source), "ls-tree", source_sha, "--", path], text=True)
         if not entry.startswith("100644 blob "):

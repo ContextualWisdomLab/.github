@@ -144,10 +144,7 @@ anyio==4.14.2 \
     --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
     --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
     # via
-<<<<<<< HEAD
-=======
     #   -r requirements-strix-ci.txt
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     #   google-genai
     #   gql
     #   httpx
@@ -1123,26 +1120,6 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
-<<<<<<< HEAD
-litellm==1.94.1 \
-    --hash=sha256:001be1cde7950f2ae484e450ab2f8e93ab8791e5e8d4da560d21f2fb456b0b47 \
-    --hash=sha256:07c1771315d7d26e242ef90b9336bcbc49a52158ff72ee640b4f8160cc963147 \
-    --hash=sha256:156c62022320bccab7c3507b6b13400b26e55b74c799e5a4a2d5bf904a77368f \
-    --hash=sha256:1b0bc4a2373e54f2bd4c13f8ef9fda3839bfb2e1173fb4bcea3150b07d4c59bc \
-    --hash=sha256:2103e9b155d6545b48936d2ac2e614661613adb9e3d081c58c7303ca5dd6c656 \
-    --hash=sha256:44e55a55270dee8bb85e063940c368d32040e6db66765c55db4b884fc002d4ef \
-    --hash=sha256:66bc95498af3ab687ce7570704cb274bcf1d78049afa87a9f5f64db45b72847d \
-    --hash=sha256:a6f5274876f20dd5c9e53ba3da502e94f5b3c681c5027a0398231d0caae4aacd \
-    --hash=sha256:af37356cf5b325a2887c40ff772b39e1e0865b988297c544b29123ffb13fd1b9 \
-    --hash=sha256:b0145d6b9fb718d12b7242ce5c975123f4dbfecd7b8ed1eb6a6939b0e506c946 \
-    --hash=sha256:c5c9247d9fea8fe7cda851f7b15db560ee547a8325a0af86048967edf3ccfa15 \
-    --hash=sha256:cfef0468bda9c1ba8f554bebc2966f08436f1ead98017e7ed2d7663ece77f1c2 \
-    --hash=sha256:d14e5812b5f36af2ab45461ee0c925251bc07daf65c33b8f2ce3fd3ec1235eae \
-    --hash=sha256:e9b6d92e305d96bdadb8a5ccd343b1ac188de142fbd6c91f72c75416b8c25c48 \
-    --hash=sha256:e9effe4c1e9206740b4bb4c98142ea1f71bae57e49df007cd25ef24b0ce4563f \
-    --hash=sha256:ffa9a6cd9b6205d60b02ffc0b7f077a03693d835b06d2a34bfeaabb4f073c08a
-    # via
-=======
 litellm==1.94.3 \
     --hash=sha256:0ddb60a439cc361e69bb4f550a78d1656c8edad6753f8fece14f60bbd0fcd054 \
     --hash=sha256:1017f29a6f72a16ef1b026208b3e52c7197b91ae848b396c817bfb051f86c300 \
@@ -1182,7 +1159,6 @@ litellm==1.94.3 \
     --hash=sha256:fafb59618a85f3c96d38a123ac53187c75e722a6b4e34d305063661262f62ea8
     # via
     #   -r requirements-strix-ci.txt
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     #   openai-agents
     #   strix-agent
 markdown-it-py==4.2.0 \
@@ -1857,19 +1833,12 @@ pygments==2.20.0 \
     --hash=sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f \
     --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
     # via rich
-<<<<<<< HEAD
-pyjwt==2.13.0 \
-    --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
-    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
-    # via mcp
-=======
 pyjwt==2.15.1 \
     --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
     --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
     # via
     #   -r requirements-strix-ci.txt
     #   mcp
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 pyopenssl==26.4.0 \
     --hash=sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7 \
     --hash=sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c
@@ -2401,18 +2370,11 @@ typing-inspection==0.4.4 \
     #   mcp
     #   pydantic
     #   pydantic-settings
-<<<<<<< HEAD
-urllib3==2.7.0 \
-    --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
-    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
-    # via
-=======
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
     # via
     #   -r requirements-strix-ci.txt
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     #   docker
     #   requests
 uvicorn==0.49.0 \

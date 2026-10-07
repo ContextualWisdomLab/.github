@@ -11,10 +11,7 @@ import base64
 import hashlib
 import io
 import json
-<<<<<<< HEAD
-=======
 import subprocess
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 import tarfile
 import zipfile
 from pathlib import Path
@@ -742,8 +739,6 @@ def test_benign_cmdclass_without_lifecycle_override_passes(tmp_path: Path) -> No
     assert gate.gate(capture).failures == []
 
 
-<<<<<<< HEAD
-=======
 def test_rust_hook_without_process_or_network_namespace_is_benign() -> None:
     """Ordinary Rust build code stays allowed while network namespaces are detected."""
     assert gate.detect_install_hooks({"build.rs": "fn main() { println!(\"cargo:rerun\"); }"}) == []
@@ -752,7 +747,6 @@ def test_rust_hook_without_process_or_network_namespace_is_benign() -> None:
     ]
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 # ---------------------------------------------------------------------------
 # RED: Strix structured evidence
 # ---------------------------------------------------------------------------
@@ -914,8 +908,6 @@ def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -
         gate._load_selections(capture)
 
 
-<<<<<<< HEAD
-=======
 def test_capture_license_selection_cli_publishes_the_exact_commit_blob(tmp_path: Path) -> None:
     """The CLI command delegates to the same exact-commit capture boundary."""
     source = tmp_path / "source"
@@ -941,7 +933,6 @@ def test_capture_license_selection_cli_publishes_the_exact_commit_blob(tmp_path:
     assert (capture / "license-selections.json").read_text() == "[]"
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_selection_loader_refuses_dangling_link_and_nonstring_choice(tmp_path: Path) -> None:
     path = tmp_path / "license-selections.json"
     path.symlink_to(tmp_path / "missing")
@@ -981,8 +972,6 @@ def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path,
     assert not capture.exists()
 
 
-<<<<<<< HEAD
-=======
 def test_selection_capture_refuses_unbound_sources_and_payload_size_races(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1035,7 +1024,6 @@ def test_selection_capture_refuses_unbound_sources_and_payload_size_races(
         gate.capture_license_selections(source, regular_sha, capture)
 
 
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 @pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"])
 def test_cargo_legacy_pair_keeps_choice_and_text_checks(expression: str) -> None:
     evidence = _cargo_evidence(license_expression=expression)
@@ -1132,11 +1120,6 @@ def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> N
     assert decision.allowed == (selection is not None)
 
 
-<<<<<<< HEAD
-@pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
-                                      "changed_manifest", "changed_lock", "captured_lock",
-                                      "symlink", "identity", "missing_dev"])
-=======
 @pytest.mark.parametrize(
     ("mutation_name", "expected_message"),
     [
@@ -1230,7 +1213,6 @@ def test_reviewed_source_notice_refuses_unbound_git_evidence(
                                       "changed_manifest", "changed_lock", "captured_lock",
                                       "symlink", "identity", "missing_dev", "matching_dev_lock",
                                       "changed_dev_lock"])
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
     import subprocess
 
@@ -1245,10 +1227,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     lock = capture / "cargo/Cargo.lock"
     lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
     (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
-<<<<<<< HEAD
-    if mutation == "missing_dev":
-        (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
-=======
     if mutation in {"missing_dev", "matching_dev_lock", "changed_dev_lock"}:
         (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
         if mutation in {"matching_dev_lock", "changed_dev_lock"}:
@@ -1257,7 +1235,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
             dev_lock = ((source / "Cargo.lock").read_bytes() if mutation == "matching_dev_lock"
                         else b"different development lock\n")
             (dev / "Cargo.lock").write_bytes(dev_lock)
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     def git(*args):
         return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
     git("init", "-q")
@@ -1275,8 +1252,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id"}]})
     if mutation == "wrong_sha":
         sha = "a" * 40
-<<<<<<< HEAD
-=======
     elif mutation == "nonexact_sha":
         sha = "short"
     elif mutation == "foreign_workspace":
@@ -1291,7 +1266,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
         subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c",
                         "user.email=fixture@example.invalid", "commit", "-qm", "workspace version"], check=True)
         sha = git("rev-parse", "HEAD")
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     elif mutation == "foreign_path":
         metadata["packages"][-1]["manifest_path"] = str(tmp_path / "foreign/Cargo.toml")
     elif mutation == "changed_manifest":
@@ -1309,16 +1283,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     elif mutation == "identity":
         metadata["packages"][-1]["name"] = "foreign-core"
     _write(path, metadata)
-<<<<<<< HEAD
-    if mutation == "missing_dev":
-        release = json.loads((capture / "release.json").read_text())
-        release["source_sha"] = sha
-        _write(capture / "release.json", release)
-        with pytest.raises(gate.GateError, match="development Cargo graph is missing"):
-            gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
-        return
-    if mutation is not None:
-=======
     if mutation in {"missing_dev", "matching_dev_lock", "changed_dev_lock"}:
         release = json.loads((capture / "release.json").read_text())
         release["source_sha"] = sha
@@ -1335,7 +1299,6 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
             gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
         return
     if mutation not in {None, "workspace_version"}:
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
             gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
                                   source_sha=sha)

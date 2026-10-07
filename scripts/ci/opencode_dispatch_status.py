@@ -11,19 +11,13 @@ from typing import Any, Sequence
 try:
     from opencode_existing_approval_gate import (
         OPENCODE_APP_APPROVAL_AUTHORS,
-<<<<<<< HEAD
-=======
         coverage_summary_rejection_reason,
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         review_rejection_reason,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from scripts.ci.opencode_existing_approval_gate import (
         OPENCODE_APP_APPROVAL_AUTHORS,
-<<<<<<< HEAD
-=======
         coverage_summary_rejection_reason,
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         review_rejection_reason,
     )
 
@@ -51,10 +45,7 @@ def decide_status(
     *,
     model_outcome: str,
     coverage_result: str,
-<<<<<<< HEAD
-=======
     coverage_summary: str,
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     expected_head: str,
     pull_request: dict[str, Any],
     reviews: Sequence[dict[str, Any]],
@@ -63,11 +54,8 @@ def decide_status(
     live_head = str((pull_request.get("head") or {}).get("sha") or "")
     if coverage_result != "success":
         reason = "OpenCode coverage evidence did not pass for the current head."
-<<<<<<< HEAD
-=======
     elif coverage_summary_rejection_reason(coverage_summary):
         reason = "OpenCode coverage decision is missing, non-passing, or ambiguous."
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     elif not expected_head or live_head.lower() != expected_head.lower():
         reason = "OpenCode status target is stale or the live PR head is unavailable."
     elif not _has_current_approval(reviews, expected_head):
@@ -88,10 +76,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-outcome", required=True)
     parser.add_argument("--coverage-result", required=True)
-<<<<<<< HEAD
-=======
     parser.add_argument("--coverage-summary", required=True)
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--pull-request-file", required=True, type=Path)
     parser.add_argument("--reviews-file", required=True, type=Path)
@@ -110,10 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             decide_status(
                 model_outcome=args.model_outcome,
                 coverage_result=args.coverage_result,
-<<<<<<< HEAD
-=======
                 coverage_summary=args.coverage_summary,
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
                 expected_head=args.expected_head,
                 pull_request=pull_request,
                 reviews=reviews,

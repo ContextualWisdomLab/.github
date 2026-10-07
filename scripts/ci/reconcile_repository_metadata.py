@@ -16,11 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-<<<<<<< HEAD
-from urllib.error import URLError
-=======
 from urllib.error import HTTPError, URLError
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -42,11 +38,6 @@ class _NoPagesRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         """Raise an HTTPError instead of following the redirect."""
 
-<<<<<<< HEAD
-        from urllib.error import HTTPError
-
-=======
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
         raise HTTPError(req.full_url, code, msg, headers, fp)
 
 
@@ -254,9 +245,6 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
             if not response.read(1):
                 raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
-<<<<<<< HEAD
-        raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
-=======
         try:
             raise RuntimeError(
                 f"GitHub Pages is not reachable for {repository}"
@@ -264,7 +252,6 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
         finally:
             if isinstance(exc, HTTPError):
                 exc.close()
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
 
 
 def _repository_file_exists(repository: str, default_branch: str, path: str) -> bool:

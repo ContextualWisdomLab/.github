@@ -80,8 +80,6 @@ cancelled) is the floor under a sustained burst.
 
 The review sidecar and its direct contract tests are intentionally outside this
 change.
-<<<<<<< HEAD
-=======
 
 ## 2026-09-12 correction: fail closed without a same-tree commit
 
@@ -95,4 +93,3 @@ or GitHub-platform repair that naturally produces new exact-head evidence.
 Last-push protection requires an independent approval on the unchanged head.
 The scheduler never manufactures a commit merely to wake checks or rotate the
 identity being approved.
->>>>>>> 38a1692b (merge: integrate latest review authority into CodeQL owner)
