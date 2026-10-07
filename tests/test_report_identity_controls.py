@@ -9,9 +9,11 @@ CHANGED = "scripts/ci/strix_quick_gate.sh"
 @pytest.mark.parametrize("text", [
     "Reviewed `scripts/ci/strix_quick_gate.sh`.",
     "Reviewed scripts/ci/strix_quick_gate.sh.",
+    "Reviewed scripts/ci/strix_quick_gate.sh:42.",
     "Scope: scripts/ci/. Reviewed strix_quick_gate.sh.",
     "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/`.",
     "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh`.",
+    "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh:42:7`.",
 ])
 def test_valid_identity_controls(text, tmp_path):
     """Complete paths and scoped directories remain valid report identities."""
