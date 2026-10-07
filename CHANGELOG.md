@@ -1,12 +1,3 @@
-### Provenance tests execute real Git ancestry checks
-
-- The documented-opener lineage test no longer replaces every
-  `subprocess.run` result with success. Its existing `git cat-file -e` and
-  `git merge-base --is-ancestor` assertions now exercise the repository
-  evidence boundary. A RED AST integrity check reproduced the bypass on
-  `4410de838`; the same check and Python byte compilation pass after
-  `1f28e248b`. Hosted full-suite and security evidence remain required.
-
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
