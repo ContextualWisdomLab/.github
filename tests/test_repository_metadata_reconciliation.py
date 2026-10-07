@@ -72,6 +72,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "cwl-telemetry": ("opentelemetry", "observability"),
         "mightyETL": ("etl", "change-data-capture"),
         "quarantine-sandbox-runtime": ("sandbox-runtime", "workload-isolation"),
+        "disksage": ("disk-space", "local-first"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
