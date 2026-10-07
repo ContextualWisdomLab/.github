@@ -146,6 +146,24 @@
       "deepwiki": true,
       "pages": true
     },
+    "disksage": {
+      "description": "DiskSage — local-first cross-platform disk inventory, evidence-backed reclaim planning, and reversible cleanup with an offline advisor.",
+      "topics": [
+        "disk-space",
+        "disk-management",
+        "local-first",
+        "desktop-app",
+        "file-management",
+        "data-recovery",
+        "llm",
+        "rust",
+        "tauri",
+        "svelte",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
