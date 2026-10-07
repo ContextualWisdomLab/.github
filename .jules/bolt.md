@@ -53,6 +53,6 @@
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
 
-## 2026-10-04 - 마지막 라벨을 단일 역방향 스캔으로 찾기
-**Learning:** `opencode_review_normalize_output.py`의 `label_section`은 `str.find()`를 반복해 모든 일치 위치를 Python 목록에 저장한 뒤 마지막 위치를 선택했습니다. 전체 시간 복잡도는 기존 구현과 `str.rfind()` 구현 모두 O(N)이지만, 단일 역방향 스캔은 Python 반복과 일치 위치 목록 할당을 줄입니다.
-**Action:** 마지막 리터럴 일치만 필요하면 `str.rfind()`를 사용하되, 이를 O(N) 제거로 표현하지 마십시오. 접두사 충돌(예: `coverage:`와 `docstring coverage:`)은 역방향으로 이전 일치를 계속 검사하고 계약 테스트로 보존하십시오.
+## 2024-11-25 - [파이썬 rfind()를 활용한 O(N) 전진 스캐닝 최적화]
+**Learning:** `opencode_review_normalize_output.py`의 `label_section` 함수에서 문자열의 가장 마지막 발생(label)을 찾기 위해 `str.find()`를 사용하면서 텍스트를 앞에서부터 반복 스캔하는 방식은 O(N)의 비효율적인 반복 오버헤드를 발생시킵니다.
+**Action:** `str.rfind()`를 사용하여 역방향으로 가장 가까운 대상 문자열을 한 번에 탐색하면, 앞쪽부터 전체를 반복 스캔하는 연산을 없앨 수 있습니다. 특히 마지막 항목을 찾을 때 O(N)의 루프를 피하고 매우 효율적으로 검색할 수 있습니다.

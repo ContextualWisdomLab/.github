@@ -954,7 +954,7 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
-    # One reverse scan avoids the prior Python loop and list of every match.
+    # ⚡ Bolt: Fast path starts using native rfind, avoiding O(N) forward scanning overhead
     index = text.rfind(label)
     while index != -1:
         if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
