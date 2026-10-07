@@ -231,9 +231,8 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
 
 
-def test_documented_opener_lineage_references_published_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_documented_opener_lineage_references_published_commits() -> None:
     """Owner evidence must name the published commits that carry each repair."""
-    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: type('MockProc', (object,), {'returncode': 0})())
     doctoring = Path(
         "docs/doctoring/github-api-url-authority-2248.md"
     ).read_text(encoding="utf-8")
