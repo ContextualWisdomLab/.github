@@ -1,3 +1,12 @@
+### Repository identifiers validate owner and repository segments independently
+
+- Queue-health repository identifiers now reject a trailing dot in either the
+  owner or repository segment while preserving valid leading-dot names such as
+  `.github`. RED commit `c3963dc88` reproduces `owner./repo`; source commit
+  `2f29c4b30` repairs the segment boundary and adds safe punctuation cases.
+  The focused regression and `GITHUB_ACTIONS=true` harness pass locally.
+  Hosted exact-head security Checks and independent review remain required.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

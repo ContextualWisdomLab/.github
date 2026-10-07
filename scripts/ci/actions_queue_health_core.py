@@ -17,7 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REPOSITORY_PATTERN = re.compile(
+    r"^(?!.*\.\.)(?![^/]*\./)[A-Za-z0-9_.-]+/(?![^/]*\.$)[A-Za-z0-9_.-]+$"
+)
 QUEUE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED"}
 TERMINAL_STATES = {"COMPLETED"}
 DEFAULT_QUEUE_AGE_SLO_SECONDS = 900
