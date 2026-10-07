@@ -54,3 +54,6 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+## 2024-10-07 - Optimize string finding with `rfind` over nested iterative scans
+**Learning:** CI 로그와 같은 방대한 텍스트 증거(evidence)에서 구조화된 블록의 맨 마지막 경계(마지막 라벨의 시작 위치 등)를 찾을 때, `text.find(label)`를 왼쪽부터 오른쪽으로 반복 탐색하는 것은 O(N)의 성능 저하를 일으킵니다.
+**Action:** `text.rfind(label)`을 사용하여 뒤에서부터 직접 검색함으로써 불필요한 순방향 탐색을 제거하고 효율적으로 최적화했습니다.
