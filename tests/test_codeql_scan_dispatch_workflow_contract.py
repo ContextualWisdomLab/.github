@@ -991,6 +991,25 @@ def test_codeql_scan_dispatch_validate_step_skips_stale_head_sha(tmp_path):
     assert f"repos/ContextualWisdomLab/naruon/compare/{'b' * 40}...{'d' * 40}" in calls
 
 
+def test_codeql_scan_dispatch_stale_head_does_not_mask_base_mismatch(tmp_path):
+    """Proven head ancestry cannot retire a dispatch bound to a different base."""
+    moved_head_and_base = _matching_pull_request()
+    moved_head_and_base["head"]["sha"] = "d" * 40
+    moved_head_and_base["base"]["sha"] = "e" * 40
+
+    result = _run_validate_step(
+        tmp_path,
+        {"FAKE_HEAD_COMPARE_JSON": AHEAD_COMPARE_JSON},
+        moved_head_and_base,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "does not match the live pull request: base_sha" in result.stdout
+    assert "::notice::Skipping stale" not in result.stdout
+    outputs_path = result.output_path  # type: ignore[attr-defined]
+    assert not outputs_path.exists() or "stale=true" not in outputs_path.read_text(encoding="utf-8")
+
+
 def test_codeql_scan_dispatch_head_mismatch_without_proven_ancestry_stays_fail_closed(tmp_path):
     """A head mismatch is retired only when the live head provably descends from the dispatched one.
 

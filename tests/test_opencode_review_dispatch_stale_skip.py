@@ -143,6 +143,24 @@ def test_moved_head_dispatch_is_skipped_with_notice(tmp_path):
     assert f"repos/{TARGET}/compare/{'b' * 40}...{'c' * 40}" in calls
 
 
+def test_moved_head_dispatch_does_not_mask_base_mismatch(tmp_path):
+    """Proven head ancestry cannot retire a dispatch bound to a different base."""
+    pull_request = _live_pull_request()
+    pull_request["head"]["sha"] = "c" * 40
+    pull_request["base"]["sha"] = "e" * 40
+
+    result = _run_validate_step(
+        tmp_path,
+        pull_request,
+        {"FAKE_HEAD_COMPARE_JSON": AHEAD_COMPARE_JSON},
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "does not match the live pull request: base_sha" in result.stdout
+    assert "::notice::Skipping stale" not in result.stdout
+    assert "stale=true" not in _outputs(result)
+
+
 def test_head_mismatch_without_proven_ancestry_stays_fail_closed(tmp_path):
     """Only a live head that provably descends from the dispatched head retires the run.
 
