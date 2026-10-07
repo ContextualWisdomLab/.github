@@ -97,8 +97,8 @@ exit codes 0/1/2/3 and checking the live event payload.
 The external sources support the goals, not these repository-specific parser
 mechanics. ISO/IEC/IEEE 29148 defines requirements-engineering processes and
 their information items, which supports maintaining explicit links from work
-to registered requirements (International Organization for Standardization,
-2018). PROV-O defines interoperable provenance descriptions across systems,
+to registered requirements
+(International Organization for Standardization, 2018). PROV-O defines interoperable provenance descriptions across systems,
 which supports recording input digests that bind a report to the artifacts
 from which it was derived (World Wide Web Consortium, 2013). Header anchoring,
 exit codes and live-event parsing remain local design choices validated by the
