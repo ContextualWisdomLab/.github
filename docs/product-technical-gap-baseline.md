@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-07 OpenCode unambiguous JSON-member authority
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must derive exact-run authority from an unambiguous JSON object. Repeated member names at any depth are invalid evidence; the PRD goal and loop remain unchanged. | `OpenCode model output → duplicate-aware JSON decoder → exact-run identity validation → review receipt gate`. The decoder boundary rejects ambiguity before domain validation, so neither outer identity nor nested evidence can acquire last-wins semantics. | No persistence, schema, table, or migration change. | Draft `ContextualWisdomLab/.github#2564@3ecb54b896fbf4c9b7fea1bf8749c28cc558c0cd` used Python's default `json.loads`, which retains only the last repeated member. RED proves `{"value":1,"value":2}` was accepted as one object and a stale first `head_sha` could be replaced by a later current-head value, producing exit 0. | Decode through the standard library with an `object_pairs_hook` that rejects the first repeated name at every nesting depth. Apply the same boundary to pure-JSON and mixed-prose recovery, preserve the original artifact on rejection, and bind the diagnostic-label branch so recovery authority cannot follow extra prose. Require fresh exact-head hosted Checks and a qualifying independent approval before merge. | **Proposed / local GREEN:** focused normalizer 174/174; target module 100% statement, branch, and public-doc coverage; warning-fatal repository suite 5,375 passed, 10 skipped, 40 subtests. Exact-head hosted evidence remains required. |
+
 ## 2026-10-03 OpenCode tilde-fence authority boundary
 
 | PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |

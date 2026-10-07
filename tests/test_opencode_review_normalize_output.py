@@ -2518,6 +2518,34 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects("no json here") == []
 
 
+def test_iter_json_objects_rejects_duplicate_members_at_any_depth():
+    """Duplicate JSON members cannot gain last-wins control authority."""
+    assert norm.iter_json_objects('{"value": 1, "value": 2}') == []
+    assert (
+        norm.iter_json_objects(
+            'prefix {"wrapper": {"control": true, "control": true}} suffix'
+        )
+        == []
+    )
+
+
+def test_main_rejects_duplicate_current_run_identity_without_rewriting(
+    tmp_path, capsys
+):
+    """A later duplicate identity cannot replace an earlier stale identity."""
+    output = tmp_path / "duplicate-identity-control.txt"
+    original = json.dumps(control()).replace(
+        '"head_sha": "head"',
+        '"head_sha": "stale", "head_sha": "head"',
+        1,
+    )
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "no top-level current-run control JSON object" in capsys.readouterr().err
+
+
 def test_iter_json_objects_skips_non_json_prose_delimiters():
     """Unclosed prose delimiters cannot hide a later complete control object."""
     control = {
@@ -2958,6 +2986,22 @@ def test_iter_json_objects_requires_diagnostic_label_for_prose_recovery(
     }
 
     assert norm.iter_json_objects(malformed_prefix + json.dumps(nested_control)) == []
+
+
+def test_iter_json_objects_requires_diagnostic_opener_immediately_after_label():
+    """Extra diagnostic prose cannot authorize nested control recovery."""
+    nested_control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+    }
+
+    assert (
+        norm.iter_json_objects(
+            "Diagnostic: ignored [pending\n" + json.dumps(nested_control)
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize("approve_first", [True, False])

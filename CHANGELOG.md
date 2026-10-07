@@ -1,3 +1,21 @@
+### OpenCode duplicate JSON members cannot replace review identity
+
+- Reject repeated object member names at every JSON nesting depth before a
+  value can become review-control evidence. A later duplicate `head_sha`,
+  `run_id`, or `run_attempt` can no longer replace the earlier value through
+  Python's default last-wins decoder behavior.
+- RED against draft PR #2564 head
+  `3ecb54b896fbf4c9b7fea1bf8749c28cc558c0cd` reproduced both a direct
+  duplicate-object admission and an exact-run identity rewrite. The bounded
+  repair uses the standard decoder's `object_pairs_hook`, preserves mixed
+  prose recovery and non-finite-number behavior, and fails closed without
+  rewriting the model artifact.
+- Focused normalizer verification is 174/174 with 100% statement, branch, and
+  public-doc coverage for the target module. The warning-fatal repository
+  suite passes 5,375 tests, 10 optional skips, and 40 subtests. Fresh
+  exact-head hosted Checks and a qualifying independent approval remain
+  required before ordinary merge.
+
 ### OpenCode tilde fence delimiter lines cannot carry approval evidence
 
 - Classify CommonMark tilde fence delimiters with the same line-local,

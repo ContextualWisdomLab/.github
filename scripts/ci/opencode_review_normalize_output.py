@@ -1446,14 +1446,33 @@ def valid_control(
     return normalized
 
 
+class DuplicateJsonMemberError(ValueError):
+    """Signal that an object repeats a member name."""
+
+
+def load_json_without_duplicate_members(text: str) -> Any:
+    """Decode JSON while rejecting ambiguous object member authority."""
+
+    def reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one object only when every member name is unique."""
+        value: dict[str, Any] = {}
+        for key, member in pairs:
+            if key in value:
+                raise DuplicateJsonMemberError(key)
+            value[key] = member
+        return value
+
+    return json.loads(text, object_pairs_hook=reject_duplicate_members)
+
+
 def iter_json_objects(text: str) -> list[Any]:
     """Extract top-level JSON values without promoting nested control objects."""
     values: list[Any] = []
 
     try:
         # Fast path for pure JSON payloads; preserve the single top-level value.
-        return [json.loads(text)]
-    except (json.JSONDecodeError, RecursionError):
+        return [load_json_without_duplicate_members(text)]
+    except (DuplicateJsonMemberError, json.JSONDecodeError, RecursionError):
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
@@ -1649,8 +1668,10 @@ def iter_json_objects(text: str) -> list[Any]:
         if blocked or parent_start in matched_starts:
             continue
         try:
-            values.append(json.loads(text[start_index:end_index]))
-        except (json.JSONDecodeError, RecursionError):
+            values.append(
+                load_json_without_duplicate_members(text[start_index:end_index])
+            )
+        except (DuplicateJsonMemberError, json.JSONDecodeError, RecursionError):
             pass
 
     return values
