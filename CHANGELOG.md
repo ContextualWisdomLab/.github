@@ -1,3 +1,13 @@
+### Stale dispatch retirement validates stable PR identity first
+
+- CodeQL and OpenCode dispatch validators now reject malformed live metadata,
+  cross-repository identity where forbidden, and base/ref disagreements before
+  treating a proven superseded head as stale. A newer descendant head remains
+  the only head-SHA mismatch that can retire an open-PR dispatch successfully;
+  unrelated identity drift fails closed. Regression evidence is 132 passed and
+  1 skipped in both local and Actions mode, and the full warnings-as-errors
+  suite is 5,177 passed, 11 skipped, and 40 subtests passed.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
