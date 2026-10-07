@@ -410,7 +410,8 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
   circular-admission exception requires separate live authorization, exact-head
   evidence, and immediate removal after the guarded operation; an `ALWAYS`
   actor turns that exception into an unaudited ordinary merge path. The central
-  audit therefore treats any standing bypass actor as configuration drift.
+  audit therefore treats any standing bypass actor, or a missing or malformed
+  `bypass_actors` collection that cannot prove its absence, as configuration drift.
 - Existing open PRs may need a new push or base update before the latest required workflow SHA appears on their current head.
 - The central OpenCode workflow now routes model-backed review through the canonical contextual-orchestrator contract; model/provider selection and fallback belong to that owner boundary, not workflow-local heuristics or paid fallback.
 - The central OpenCode config includes a read-only `code-reviewer` subagent for focused review passes. The subagent may read, grep, glob, and run safe local verification commands, but it must not edit files, stage changes, commit, push, install dependencies, mutate branches, or touch production state.
