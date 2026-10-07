@@ -118,6 +118,8 @@ def test_shorten_marks_cut_text():
         ("docs/G-01 and /G-02", set()),
         ("G-03\n```\nG-01 never closed", {"G-03"}),
         ("  ~~~~\nG-01\n  ~~~~\nG-02", {"G-02"}),
+        ("```bad`info\nG-01", {"G-01"}),
+        ("`unmatched `` G-01", {"G-01"}),
     ],
 )
 def test_extract_mentions(text, expected):
