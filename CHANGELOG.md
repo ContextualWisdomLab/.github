@@ -1,3 +1,13 @@
+### Strix report identity rejects colon-suffixed file lookalikes
+
+- The completed-report scope validator no longer treats every colon as proof
+  that a changed path token ended. A distinct Linux filename such as
+  `scripts/ci/strix_quick_gate.sh:backup` now fails closed, including beneath
+  the private Strix scope root, while numeric `path:line` and
+  `path:line:column` evidence remains valid. Focused evidence is 39 tests with
+  100% statement and branch coverage for `strix_report_scope.py`; hosted
+  exact-head Checks and qualifying independent review remain required.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
