@@ -290,3 +290,18 @@ def test_doctoring_qualifies_foreign_semgrep_revision_owner() -> None:
     )
 
     assert expected_link in doctoring
+
+
+def test_published_lineage_guard_rejects_nonzero_unpublished_g17_evidence() -> None:
+    """A nonzero commit-shaped but unpublished G-17 identifier must fail closed."""
+    baseline = Path("docs/product-technical-gap-baseline.md").read_text(
+        encoding="utf-8"
+    )
+    mutated = baseline.replace(
+        "57477289ebec5631b0c48f0bc419f336dbe19deb",
+        "1111111111111111111111111111111111111111",
+        1,
+    )
+
+    with pytest.raises(AssertionError, match="not published"):
+        _assert_g17_evidence_is_published(mutated)
