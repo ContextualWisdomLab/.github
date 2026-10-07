@@ -94,6 +94,16 @@ an answer, so it contributed nothing. The implementation combines the points
 both answers shared: the header-anchored register, removal of code and URLs,
 exit codes 0/1/2/3 and checking the live event payload.
 
+The external sources support the goals, not these repository-specific parser
+mechanics. ISO/IEC/IEEE 29148 defines requirements-engineering processes and
+their information items, which supports maintaining explicit links from work
+to registered requirements (International Organization for Standardization,
+2018). PROV-O defines interoperable provenance descriptions across systems,
+which supports recording input digests that bind a report to the artifacts
+from which it was derived (World Wide Web Consortium, 2013). Header anchoring,
+exit codes and live-event parsing remain local design choices validated by the
+tests below.
+
 A separate read-only Codex pass then reviewed the implementation
 adversarially. It timed out before writing a final answer, so its partial
 reasoning trace was used. Each candidate finding was reproduced before it was
@@ -117,9 +127,20 @@ took 13.8 seconds. After the fixes, every probed input of 40,000 to 400,000
 repetitions finishes in about one second or less, and the time grows about
 linearly. Regression tests bound these cases.
 
+
+## References
+
+International Organization for Standardization. (2018).
+*ISO/IEC/IEEE 29148:2018 systems and software engineering—Life cycle
+processes—Requirements engineering.*
+https://www.iso.org/standard/72089.html
+
+World Wide Web Consortium. (2013, April 30). *PROV-O: The PROV ontology*
+(W3C Recommendation). https://www.w3.org/TR/prov-o/
+
 ## Verification
 
-- The focused suite passes: 55 tests in
+- The focused suite passes: 56 tests in
   `tests/test_gap_traceability_matrix.py`, under both normal and
   `GITHUB_ACTIONS=true` runs.
 - The new module has 100% statement and branch coverage, and `interrogate`
