@@ -125,12 +125,14 @@ accepted:
   write failure exited 1, the "unlinked" code. Both are fixed.
 - `"isDraft": "false"` was read as a draft. Only JSON `true` counts now.
 
-A timing probe found two quadratic regular expressions that hostile PR bodies
-could trigger: an unclosed `<!--` repeated many times, and a long run of
-hyphenated letters treated as a URL scheme. 100,000 repetitions of `G-01-`
-took 13.8 seconds. After the fixes, every probed input of 40,000 to 400,000
-repetitions finishes in about one second or less, and the time grows about
-linearly. Regression tests bound these cases.
+A timing probe found quadratic behavior that hostile PR bodies could trigger,
+including an unclosed `<!--` repeated many times and a long run of hyphenated
+letters treated as a URL scheme. A fresh exact-head probe reproduced the
+unclosed-comment case after the earlier regex fix, so comment removal now uses
+one forward `find` scan. 100,000 repetitions of `G-01-` took 13.8 seconds
+before the repairs. At exact head, all six hostile fixtures of 80,000 to
+200,000 characters complete in 0.001 to 0.029 seconds. Regression tests bound
+these cases.
 
 
 ## References
@@ -154,7 +156,8 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/variables
   `GITHUB_ACTIONS=true` runs.
 - Exact head adds one documentation contract plus four Markdown-boundary
   cases. Direct execution passes all three defect reproductions, five adjacent
-  regression cases, Python compilation and the six citation assertions. The
+  regression cases, all six hostile-input performance fixtures (worst:
+  0.029 seconds), Python compilation and the six citation assertions. The
   complete 60-test pytest rerun remains required before merge.
 - The new module has 100% statement and branch coverage, and `interrogate`
   reports 100% docstring coverage for it.
