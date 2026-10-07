@@ -1,6 +1,32 @@
 Warning: truncated output (original token count: 92867)
 Total output lines: 3890
 
+## 2026-10-07 — Conflict-marker publication recovery (Proposed)
+
+- **Gap:** `.github#2556@04947a8603433b6a5b69bb0da32f21f7d8320e07`
+  committed 978 literal conflict markers (326 complete triads across 85 files)
+  in an 86-file child delta. The
+  canonical OpenCode reasoning guard and its tests raised `SyntaxError`, and
+  central workflow YAML could not parse even though GitHub reported the PR
+  mergeable.
+- **RCA / repair:** The child replayed unresolved merge content rather than a
+  valid semantic delta. Its sole parent `f6d24596a872a17618527c20764fa83b659069d7`
+  already contains the reviewed JSONC token-separation repair. Ordinary-revert
+  only the defective child, retain it in ancestry, and restore the exact parent
+  tree before adding this evidence; do not choose conflict sides ad hoc.
+- **Context Map / flow:** Central `.github` owns workflow, review-control, and
+  parser integrity. `committed tree → conflict-marker scan → Python/YAML parse
+  → focused/full verification → exact-head hosted Checks`. No DB, UI,
+  ontology, ERD, or external contract changes apply.
+- **Evidence:** A strict conflict-marker scan of the exact defect head has 978
+  marker lines; canonical source and
+  test compilation exit 1, workflow YAML parsing fails, and `git diff --check`
+  exits 2. The ordinary revert restores the exact parent tree and its 23-test
+  focused guard before fresh full verification.
+- **Status:** **Proposed / merge HOLD** — publish only by non-force
+  fast-forward after live-head revalidation; then require fresh hosted
+  security/quality Checks and qualifying independent approval.
+
 ## 2026-09-12 — Source-neutral scheduler head mutations (Proposed)
 
 - **Gap:** The merge scheduler created same-tree child commits to recover zero-job workflow `startup_failure` runs and to manufacture a new identity for last-push approval. Neither path repaired source or platform state, and both invalidated otherwise valid exact-head Checks and reviews.

@@ -1,3 +1,13 @@
+### Restore executable control-plane files after conflict-marker publication
+
+- Ordinary-revert exact defect commit `04947a86`, whose 86-file child delta
+  committed 978 literal conflict markers (326 complete triads across 85 files)
+  and made canonical Python and workflow
+  YAML unparsable. The repair keeps the defective commit in ancestry and
+  restores the previously reviewed `f6d24596` tree exactly before adding this
+  receipt; it does not guess between conflict sides or discard valid JSONC
+  token-separation work.
+
 ### JSONC guard preserves whitespace between separated tokens
 
 - The OpenCode reasoning-effort guard no longer deletes a single-line block
