@@ -1,3 +1,13 @@
+### Central ruleset audit rejects standing bypass actors
+
+- The ruleset audit now fails closed when ruleset `18156473` exposes any
+  persistent bypass actor, including organization-admin `ALWAYS` entries, and
+  reports malformed bypass data explicitly. This closes the control-plane gap
+  exposed when LineageWeave PR #1153 reached `main` with failed exact-head
+  Checks and no independent approval. Exceptional circular admission remains
+  a time-bounded operator action with separate evidence; it is not a standing
+  ruleset entitlement.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

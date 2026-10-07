@@ -118,6 +118,43 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     )
 
 
+def test_central_ruleset_rejects_persistent_bypass_actor() -> None:
+    """A standing actor cannot bypass the exact-head review and check gates."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": 1,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset has persistent bypass actors: "
+        "['OrganizationAdmin:1:always']"
+    ]
+
+
+def test_central_ruleset_rejects_malformed_bypass_actor_data() -> None:
+    """Unreadable bypass configuration fails closed."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = "invalid"
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset bypass actor data is malformed"
+    ]
+
+
+def test_central_ruleset_describes_malformed_bypass_actor_entry() -> None:
+    """A malformed standing actor remains visible in the drift reason."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = ["invalid"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset has persistent bypass actors: ['<malformed>']"
+    ]
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
