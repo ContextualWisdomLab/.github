@@ -343,6 +343,10 @@ jobs:
           echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
         if: always()
+        # The reporter and SARIF upload above preserve the security verdict.
+        # Debug retention quota is observability only and must not turn a clean
+        # comparison into a failed security gate.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: osv-scan-debug
@@ -580,6 +584,10 @@ jobs:
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
+          # Runner groups can schedule onto different hosts. Reinstall the
+          # pinned binary instead of trusting a cache entry whose path or
+          # executable bit belongs to a previous runner.
+          cache: false
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
