@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
+   (`01bf92a3ec67a0e1f9b68978eb16b60301e985fd` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -294,3 +294,24 @@ all five, and auto-optimize routing by cost.
   per-agent attempt; it changes only *which* agent gets tried next, never any
   per-attempt timeout, consistent with the 2026-08-31 amendment above. No
   other contextual-orchestrator behavior changes with this pin advance.
+- **2026-09-25 amendment: adopt bounded 429 recovery in the review runtime.**
+  Advance the vendored pin from `767e67fbc6b881a452761f32abb69b9971b9b03b`
+  to `0d0637d032560417a9a08a8477c4aaf3a5942e0a`, the protected-main
+  revision containing the merged rate-limit admission repair (#1179). The
+  old runtime advanced to another provider after one 429 but returned a 429
+  when all eligible free routes were cooling. The new runtime honors a
+  provider cooldown within its bounded request budget and returns a typed
+  429 when no eligible route can recover in time. It keeps
+  `orchestrator/free` inside the admitted free pool and retains the default
+  null model timeout. Both revisions have byte-identical `requirements.lock`.
+  This pin change still needs protected delivery and a successful exact-head
+  Noema or OpenCode review; preflight success alone is not that evidence.
+
+- **2026-09-27 amendment: retain cooldown recovery with a patched dependency lock.**
+  The deployed pin is `01bf92a3ec67a0e1f9b68978eb16b60301e985fd`, a merged CO main revision containing
+  #1179 recovery and AnyIO 4.14.2. Auditing the earlier proposed `0d0637d0`
+  pin with pip-audit 2.10.1 found CVE-2026-63374, CVE-2026-64847, and
+  CVE-2026-63349 in AnyIO 4.14.1. The replacement hash lock has no known
+  vulnerabilities in the same audit. The earlier byte-identical-lock claim
+  describes the superseded proposal, not this amended target. No review
+  completion or runtime provider success is inferred from the lock audit.

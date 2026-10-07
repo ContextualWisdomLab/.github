@@ -265,3 +265,17 @@ def test_prepare_marks_exhausted_capacity_budget_ineligible(
     assert "transport_retry_eligible=false" in written
     assert "transport_retry_delay_seconds=" not in written
     assert "automatic re-dispatch budget is exhausted" in capsys.readouterr().out
+
+
+def test_sidecar_failure_outputs_reach_existing_continuation():
+    """Startup stays failed while its capacity outputs reach the same-head job."""
+    text = (ROOT / '.github/workflows/noema-review.yml').read_text()
+    classify = text.split('      - name: Classify sidecar provider-capacity failure', 1)[1].split('      - name:', 1)[0]
+    assert "if: failure() && steps.noema_sidecar.outcome == 'failure'" in classify
+    assert '--preflight-report' in classify
+    provision = text.split('      - name: Provision contextual-orchestrator review sidecar', 1)[1].split('      - name:', 1)[0]
+    assert 'continue-on-error' not in provision
+    assert 'rm -f "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"' in provision
+    for name in ('transport_capacity_unavailable', 'transport_retry_eligible',
+                 'transport_retry_delay_seconds', 'transport_retry_next_attempt'):
+        assert f'steps.noema_prepare.outputs.{name} || steps.noema_sidecar_failure.outputs.{name}' in text
