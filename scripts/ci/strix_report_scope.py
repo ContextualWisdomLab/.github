@@ -10,7 +10,11 @@ from pathlib import Path
 
 # The PR scan target is a private directory holding only the changed files, so
 # a path under it (as Strix reports it) is bound to this invocation's scope.
-PATH_TOKEN_END = r"(?=$|[\s`\"'<>,;:!?)]|\.(?![\w./-]))"
+PATH_TOKEN_END = (
+    r"(?=$|[\s`\"'<>,;!?)]"
+    r"|:(?=[0-9]+(?::[0-9]+)?(?:$|[\s`\"'<>,;!?)]|\.(?![\w./-])))"
+    r"|\.(?![\w./-]))"
+)
 SCOPE_PATH_RE = re.compile(
     r"(?<![\w./-])/workspace/strix-pr-scope\.[A-Za-z0-9]+/([A-Za-z0-9_./-]+)"
     + PATH_TOKEN_END
