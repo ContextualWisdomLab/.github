@@ -112,6 +112,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "mightyETL": {
+      "description": "mightyETL — modular Spring platform for bounded atomic ETL, durable job processing, and PostgreSQL change data capture.",
+      "topics": [
+        "etl",
+        "change-data-capture",
+        "data-integration",
+        "data-pipeline",
+        "spring-boot",
+        "java",
+        "postgresql",
+        "kafka",
+        "microservices",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
