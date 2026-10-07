@@ -164,6 +164,24 @@
       "deepwiki": true,
       "pages": true
     },
+    "TEPP": {
+      "description": "TEPP — Rust-first temporal event psychometrics platform for multilingual, relational, time-aware measurement and evidence-bound scientific claims.",
+      "topics": [
+        "temporal-events",
+        "psychometrics",
+        "event-modeling",
+        "bitemporal-data",
+        "multilingual",
+        "relational-data",
+        "measurement",
+        "longitudinal-data",
+        "data-provenance",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
