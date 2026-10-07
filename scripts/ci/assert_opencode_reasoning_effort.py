@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,12 @@ def is_known_reasoning_capable(model_name: str) -> bool:
     )
 
 
+_JSONC_COMMENT_PATTERN = re.compile(
+    r'("(?:\\.|[^\\"])*(?:"|[\\]?\Z))|(//[^\r\n]*|/\*.*?(?:\*/|\Z))',
+    re.DOTALL,
+)
+
+
 def strip_jsonc_comments(text: str) -> str:
     """Return ``text`` with ``//`` and ``/* */`` comments removed outside strings.
 
@@ -28,48 +35,31 @@ def strip_jsonc_comments(text: str) -> str:
     :func:`json.loads` rejects it. Comment markers are only recognized outside
     JSON string literals, so a string value that itself contains ``//`` (the
     ``"$schema": "https://opencode.ai/config.json"`` line) is preserved
-    unchanged. Newlines inside removed content are kept so any remaining
-    ``json.JSONDecodeError`` still reports an accurate line number.
+    unchanged. Every CR and LF character inside removed content is retained in
+    order so any remaining ``json.JSONDecodeError`` keeps accurate line data;
+    a single-line block comment becomes one space so adjacent tokens cannot join.
     """
-    result: list[str] = []
-    in_string = False
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if in_string:
-            result.append(char)
-            if char == "\\" and index + 1 < length:
-                result.append(text[index + 1])
-                index += 2
-                continue
-            if char == '"':
-                in_string = False
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-            result.append(char)
-            index += 1
-            continue
-        if char == "/" and index + 1 < length and text[index + 1] == "/":
-            index += 2
-            while index < length and text[index] not in "\r\n":
-                index += 1
-            continue
-        if char == "/" and index + 1 < length and text[index + 1] == "*":
-            index += 2
-            while index + 1 < length and not (
-                text[index] == "*" and text[index + 1] == "/"
-            ):
-                if text[index] in "\r\n":
-                    result.append(text[index])
-                index += 1
-            index += 2
-            continue
-        result.append(char)
-        index += 1
-    return "".join(result)
+
+    def _replacer(match: re.Match[str]) -> str:
+        """Preserve strings and keep comment whitespace from joining tokens."""
+        string_literal = match.group(1)
+        if string_literal is not None:
+            return string_literal
+        comment = match.group(2) or ""
+        if comment.startswith("/*") and (
+            len(comment) < 4 or not comment.endswith("*/")
+        ):
+            return comment
+        line_endings = "".join(
+            character
+            for character in comment
+            if character in "\r\n"
+        )
+        if comment.startswith("/*") and not line_endings:
+            return " "
+        return line_endings
+
+    return _JSONC_COMMENT_PATTERN.sub(_replacer, text)
 
 
 def load_config(path: Path) -> dict[str, Any]:

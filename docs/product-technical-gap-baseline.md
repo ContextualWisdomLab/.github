@@ -1,6 +1,32 @@
 Warning: truncated output (original token count: 92867)
 Total output lines: 3890
 
+## 2026-10-07 — Conflict-marker publication recovery (Proposed)
+
+- **Gap:** `.github#2556@04947a8603433b6a5b69bb0da32f21f7d8320e07`
+  committed 978 literal conflict markers (326 complete triads across 85 files)
+  in an 86-file child delta. The
+  canonical OpenCode reasoning guard and its tests raised `SyntaxError`, and
+  central workflow YAML could not parse even though GitHub reported the PR
+  mergeable.
+- **RCA / repair:** The child replayed unresolved merge content rather than a
+  valid semantic delta. Its sole parent `f6d24596a872a17618527c20764fa83b659069d7`
+  already contains the reviewed JSONC token-separation repair. Ordinary-revert
+  only the defective child, retain it in ancestry, and restore the exact parent
+  tree before adding this evidence; do not choose conflict sides ad hoc.
+- **Context Map / flow:** Central `.github` owns workflow, review-control, and
+  parser integrity. `committed tree → conflict-marker scan → Python/YAML parse
+  → focused/full verification → exact-head hosted Checks`. No DB, UI,
+  ontology, ERD, or external contract changes apply.
+- **Evidence:** A strict conflict-marker scan of the exact defect head has 978
+  marker lines; canonical source and
+  test compilation exit 1, workflow YAML parsing fails, and `git diff --check`
+  exits 2. The ordinary revert restores the exact parent tree and its 23-test
+  focused guard before fresh full verification.
+- **Status:** **Proposed / merge HOLD** — publish only by non-force
+  fast-forward after live-head revalidation; then require fresh hosted
+  security/quality Checks and qualifying independent approval.
+
 ## 2026-09-12 — Source-neutral scheduler head mutations (Proposed)
 
 - **Gap:** The merge scheduler created same-tree child commits to recover zero-job workflow `startup_failure` runs and to manufacture a new identity for last-push approval. Neither path repaired source or platform state, and both invalidated otherwise valid exact-head Checks and reviews.
@@ -74,6 +100,54 @@ Total output lines: 3890
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-10-04 OpenCode JSONC token-separation delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-TOKEN-SEPARATION-01` — **`.github#2556@af135ea7cccff8fd8b737ae93b75c4837c9ba0fd`에서 RED 재현, canonical parser GREEN `621bf1c9273b4001e7c2e02ac0ae846a4c27a6e7`; fresh exact-head hosted Checks·독립 approval 전까지 Proposed/HOLD** |
+| PRD | 운영자는 주석 제거가 서로 다른 JSON 토큰을 결합해 손상된 설정에 새로운 값을 부여하지 않는다는 실패-폐쇄 보장을 받아야 한다. |
+| TRD / RCA | 종료된 single-line block comment를 빈 문자열로 치환해 `1/* comment */2`→`12`, `-/* comment */1`→`-1`, `1/* comment */.5`→`1.5`로 합쳤다. 이전 differential reference도 같은 삭제 동작을 공유해 결함을 검출하지 못했다. 최소 수리는 주석의 CR/LF를 원순서로 유지하고 줄바꿈이 없는 block comment에는 공백 하나를 남긴다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 실제 load regression을 소유한다. OpenCode caller는 이 canonical guard만 소비하며 leaf parser나 새 dependency는 추가하지 않는다. DB·ontology·UI 변화가 없어 ERD와 Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → malformed comment preservation 또는 terminated comment whitespace preservation → json.loads fail-closed → reasoning-effort validation`. |
+| RED → GREEN evidence | RED `b637d358d7f502e1ed7b7c1ed804f9da006e35ff`는 세 token-fusion case가 모두 `DID NOT RAISE`로 실패했다. GREEN `621bf1c9273b4001e7c2e02ac0ae846a4c27a6e7`에서 focused file 23 passed, warning-fatal repository suite `5,280 passed, 10 skipped, 40 subtests`, compileall과 `git diff --check`가 GREEN이다. local pytest-cov/interrogate가 없어 fresh coverage/docstring 수치는 주장하지 않는다. |
+| Action / 다음 gate | 문서-only child 이후 exact head의 source/test blob과 ancestry를 재확인하고 hosted security/quality Checks, unresolved thread, qualifying approval을 다시 수집한다. |
+
+### 2026-10-03 OpenCode JSONC delimiter-identity delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-DELIMITER-IDENTITY-01` — **`.github#2556@d6931345e5fbd25de3c063b04eba9790eda307a5`에서 RED 재현 후 canonical parser와 executable corpus를 수리함; fresh exact-head hosted Checks·독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자는 손상된 `opencode.jsonc`의 주석 opener와 closer가 실제로 분리된 delimiter인지 검증받아야 하며, 완전한 JSON 뒤에 붙은 malformed suffix가 제거되어 정책 검사를 통과해서는 안 된다. |
+| TRD / RCA | EOF-bounded block-comment 정규식이 `/*/`를 하나의 후보로 소비한 뒤 replacer의 `endswith("*/")`가 opener offset 1의 `*`를 closer로 재사용했다. 따라서 `{}/*/`가 `{}`로 축약되어 `json.loads`에 승인됐다. 최소 수리는 block comment 길이가 4 미만이면 미종결로 보존해 서로 다른 `/*`와 `*/`를 요구한다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 회귀 corpus를 소유한다. OpenCode workflow는 이 canonical guard만 호출하며 leaf workaround나 별도 parser를 추가하지 않는다. DB·ontology·UI 변화가 없어 ERD와 Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → distinct delimiter check → malformed suffix preservation → json.loads fail-closed → reasoning-effort validation`. 별도 aggregate/class/database가 없으므로 이 데이터 흐름이 기술 경계를 완전하게 표현한다. |
+| RED → GREEN evidence | exact defect head에서 새 `{}/*/` load regression은 `1 failed, 19 passed`였다. 최소 delimiter 수리 후 focused suite는 20 passed다. `{'/', '*', 'a', '"', '\\'}`로 길이 0–7 suffix를 만든 결정적 97,656-input corpus는 pre-regression reference `f8e55ec5d58f6cc3bbb60671396d2e3929616086`와 parse acceptance/value 차이 0건이며, 32,000 repeated opener 입력은 0.0019초에 보존됐다. complete warning-fatal suite는 `5,277 passed, 10 skipped, 40 subtests`, production coverage는 18,173/18,173 statements와 7,468/7,468 branches다. public-doc 100%, compileall, diff check도 GREEN이다. 이는 관측 corpus이며 보편적 성능 주장으로 승격하지 않는다. |
+| Action / 다음 gate | live PR head가 그대로일 때만 force 없이 게시한다. 이후 새 exact head의 hosted security/quality Checks, unresolved threads, qualifying independent approval을 재수집한다. |
+
+### 2026-10-03 OpenCode JSONC malformed-input runtime delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-UNTERMINATED-RUNTIME-01` — **Source repaired in `.github#2556` commit `6854dab855abfa4201d62f0e097db8c00d5d344e`, tree `4ef2f83af56e2ce647cb88dbd0a1a7df8ea40070`; complete local verification GREEN, fresh hosted Checks·독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자가 손상되거나 공격자가 만든 `opencode.jsonc`를 검증할 때 guard는 유효 구성을 수용하지 않거나 CPU를 장시간 점유하지 않고, 실패-폐쇄 오류로 다음 행동을 알려야 한다. |
+| TRD / RCA | exact predecessor `f8e55ec5d58f6cc3bbb60671396d2e3929616086`의 string arm은 닫는 quote가 있는 문자열만, block-comment arm은 닫는 `*/`가 있는 주석만 인식했다. escaped quote 또는 `/*a` opener가 반복된 미종결 입력은 각 후보 위치에서 남은 suffix를 다시 탐색해 입력 두 배마다 약 네 배가 걸렸다. 두 arm 모두 닫는 delimiter 또는 절대 EOF까지 한 번에 소비한다. replacer는 미종결 block comment를 그대로 반환해 `json.loads`의 실패-폐쇄 거부를 유지하고, 종료된 comment의 CR/LF 보존 계약은 바꾸지 않는다. |
+| Context Map | 중앙 `.github` review-control bounded context가 parser와 executable corpus를 단독 소유한다. OpenCode caller는 이 보호된 계약만 소비하며 leaf parser를 복사하지 않는다. DB·ontology·UI·외부 service 변경이 없어 ERD, ontology release, Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → string/comment classifier → terminated-comment line-ending preservation or malformed-construct preservation → json.loads → reasoning-effort validation`. 미종결 string과 block comment는 classifier가 EOF까지 보존하고 `json.loads`가 거부한다. 별도 aggregate/class/database가 없으므로 이 데이터 흐름이 기술 경계를 완전하게 표현하며 class UML과 ERD는 N/A다. |
+| RED → GREEN evidence | predecessor에서 16,000 escaped-quote 미종결 문자열은 4.0387초, 같은 입력의 dangling-backslash 변형은 3.9771초, 32,000 repeated unclosed block-comment opener는 10.7655초로 각각 새 2초 회귀를 실패했다. `6854dab8` tree에서 직접 관측은 각각 0.0018초, 0.0008초, 0.0017초였다. 결정적 200,000-input differential corpus는 predecessor와 새 구현 사이 parse acceptance/value 차이 0건이었다. focused suite는 19 passed, `GITHUB_ACTIONS=true` guard+consumer suite는 73 passed, complete warning-fatal suite는 `5,276 passed, 10 skipped, 40 subtests`, production coverage는 18,173/18,173 statements와 7,468/7,468 branches다. public-doc 100%, compileall, diff check도 GREEN이다. 이는 관측 corpus이며 보편적 배속 주장으로 승격하지 않는다. |
+| Action / 다음 gate | live PR head를 재수집해 concurrent delta가 없을 때만 force 없이 게시한다. 새 exact head의 hosted security/quality Checks, unresolved thread 0, qualifying independent approval을 다시 확인하고, predecessor 또는 queued/skipped evidence를 merge authorization으로 재사용하지 않는다. |
+
+### 2026-10-03 OpenCode JSONC 의미 보존 delta
+
+| 항목 | 근거 / 결정 |
+|---|---|
+| Gap ID / 상태 | `CONTROL-OPENCODE-JSONC-LINE-ENDINGS-01` — **Source repaired on `.github#2556` repair commit `8a587038571d2cc6072ad5cf95355bc4215f7170`, tree `4708bd50af971bfde7d1dbd7663a3ad6d3c4331b`; fresh exact-head hosted Checks와 독립 review 전까지 Proposed/HOLD** |
+| PRD | 운영자는 주석이 포함된 `opencode.jsonc`에서도 reasoning-effort 정책을 동일하게 검증받아야 하며, 잘못된 구성은 조용히 수용되지 않고 다음 행동이 가능한 오류로 끝나야 한다. |
+| TRD / RCA | 관측된 PR head `42cac70c776d62b40cc0719d839b3c55c2a10ac1`의 정규식 replacer가 블록 주석을 `"\n" * count("\n")`로 바꿔 CRLF를 LF로 변환하고 CR-only 줄 경계를 삭제했다. 문자열·주석 미종결 입력은 계속 `json.loads`에서 거부되므로 해당 경계는 동작 변경 없이 실패-폐쇄 계약으로 고정했다. |
+| Context Map | 중앙 `.github` review-control bounded context가 `scripts/ci/assert_opencode_reasoning_effort.py`와 thin workflow 호출 계약을 소유한다. OpenCode caller는 이 보호된 owner 구현을 소비하며 자체 JSONC parser를 복사하지 않는다. 외부 DB·ontology·UI 경계는 없으므로 ERD, ontology 변경, Figma ID는 N/A다. |
+| UML / 실행 흐름 | `opencode.jsonc bytes → comment/string classifier → CR/LF-preserving replacement → json.loads → reasoning-effort validation`. 별도 service·aggregate·database가 없으므로 class UML과 ERD는 N/A이며 이 데이터 흐름이 필요한 기술 경계를 완전하게 표현한다. |
+| RED → GREEN evidence | 새 CRLF/CR/LF 혼합 회귀는 defect head에서 `1 failed, 14 passed`였다. 최소 수정은 제거된 주석에서 CR/LF 문자만 원순서로 유지한다. 이후 focused suite는 normal 및 `GITHUB_ACTIONS=true`에서 각각 `16 passed`; guard+소비 contract는 `70 passed`, 73/73 statements와 24/24 branches다. 보호 브랜치 기준 스캐너와 결정적 2,000-case corpus가 동등했고, 1 MiB 관측은 기존 0.076초/현 구현 0.021초였지만 보편적 배속 주장으로 승격하지 않는다. Pre-stack tree와 predecessor는 동일한 repository-wide coverage/docstring RED였으므로 leaf 회귀가 아니었다. Canonical owner `.github#2040@38a1692bd4419d4be3fb800abe70dd44644ac006`을 ordinary second parent로 통합한 tree는 `5,273 passed, 10 skipped, 40 subtests`, 18,170/18,170 statements, 7,466/7,466 branches, interrogate 100.0%다. |
+| Action / 다음 gate | #2556을 #2040 branch 위에 stack해 owner delta를 복사하지 않고 4-file leaf delta만 유지한다. 새 exact head의 required Checks, unresolved thread, qualifying independent approval을 다시 수집한다. #2040의 protected integration/CodeQL admission과 #2556의 새 exact-head gate가 모두 GREEN일 때만 ordinary merge/auto-merge한다. |
 
 ### 2026-10-01 OpenCode approval-order delta
 

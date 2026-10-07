@@ -1,3 +1,70 @@
+### Restore executable control-plane files after conflict-marker publication
+
+- Ordinary-revert exact defect commit `04947a86`, whose 86-file child delta
+  committed 978 literal conflict markers (326 complete triads across 85 files)
+  and made canonical Python and workflow
+  YAML unparsable. The repair keeps the defective commit in ancestry and
+  restores the previously reviewed `f6d24596` tree exactly before adding this
+  receipt; it does not guess between conflict sides or discard valid JSONC
+  token-separation work.
+
+### JSONC guard preserves whitespace between separated tokens
+
+- The OpenCode reasoning-effort guard no longer deletes a single-line block
+  comment to the empty string. Exact head `af135ea7` changed malformed inputs
+  such as `{"a":1/* comment */2}` into valid `{"a":12}` and silently changed
+  their value; the earlier differential oracle shared that deletion behavior.
+  RED `b637d358` adds numeric, sign, and decimal token-fusion regressions.
+  GREEN `621bf1c9` retains the comment's exact CR/LF sequence or one separating
+  space when no line ending exists. The focused file passes 23 tests and the
+  warning-fatal repository suite passes 5,280 tests with 10 optional skips and
+  40 subtests; compileall and diff checks pass. No fresh coverage or docstring
+  percentage is claimed because those local plugins were unavailable.
+
+### JSONC guard rejects overlapping block-comment delimiters
+
+- The OpenCode reasoning-effort guard no longer treats `/*/` as a complete
+  block comment by reusing the opener's `*` as the closer. A complete JSON
+  value followed by that malformed suffix had been reduced to valid JSON and
+  silently accepted. The guard now requires distinct opening and closing
+  delimiters, while preserving the bounded EOF scan and all valid empty block
+  comments. The regression failed on exact head `d6931345` and passes after
+  the repair; a 97,656-input differential corpus matches the pre-regression
+  reference `f8e55ec5` with zero parse-result differences. The complete
+  warning-fatal suite passes 5,277 tests with 10 optional skips and 40
+  subtests; all 18,173 production statements and 7,468 branches are covered.
+
+### JSONC guard bounds unterminated construct scanning
+
+- The OpenCode reasoning-effort guard now consumes an unterminated string or
+  block comment through end-of-input in one regex match. Exact predecessor
+  `f8e55ec5` took about 4.04 seconds for 16,000 escaped quotes, 3.98 seconds
+  when that input ended in a lone backslash, and 10.77 seconds for 32,000
+  repeated unclosed block-comment openers. Repair commit `6854dab8` / tree
+  `4ef2f83a` processes those observed inputs in about 0.0008–0.0018 seconds,
+  preserving each malformed construct for `json.loads` to reject. A
+  deterministic 200,000-input differential corpus found no parse-result
+  change. The focused suite passes 19 tests, its `GITHUB_ACTIONS=true`
+  guard+consumer suite passes 73 tests, and the complete warning-fatal suite
+  passes 5,276 tests with 10 optional skips and 40 subtests. All 18,173
+  production statements and 7,468 branches are covered; public-doc coverage,
+  compileall, and diff checks pass. The change remains Draft/HOLD pending fresh
+  hosted Checks and qualifying independent review.
+
+### JSONC guard preserves CR and LF evidence across block comments
+
+- The OpenCode reasoning-effort guard's regex comment stripper now retains
+  every `CR` and `LF` character from removed block comments, matching the
+  protected-branch scanner for CRLF, CR-only, LF, and mixed inputs. Regression
+  contracts also keep unterminated comments and strings fail-closed and bound a
+  one-megabyte adversarial comment to two seconds. Focused normal and
+  `GITHUB_ACTIONS=true` runs each pass 16 tests; the guard and its consuming
+  OpenCode contract suite pass 70 tests with 100% statement and branch coverage.
+  The ordinary stack on canonical owner `.github#2040@38a1692b` passes 5,273
+  tests with 10 optional skips and 40 subtests; all 18,170 production statements
+  and 7,466 branches are covered, and interrogate reports 100.0%. The change
+  remains Draft/HOLD pending fresh hosted Checks and independent review.
+
 ### Central coverage owner preserves concurrent repairs and restores the 100% gate
 
 - The `.github#2521` coverage owner now carries the complete valid deltas from
