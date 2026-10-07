@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-07 stale-dispatch stack reconciliation delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STALE-DISPATCH-STACK-01 | **Proposed — `.github#2382` ordinary convergence; hosted acceptance pending** | Canonical prerequisite `.github#2385` merged, but child `#2382@d9e31329…` remained conflicted with protected `main@7554587c…`. Ordinary two-parent merge `0d2347273665bd76493dfdc36620b81380abf63e` preserves both parents and the original six-path stale-dispatch delta. Conflict resolution keeps the child `stale != 'true'` admission guards together with protected-main `CWL central CodeQL` / `CWL central OpenCode` runner-group selectors. Exact merged tree passed 207 focused Actions-mode contracts and the complete repository suite (5,175 passed, 11 skipped, 40 subtests). | Central `.github` owns dispatch retirement and runner admission. Publish only by expected-head, non-force fast-forward; then re-fetch the new exact head, reviews, threads, and hosted Checks. Ready may be restored only if that exact head is mechanically mergeable with no substantive source/policy finding. Terminal hosted Checks and qualifying independent approval remain merge gates; predecessor evidence does not transfer. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
