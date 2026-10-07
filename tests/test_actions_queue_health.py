@@ -141,11 +141,29 @@ def test_parse_timestamp_normalises_z_and_offsets() -> None:
     assert queue_health.parse_timestamp("2026-08-19T21:00:00+09:00") == NOW
 
 
-@pytest.mark.parametrize("value", ["owner", "owner/repo/extra", "../..", "./repo", "owner/.", 1])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "owner",
+        "owner/repo/extra",
+        "../..",
+        "./repo",
+        "owner/.",
+        "owner./repo",
+        "owner/repo.",
+        1,
+    ],
+)
 def test_repository_name_rejects_non_repository_identifiers(value: object) -> None:
     """Reject malformed and traversal-like repository identifiers."""
     with pytest.raises(queue_health.QueueHealthError):
         queue_health._repository_name(value)
+
+
+@pytest.mark.parametrize("value", [".github/repo", "owner/.github", "owner-name/repo_name"])
+def test_repository_name_accepts_safe_identifiers(value: str) -> None:
+    """Accept safe GitHub owner/repository identifiers with supported punctuation."""
+    assert queue_health._repository_name(value) == value
 
 
 def test_load_allowlist_accepts_array_and_object_and_rejects_bad_inputs(tmp_path: Path) -> None:
