@@ -312,6 +312,8 @@ def test_doctoring_cites_authoritative_traceability_sources():
     assert "(World Wide Web Consortium, 2013)" in doctoring
     assert "https://www.iso.org/standard/72089.html" in doctoring
     assert "https://www.w3.org/TR/prov-o/" in doctoring
+    assert "(GitHub, n.d.)" in doctoring
+    assert "https://docs.github.com/en/actions/reference/workflows-and-actions/variables" in doctoring
 
 
 def test_live_register_parses_without_duplicates():
