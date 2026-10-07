@@ -299,12 +299,21 @@ def test_main_fail_path_reports_gaps_from_stdin(monkeypatch, capsys) -> None:
     assert "FAIL: 1 repositories have no CodeQL coverage" in captured.err
 
 
-def test_main_pass_path_reports_from_file_arg(tmp_path, capsys) -> None:
+def test_main_pass_path_reports_from_file_arg(tmp_path, capsys, monkeypatch) -> None:
     payload_path = tmp_path / "repositories.json"
     payload_path.write_text(
         json.dumps([covered_by_default_setup("ELUNVERA"), covered_by_recent_analysis("Orgmetra")]),
         encoding="utf-8",
     )
+
+    import datetime
+
+    class MockDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(audit, "datetime", MockDatetime)
 
     assert audit.main([str(payload_path)]) == 0
     assert (
