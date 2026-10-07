@@ -954,7 +954,7 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
-    # Find the last valid label without collecting every matching offset.
+    # ⚡ Bolt: Fast path starts using native rfind, avoiding nested O(N) forward scanning overhead
     start_idx = text.rfind(label)
     while start_idx != -1:
         if label == "coverage:" and text[max(0, start_idx - 10) : start_idx] == "docstring ":
