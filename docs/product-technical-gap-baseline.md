@@ -7,12 +7,6 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
-### 2026-10-07 Git lineage test-integrity delta
-
-| Gap ID | 상태 | exact-tree evidence | causal owner / next gate |
-|---|---|---|---|
-| CONTROL-G17-REAL-GIT-LINEAGE-01 | **Source repaired on Draft `.github#2576`; protected integration pending** | RED `651968a1eb13eb64e854975f1b86c38c57bcc390` replaced a documented G-17 SHA with the nonexistent nonzero value `1111…1111` and reproduced `DID NOT RAISE`: the PR's module-wide autouse fixture returned success for every nonzero SHA. GREEN `1e07bc9939a1ecf3c614ef2b5b001b165558c8a0` removed that fixture so the guard again executes real `git cat-file` and `git merge-base --is-ancestor`. The ordinary two-parent restack at `54c9d092a10a39339db430f34329ac7ee1015a78` has tree `c5da05a91693d8a17a856b37a126835880c89ea8`, is zero commits behind protected `main` `7554587c2e3106a388998bcad048a3d7121de25e`, and passed 144 focused tests with 100% statement/branch coverage for `opencode_review_normalize_output.py`; the warnings-as-errors repository suite passed 5,159 tests, 11 skips, and 40 subtests. | The central `.github` test-control boundary owns published-lineage verification. Keep the PR Draft until its post-documentation exact head has terminal hosted security/runtime Checks, no unresolved actionable review, and qualifying independent current-head approval. Predecessor-head Python Security/SAST failures had zero recorded steps and no log blob, so they are runner-admission evidence, not source failures and not a basis for blind rerun or bypass. The PR body is the authority for the live exact head after this row changes the tree. |
-
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

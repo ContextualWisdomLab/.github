@@ -1,14 +1,3 @@
-### Git lineage tests again use real repository evidence
-
-- Removed PR #2576's module-wide `subprocess.run` replacement after a RED
-  contract proved that it accepted a nonexistent nonzero commit as published
-  lineage. The boundary suite now executes real `git cat-file` and
-  `git merge-base --is-ancestor` results. The `rfind()` optimization is also
-  documented accurately as O(N), with reduced Python-loop and match-list
-  overhead rather than an elimination of linear scanning. Exact-tree evidence
-  is 144 focused tests with 100% statement/branch coverage for the changed
-  production module, plus 5,159 repository tests, 11 skips, and 40 subtests.
-  Hosted exact-head Checks and qualifying independent review remain required.
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
