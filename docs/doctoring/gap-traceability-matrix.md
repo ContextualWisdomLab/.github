@@ -60,12 +60,14 @@ applies to, for example new non-bot PRs only.
 ## Matching rules
 
 - A register row is a body row of a Markdown table whose header's first cell
-  is `Gap ID` or `ID`, and whose first cell is exactly one ID. IDs in prose,
-  in other cells and in other tables (such as the PR inventory) are mentions.
+  is `Gap ID` or `ID`, whose next row is a valid Markdown delimiter row,
+  and whose first cell is exactly one ID. IDs in prose, in other cells and in
+  other tables (such as the PR inventory) are mentions.
 - Mentions are taken from the title and body. Fenced code, HTML comments,
-  URLs and Markdown link targets are removed first. Inline code is removed
-  unless its whole content is one ID, because PR bodies here usually quote IDs
-  as code.
+  URLs and Markdown link targets are removed first. A fence closes only with
+  the same marker, at least the opening length and no trailing non-whitespace.
+  Inline code of any backtick-run length is removed unless its whole content
+  is one ID, because PR bodies here usually quote IDs as code.
 - An ID must not be attached to a letter, digit, `_`, `-`, `/` or a dotted
   name on its left, or to a letter, digit, `_` or `-` on its right. Korean
   particles such as `G-15를` still match.
@@ -94,14 +96,17 @@ an answer, so it contributed nothing. The implementation combines the points
 both answers shared: the header-anchored register, removal of code and URLs,
 exit codes 0/1/2/3 and checking the live event payload.
 
-The external sources support the goals, not these repository-specific parser
+The external sources support the goals, not repository-specific parser
 mechanics. ISO/IEC/IEEE 29148 defines requirements-engineering processes and
 their information items, which supports maintaining explicit links from work
 to registered requirements
-(International Organization for Standardization, 2018). PROV-O defines interoperable provenance descriptions across systems,
-which supports recording input digests that bind a report to the artifacts
-from which it was derived (World Wide Web Consortium, 2013). Header anchoring,
-exit codes and live-event parsing remain local design choices validated by the
+(International Organization for Standardization, 2018). PROV-O supports
+describing provenance and derivation across systems; the SHA-256 digest is this
+repository's local mechanism for binding a report to the exact input artifacts
+(World Wide Web Consortium, 2013). GitHub defines `GITHUB_EVENT_PATH` as the
+runner file containing the complete webhook payload, so the live-event mode
+reads that authoritative input (GitHub, n.d.). Header anchoring, the meanings
+of exit codes 1/2/3 and Markdown parsing remain local choices validated by the
 tests below.
 
 A separate read-only Codex pass then reviewed the implementation
@@ -138,15 +143,19 @@ https://www.iso.org/standard/72089.html
 World Wide Web Consortium. (2013, April 30). *PROV-O: The PROV ontology*
 (W3C Recommendation). https://www.w3.org/TR/prov-o/
 
+GitHub. (n.d.). *Variables reference*. GitHub Docs.
+https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+
 ## Verification
 
 - On predecessor head `1ec9c665b47dd3fe7320e1db7db569dd06ea6e7c`,
   the focused suite passed 55 tests in
   `tests/test_gap_traceability_matrix.py`, under both normal and
   `GITHUB_ACTIONS=true` runs.
-- Exact head adds one documentation contract. Its four assertions directly
-  passed against the exact-head doctoring file; the complete 56-test pytest
-  rerun remains required before merge.
+- Exact head adds one documentation contract plus four Markdown-boundary
+  cases. Direct execution passes all three defect reproductions, five adjacent
+  regression cases, Python compilation and the four citation assertions. The
+  complete 60-test pytest rerun remains required before merge.
 - The new module has 100% statement and branch coverage, and `interrogate`
   reports 100% docstring coverage for it.
 - One test parses the repository's own baseline and requires its register
