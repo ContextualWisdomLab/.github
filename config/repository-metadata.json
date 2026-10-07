@@ -129,6 +129,23 @@
       "deepwiki": true,
       "pages": true
     },
+    "quarantine-sandbox-runtime": {
+      "description": "Quarantine Sandbox Runtime — Rust isolation runtime for hostile workloads and deterministic artifact-analysis evidence.",
+      "topics": [
+        "sandbox-runtime",
+        "workload-isolation",
+        "artifact-analysis",
+        "security",
+        "rust",
+        "podman",
+        "containers",
+        "malware-analysis",
+        "resource-limits",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
