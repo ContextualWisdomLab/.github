@@ -5,6 +5,12 @@
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
+### 2026-10-07 provenance-test authority delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-PROVENANCE-REAL-GIT-01 | **Test authority repaired on `.github#2593`; hosted exact-head acceptance pending** | PR head `4410de838` injected a test-local `subprocess.run` stub whose unconditional zero return code bypassed both `git cat-file -e` and `git merge-base --is-ancestor`. RED AST inspection rejected the monkeypatch fixture and `setattr`; GREEN `1f28e248b` removes only those two bypass points. GitHub compare independently confirms all three documented full SHAs are ancestors of the repaired head. | Canonical owner is `tests/test_github_api_url_boundary.py` in central `.github`. Fresh hosted full-suite/security Checks and a qualifying independent approval remain required. The PR stays Draft/Proposed/HOLD; no synthetic status, bypass, or merge is authorized. |
+
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
 ### 2026-09-19 exact-head incident delta
