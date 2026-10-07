@@ -53,17 +53,13 @@ _RIGHT = r"(?![A-Za-z0-9_\-])"
 ID_PATTERN = re.compile(_LEFT + "(" + _ID_CORE + ")" + _RIGHT)
 FULL_ID_PATTERN = re.compile(r"\A" + _ID_CORE + r"\Z")
 
-# An unclosed fence runs to the end of the text, as in CommonMark.
-FENCE_PATTERN = re.compile(
-    r"^[ \t]{0,3}(`{3,}|~{3,}).*?(?:^[ \t]{0,3}\1[^\n]*$|\Z)", re.M | re.S
-)
-FENCE_LINE_PATTERN = re.compile(r"[ \t]{0,3}(`{3,}|~{3,})")
+FENCE_LINE_PATTERN = re.compile(r"^[ \\t]{0,3}((?:`{3,})|(?:~{3,}))(.*)$")
+INLINE_CODE_RUN_PATTERN = re.compile(r"`+")
 # Every pattern below must stay linear on hostile PR bodies: unclosed
 # comments run to the end, link targets cannot restart inside themselves and
 # URL schemes are bounded so a long hyphenated token cannot backtrack.
-HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
-INLINE_CODE_PATTERN = re.compile(r"`([^`\n]*)`")
-LINK_TARGET_PATTERN = re.compile(r"\]\([^()\s]*(?:\s[^()]*)?\)")
+HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|\\Z)", re.S)
+LINK_TARGET_PATTERN = re.compile(r"\\]\\([^()\\s]*(?:\\s[^()]*)?\\)")
 URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.\-]{0,31}://[^\s<>()\[\]]+", re.I)
 
 REGISTER_HEADERS = frozenset({"gap id", "id"})
@@ -118,6 +114,95 @@ def shorten(text: str, limit: int = DESCRIPTION_LIMIT) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _fence_parts(line: str) -> tuple[str, int, str] | None:
+    """Return a fence character, run length and trailing text for a fence line."""
+    match = FENCE_LINE_PATTERN.match(line)
+    if not match:
+        return None
+    marker, trailing = match.groups()
+    return marker[0], len(marker), trailing
+
+
+def _fence_opener(line: str) -> tuple[str, int] | None:
+    """Return a valid CommonMark-style opener, rejecting backticks in its info."""
+    parts = _fence_parts(line)
+    if not parts:
+        return None
+    character, length, trailing = parts
+    if character == "`" and "`" in trailing:
+        return None
+    return character, length
+
+
+def _closes_fence(line: str, fence: tuple[str, int]) -> bool:
+    """Return whether ``line`` is a same-character, long-enough clean closer."""
+    parts = _fence_parts(line)
+    return bool(
+        parts
+        and parts[0] == fence[0]
+        and parts[1] >= fence[1]
+        and not parts[2].strip()
+    )
+
+
+def _strip_fenced_blocks(text: str) -> str:
+    """Remove fenced blocks while preserving line boundaries for later scans."""
+    output: list[str] = []
+    fence: tuple[str, int] | None = None
+    for line in text.splitlines(keepends=True):
+        raw = line.rstrip("\\r\\n")
+        ending = line[len(raw) :]
+        if fence:
+            if _closes_fence(raw, fence):
+                fence = None
+            output.append(ending or " ")
+            continue
+        opener = _fence_opener(raw)
+        if opener:
+            fence = opener
+            output.append(ending or " ")
+        else:
+            output.append(line)
+    return "".join(output)
+
+
+def _strip_inline_code(text: str) -> str:
+    """Remove code spans of any backtick-run length, keeping exact Gap IDs."""
+    output: list[str] = []
+    for line in text.splitlines(keepends=True):
+        runs = list(INLINE_CODE_RUN_PATTERN.finditer(line))
+        cursor = 0
+        run_index = 0
+        while run_index < len(runs):
+            opener = runs[run_index]
+            closer_index = run_index + 1
+            while (
+                closer_index < len(runs)
+                and len(runs[closer_index].group()) != len(opener.group())
+            ):
+                closer_index += 1
+            if closer_index == len(runs):
+                run_index += 1
+                continue
+            closer = runs[closer_index]
+            output.append(line[cursor : opener.start()])
+            code_content = line[opener.end() : closer.start()].strip()
+            output.append(
+                f" {code_content} " if FULL_ID_PATTERN.match(code_content) else " "
+            )
+            cursor = closer.end()
+            run_index = closer_index + 1
+        output.append(line[cursor:])
+    return "".join(output)
+
+
+def _is_table_separator(cells: list[str]) -> bool:
+    """Return whether every cell is a Markdown table delimiter cell."""
+    return bool(cells) and all(
+        re.fullmatch(r":?-{3,}:?", clean_cell(cell)) for cell in cells
+    )
+
+
 def parse_register(markdown: str) -> list[GapEntry]:
     """Return every register row in document order, duplicates included.
 
@@ -127,43 +212,45 @@ def parse_register(markdown: str) -> list[GapEntry]:
     """
     entries: list[GapEntry] = []
     in_register = False
+    awaiting_separator = False
     previous_was_table = False
-    fence = ""
+    fence: tuple[str, int] | None = None
     for index, raw in enumerate(markdown.splitlines(), start=1):
-        opener = FENCE_LINE_PATTERN.match(raw)
         if fence:
-            if opener and opener.group(1).startswith(fence):
-                fence = ""
+            if _closes_fence(raw, fence):
+                fence = None
             continue
+        opener = _fence_opener(raw)
         if opener:
-            fence = opener.group(1)
+            fence = opener
             in_register = False
+            awaiting_separator = False
             previous_was_table = False
             continue
         line = raw.strip()
         if not line.startswith("|"):
             in_register = False
+            awaiting_separator = False
             previous_was_table = False
             continue
         cells = split_cells(line)
         if not previous_was_table:
-            in_register = clean_cell(cells[0]).lower() in REGISTER_HEADERS
+            awaiting_separator = clean_cell(cells[0]).lower() in REGISTER_HEADERS
+            in_register = False
             previous_was_table = True
             continue
         previous_was_table = True
-        if not in_register or re.fullmatch(r":?-{3,}:?", cells[0]):
+        if awaiting_separator:
+            in_register = _is_table_separator(cells)
+            awaiting_separator = False
+            continue
+        if not in_register:
             continue
         candidate = clean_cell(cells[0])
         if FULL_ID_PATTERN.match(candidate):
             description = clean_cell(cells[1]) if len(cells) > 1 else ""
             entries.append(GapEntry(candidate, shorten(description), index))
     return entries
-
-
-def _keep_exact_id_code(match: re.Match[str]) -> str:
-    """Keep an inline code span only when its whole content is one Gap ID."""
-    content = match.group(1).strip()
-    return f" {content} " if FULL_ID_PATTERN.match(content) else " "
 
 
 def mention_text(text: str) -> str:
@@ -173,10 +260,10 @@ def mention_text(text: str) -> str:
     code is removed unless it contains exactly one Gap ID, because PR bodies
     in this organization routinely quote IDs as code. Link text is kept.
     """
-    text = text.replace("\r\n", "\n")
-    text = FENCE_PATTERN.sub(" ", text)
+    text = text.replace("\\r\\n", "\\n")
+    text = _strip_fenced_blocks(text)
     text = HTML_COMMENT_PATTERN.sub(" ", text)
-    text = INLINE_CODE_PATTERN.sub(_keep_exact_id_code, text)
+    text = _strip_inline_code(text)
     text = LINK_TARGET_PATTERN.sub("]", text)
     return URL_PATTERN.sub(" ", text)
 
