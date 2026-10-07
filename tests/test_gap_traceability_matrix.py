@@ -287,6 +287,16 @@ def test_main_rejects_conflicting_modes(tmp_path):
         gtm.main(["--require-link", "1", "--require-link-event", str(tmp_path)])
 
 
+def test_doctoring_cites_authoritative_traceability_sources():
+    """Doctoring binds traceability and provenance claims to authoritative sources."""
+    with open("docs/doctoring/gap-traceability-matrix.md", encoding="utf-8") as handle:
+        doctoring = handle.read()
+    assert "(International Organization for Standardization, 2018)" in doctoring
+    assert "(World Wide Web Consortium, 2013)" in doctoring
+    assert "https://www.iso.org/standard/72089.html" in doctoring
+    assert "https://www.w3.org/TR/prov-o/" in doctoring
+
+
 def test_live_register_parses_without_duplicates():
     """The repository's own baseline parses into unique register IDs."""
     with open("docs/product-technical-gap-baseline.md", encoding="utf-8") as handle:
