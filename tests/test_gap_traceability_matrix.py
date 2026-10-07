@@ -103,6 +103,7 @@ def test_shorten_marks_cut_text():
         ("```\nG-01\n```not-a-closer\nG-02\n```", set()),
         ("<!-- G-01 -->", set()),
         ("https://x.test/G-01 and [G-02](https://x.test/G-03)", {"G-02"}),
+        ("[link](relative target G-11)", set()),
         ("/G-01 foo.G-02 file-G-03 x_G-04", set()),
         ("G-150 G-1 G-01A G-01-extra g-01", {"G-150"}),
         ("deadbeefG-01 cafe0G-02", set()),
