@@ -271,6 +271,21 @@ def test_require_exact_dict_and_repository_validation() -> None:
         with pytest.raises(RECONCILER.ManifestError):
             RECONCILER._validate_repository("Repo", {**valid, field: value})
 
+    for pages_mode, pages_branch in [
+        ("legacy", "gh-pages"),
+        ("legacy-root", 1),
+        ("legacy-root", "bad branch"),
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="pages_branch"):
+            RECONCILER._validate_repository(
+                "Repo",
+                desired(
+                    pages=True,
+                    pages_mode=pages_mode,
+                    pages_branch=pages_branch,
+                ),
+            )
+
     assert RECONCILER._validate_repository(
         "Repo", desired(homepage=None)
     )["homepage"] is None
@@ -656,6 +671,52 @@ def test_legacy_root_pages_contract(monkeypatch) -> None:
     assert [call[2]["body"] for call in pages_updates] == [
         {"build_type": "legacy", "source": {"branch": "main", "path": "/"}}
     ]
+
+
+def test_legacy_root_pages_requires_root_source(monkeypatch) -> None:
+    """Legacy root Pages fail closed when the selected branch has no root index."""
+
+    state = RECONCILER._validate_repository(
+        "Repo", desired(pages=True, pages_mode="legacy-root")
+    )
+    monkeypatch.setattr(RECONCILER, "_root_index_exists", lambda *args: False)
+
+    with pytest.raises(RuntimeError, match="no index source is on main"):
+        RECONCILER._pages_precondition("Repo", "main", state)
+
+
+def test_verify_legacy_root_pages_requires_converged_root_source(monkeypatch) -> None:
+    """Live verification rejects a missing legacy-root publication source."""
+
+    def gh_api(method, endpoint, **kwargs):
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {
+                    "build_type": "legacy",
+                    "source": {"branch": "main", "path": "/"},
+                }
+            )
+        return json.dumps(
+            {"default_branch": "main", "description": "Useful product."}
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_root_index_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    monkeypatch.setattr(RECONCILER, "_pages_publication_ready", lambda *args: None)
+
+    with pytest.raises(RuntimeError, match="Pages root source did not converge"):
+        RECONCILER.verify_repository(
+            "Repo", desired(pages=True, pages_mode="legacy-root")
+        )
+
+    monkeypatch.setattr(RECONCILER, "_root_index_exists", lambda *args: True)
+    RECONCILER.verify_repository(
+        "Repo", desired(pages=True, pages_mode="legacy-root")
+    )
 
 
 def test_legacy_root_pages_supports_named_branch_markdown_source(monkeypatch) -> None:
