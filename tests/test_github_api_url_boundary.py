@@ -76,7 +76,7 @@ def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
     pytest.fail("rejected GitHub API authority reached opener")
 
 
-def _assert_g17_evidence_is_published(baseline: str, monkeypatch: pytest.MonkeyPatch = None) -> None:
+def _assert_g17_evidence_is_published(baseline: str) -> None:
     """Require every full G-17 evidence SHA to resolve in current published ancestry."""
     rows = [line for line in baseline.splitlines() if line.startswith(G17_ROW_PREFIX)]
     assert len(rows) == 1, "G-17 must have exactly one gap-register row"
@@ -231,7 +231,7 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
 
 
-def test_documented_opener_lineage_references_published_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_documented_opener_lineage_references_published_commits() -> None:
     """Owner evidence must name the published commits that carry each repair."""
     doctoring = Path(
         "docs/doctoring/github-api-url-authority-2248.md"
@@ -246,21 +246,10 @@ def test_documented_opener_lineage_references_published_commits(monkeypatch: pyt
     assert "9c19c6e00eafc028068719ab482282c1256f8893" in baseline
     assert "b35410673ce60f9a693532daf74862c08971e9e3" not in evidence
     assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
-
-    # Mock subprocess.run to avoid detached HEAD failure due to missing commits in shallow clones
-    original_run = subprocess.run
-    def mock_run(*args, **kwargs):
-        if args and isinstance(args[0], list):
-            cmd = args[0]
-            if "cat-file" in cmd or "merge-base" in cmd:
-                return type('MockProc', (object,), {'returncode': 0})()
-        return original_run(*args, **kwargs)
-    monkeypatch.setattr(subprocess, 'run', mock_run)
-
     _assert_g17_evidence_is_published(baseline)
 
 
-def test_published_lineage_guard_rejects_unreachable_g17_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
     """A commit-shaped but unpublished G-17 evidence identifier must fail closed."""
     baseline = Path("docs/product-technical-gap-baseline.md").read_text(
         encoding="utf-8"
@@ -270,20 +259,6 @@ def test_published_lineage_guard_rejects_unreachable_g17_evidence(monkeypatch: p
         "0000000000000000000000000000000000000000",
         1,
     )
-
-    # Mock subprocess.run to mimic unpublished failure for the mutated commit
-    original_run = subprocess.run
-    def mock_run(*args, **kwargs):
-        if args and isinstance(args[0], list):
-            cmd = args[0]
-            if "cat-file" in cmd:
-                if "0000000000000000000000000000000000000000^{commit}" in cmd:
-                    return type('MockProc', (object,), {'returncode': 128})()
-                return type('MockProc', (object,), {'returncode': 0})()
-            if "merge-base" in cmd:
-                return type('MockProc', (object,), {'returncode': 0})()
-        return original_run(*args, **kwargs)
-    monkeypatch.setattr(subprocess, 'run', mock_run)
 
     with pytest.raises(AssertionError, match="not published"):
         _assert_g17_evidence_is_published(mutated)
