@@ -77,19 +77,6 @@ def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
 
 
 
-@pytest.fixture(autouse=True)
-def patch_subprocess_run(monkeypatch):
-    def mock_run(*args, **kwargs):
-        class MockProc:
-            stdout = ""
-            stderr = ""
-            def __init__(self, returncode):
-                self.returncode = returncode
-        if "0000000000000000000000000000000000000000" in args[0][3]:
-             return MockProc(128)
-        return MockProc(0)
-    monkeypatch.setattr(subprocess, "run", mock_run)
-
 def _assert_g17_evidence_is_published(baseline: str) -> None:
     """Require every full G-17 evidence SHA to resolve in current published ancestry."""
     rows = [line for line in baseline.splitlines() if line.startswith(G17_ROW_PREFIX)]
