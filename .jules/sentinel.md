@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2024-10-08 - SSRF Bypass via HTTPRedirectHandler
+**Vulnerability:** The custom `_RejectRedirects` handler inheriting from `urllib.request.HTTPRedirectHandler` returned `None` instead of explicitly raising an exception on redirects.
+**Learning:** Returning `None` from `redirect_request` in a custom `HTTPRedirectHandler` simply tells Python's default behavior that this specific handler won't handle the redirect. If another handler is present, or depending on the opener's configuration, the redirect could still be processed, potentially leading to Server-Side Request Forgery (SSRF) and unauthorized leakage of sensitive tokens (like Bearer headers).
+**Prevention:** Always raise an exception, such as `urllib.error.HTTPError`, inside a custom `redirect_request` method to definitively halt the redirect chain and prevent SSRF bypasses.
