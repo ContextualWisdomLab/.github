@@ -221,6 +221,7 @@ def test_routing_and_prelease_filter_are_fixed_not_gate_skipping():
         == "${{ github.event_name == 'pull_request' }}"
     )
     group = data["concurrency"]["group"]
+    assert group.startswith("cwl-reusable-bandscope-linux-")
     assert "github.repository" in group and "github.event.pull_request.number" in group
     assert "github.sha" not in group and "inputs.gate" in group
 

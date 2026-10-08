@@ -46,9 +46,9 @@ BandScope의 dependency 및 cross-platform build 정책도 적용한다.
   PR head SHA로 바꾸지 않는다. `persist-credentials: false`, `clean: true`를 사용한다.
 - 기본 shell working-directory는 `bandscope-source`; admission만 아직 checkout이 없는
   `${{ github.workspace }}`에서 실행한다.
-- PR concurrency는 저장소/PR 번호/gate별로 이전 실행을 coalesce한다. SHA를 key에
-  넣지 않는다. non-PR은 run ID로 분리한다. 미래 caller는 producer와 같은 concurrency
-  group을 쓰지 않아야 한다.[1]
+- PR concurrency는 `cwl-reusable-bandscope-linux-` 전용 prefix와 저장소/PR 번호/gate로
+  이전 실행을 coalesce한다. SHA를 key에 넣지 않는다. non-PR은 run ID로 분리한다.
+  미래 caller는 이 reusable 전용 namespace를 사용하지 않아야 한다.[1]
 
 ### 명령 및 버전 보존
 
