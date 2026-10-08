@@ -1,0 +1,33 @@
+# Render __CENTRAL_PRODUCT_COMMIT__ to the reviewed published 40-hex commit.
+# Do not activate before the dedicated runner/access/isolation canary passes.
+name: Product
+
+on:
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - "docs/**"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - "CLAUDE.md"
+      - "README.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - "CLAUDE.md"
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  product:
+    uses: ContextualWisdomLab/.github/.github/workflows/grc-product.yml@__CENTRAL_PRODUCT_COMMIT__
