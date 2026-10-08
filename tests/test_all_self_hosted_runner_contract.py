@@ -58,7 +58,7 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                 required = {'self-hosted', 'linux', 'x64'}
                 if group == 'CWL CI isolated':
                     required.add('cwlab-ci-isolated')
-                assert required.issubset(labels), (
+                assert required.issubset(label.lower() for label in labels), (
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
             else:
