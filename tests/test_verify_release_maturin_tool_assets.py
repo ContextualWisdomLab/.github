@@ -155,8 +155,12 @@ def test_maturin_download_is_bounded(monkeypatch):
             assert limit == 4
             return b"four"
 
+    class MockOpener:
+        def open(self, req, timeout):
+            return Response()
+
     monkeypatch.setattr(verifier, "MAX_ASSET_BYTES", 3)
-    monkeypatch.setattr(verifier, "urlopen", lambda req, timeout: Response())
+    monkeypatch.setattr(verifier, "build_opener", lambda: MockOpener())
     with pytest.raises(ValueError, match="asset exceeds"):
         verifier._download("maturin.zip")
 
@@ -207,14 +211,15 @@ def test_maturin_process_entrypoint_uses_the_bounded_downloader(monkeypatch):
             assert limit == verifier.MAX_ASSET_BYTES + 1
             return self.raw
 
-    def urlopen(req, timeout):
-        assert req.headers["User-agent"] == "cwl-release-gate"
-        assert timeout == 60
-        return Response(archives[req.full_url.rsplit("/", 1)[-1]])
+    class MockOpener:
+        def open(self, req, timeout):
+            assert req.headers["User-agent"] == "cwl-release-gate"
+            assert timeout == 60
+            return Response(archives[req.full_url.rsplit("/", 1)[-1]])
 
     monkeypatch.setattr(Path, "read_text", read_text)
     monkeypatch.setattr(scanner, "_reader", lambda: {"path": "/reader"})
     monkeypatch.setattr(scanner, "_links", links)
-    monkeypatch.setattr(request, "urlopen", urlopen)
+    monkeypatch.setattr(request, "build_opener", lambda: MockOpener())
     monkeypatch.setattr(sys, "argv", ["verify"])
     runpy.run_path(verifier.__file__, run_name="__main__")

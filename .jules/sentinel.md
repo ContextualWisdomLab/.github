@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2024-10-08 - Harden URL Openers
+**Vulnerability:** `urllib.request.urlopen` usage with dynamic URLs flagged by Semgrep for SSRF vulnerabilities.
+**Learning:** Raw `urlopen` usages trigger security scanner alerts even when hardcoded, due to the potential of parameter injection on later code updates. Utilizing `build_opener` is necessary for hardening.
+**Prevention:** Migrate any instance of `urllib.request.urlopen` to `urllib.request.build_opener().open()` to securely encapsulate URL fetch requests and proactively fulfill Semgrep rules.

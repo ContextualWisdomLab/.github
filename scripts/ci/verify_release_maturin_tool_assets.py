@@ -11,7 +11,7 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener
 
 try:
     from scripts.ci.release_dependency_gate import classify_platform_link
@@ -33,8 +33,10 @@ MAX_BINARY_BYTES = 32 * 1024 * 1024
 
 def _download(filename: str) -> bytes:
     url = f"https://github.com/PyO3/maturin/releases/download/v1.15.0/{filename}"
+
+    opener = build_opener()
     # Fixed https origin and tag; verify_assets admits only five literal asset names.
-    with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+    with opener.open(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
         Request(url, headers={"User-Agent": "cwl-release-gate"}), timeout=60
     ) as response:
         raw = response.read(MAX_ASSET_BYTES + 1)
