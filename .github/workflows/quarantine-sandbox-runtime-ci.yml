@@ -1,0 +1,253 @@
+name: Quarantine sandbox runtime CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    qsr-central-${{ github.workflow }}-${{ github.repository }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload]
+    permissions:
+      contents: read
+    steps:
+      - name: Reject unsupported caller or event
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/quarantine-sandbox-runtime" || exit 1
+          case "$EVENT_NAME" in
+            push) ;;
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY" || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
+
+  verify:
+    needs: admission
+    if: >-
+      github.repository == 'ContextualWisdomLab/quarantine-sandbox-runtime' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable installer
+        with:
+          toolchain: 1.97.1
+          components: clippy, rustfmt
+      - name: Verify dependency lock
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Validate repository policy
+        run: python3 scripts/validate_repository.py
+      - name: Test coverage evidence parser
+        run: python3 -m unittest scripts/test_check_coverage.py
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Test
+        run: cargo test --locked --workspace --all-targets
+      - name: Lint
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps
+
+  coverage:
+    needs: admission
+    if: >-
+      github.repository == 'ContextualWisdomLab/quarantine-sandbox-runtime' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable installer
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools-preview
+      - name: Verify dependency lock
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Install pinned coverage tool
+        run: cargo +1.97.1 install cargo-llvm-cov --locked --version 0.8.6
+      - name: Generate production coverage evidence
+        run: >-
+          cargo llvm-cov
+          --workspace
+          --lib
+          --tests
+          --json
+          --output-path coverage.json
+      - name: Upload production coverage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-json-${{ github.event.pull_request.head.sha || github.sha }}
+          path: coverage.json
+          if-no-files-found: error
+      - name: Explain and enforce complete production coverage
+        run: python3 scripts/check_coverage.py coverage.json
+
+  branch-coverage:
+    needs: admission
+    if: >-
+      github.repository == 'ContextualWisdomLab/quarantine-sandbox-runtime' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable installer
+        with:
+          toolchain: nightly-2026-07-01
+          components: llvm-tools-preview
+      - name: Verify dependency lock
+        run: cargo +nightly-2026-07-01 metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Install pinned coverage tool
+        run: cargo +nightly-2026-07-01 install cargo-llvm-cov --locked --version 0.8.6
+      - name: Generate branch coverage evidence
+        run: >-
+          cargo +nightly-2026-07-01 llvm-cov
+          --branch
+          --workspace
+          --lib
+          --tests
+          --json
+          --output-path branch-coverage.json
+      - name: Print missing branch coverage lines
+        run: >-
+          cargo +nightly-2026-07-01 llvm-cov report
+          --branch
+          --show-missing-lines
+      - name: Upload branch coverage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: branch-coverage-json-${{ github.event.pull_request.head.sha || github.sha }}
+          path: branch-coverage.json
+          if-no-files-found: error
+      - name: Enforce complete production branch coverage
+        run: python3 scripts/check_coverage.py --require-branches branch-coverage.json
+
+  podman-e2e-positive-lsm:
+    needs: admission
+    if: >-
+      github.repository == 'ContextualWisdomLab/quarantine-sandbox-runtime' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload, selinux]
+    env:
+      # Required profile only: NOT_PROVISIONED pending .github#1590; no custody claim.
+      QSR_PODMAN_E2E_IMAGE: docker.io/library/python@sha256:94457973ea8a27a799f0b8ea1fe3e3147fcbebaed63497a8af63b28195a08108
+      QSR_HOST_SECRET_CANARY: must-not-enter-the-isolated-application
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable installer
+        with:
+          toolchain: 1.97.1
+      - name: Verify dedicated positive LSM runner contract
+        run: |
+          test -n "$RUNNER_NAME"
+          test "$(podman --version)" = "podman version 5.8.4"
+          podman info --format json > podman-info.json
+          python3 - <<'PY'
+          import json
+          with open("podman-info.json", encoding="utf-8") as handle:
+              security = json.load(handle)["host"]["security"]
+          assert security["rootless"] is True
+          assert security["selinuxEnabled"] is True
+          print(f"selinuxEnabled={security['selinuxEnabled']}")
+          PY
+      - name: Pre-pull immutable fixture outside the application launch path
+        run: |
+          podman pull --quiet "$QSR_PODMAN_E2E_IMAGE"
+          podman image inspect "$QSR_PODMAN_E2E_IMAGE" >/dev/null
+      - name: Execute real positive LSM isolation and cleanup acceptance
+        run: >-
+          cargo test --locked
+          --test podman_rootless_e2e
+          -- --ignored --exact rootless_podman_effective_isolation_and_cleanup --nocapture
+      - name: Reject leaked runtime-owned resources
+        if: always()
+        run: |
+          leaked_containers="$(podman ps -a --filter label=org.contextualwisdomlab.sandbox.identity --format '{{.ID}}')"
+          test -z "$leaked_containers"
+          networks="$(podman network ls --format '{{.Name}}')"
+          while IFS= read -r network; do
+            case "$network" in
+              qsr-net-*) exit 1 ;;
+            esac
+          done <<< "$networks"
+
+  acceptance:
+    if: always()
+    needs: [admission, verify, coverage, branch-coverage, podman-e2e-positive-lsm]
+    runs-on:
+      group: CWL QSR hostile workload
+      labels: [self-hosted, linux, cwl-hostile-workload]
+    permissions:
+      contents: read
+    steps:
+      - name: Require every current-head evidence lane to pass
+        env:
+          ADMISSION_RESULT: ${{ needs.admission.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+          BRANCH_RESULT: ${{ needs.branch-coverage.result }}
+          LSM_RESULT: ${{ needs.podman-e2e-positive-lsm.result }}
+        run: |
+          test "$ADMISSION_RESULT" = "success"
+          test "$VERIFY_RESULT" = "success"
+          test "$COVERAGE_RESULT" = "success"
+          test "$BRANCH_RESULT" = "success"
+          test "$LSM_RESULT" = "success"
