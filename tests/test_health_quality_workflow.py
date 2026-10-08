@@ -21,6 +21,7 @@ class HealthQualityTests(unittest.TestCase):
     """Require caller isolation, pinned actions and all existing product gates."""
 
     def test_reusable_only_and_self_hosted_no_secrets(self):
+        """Require only reusable calls, fixed self-hosted routing and pinned actions."""
         data = workflow()
         self.assertEqual(
             data.get("on", data.get(True)),
@@ -49,6 +50,7 @@ class HealthQualityTests(unittest.TestCase):
                     self.assertEqual(step["with"]["ref"], "${{ github.sha }}")
 
     def test_admission_runs_before_checkout_and_rejects_untrusted_inputs(self):
+        """Execute caller admission controls before any candidate checkout."""
         steps = workflow()["jobs"]["quality"]["steps"]
         step = steps[0]
         self.assertEqual(step["name"], "Admit private Health caller")
@@ -186,6 +188,7 @@ class HealthQualityTests(unittest.TestCase):
                 self.assertEqual(unrelated.read_text(), "preserve")
 
     def test_original_commands_versions_and_failure_semantics_are_preserved(self):
+        """Keep every original product gate, toolchain pin and failure policy."""
         job = workflow()["jobs"]["quality"]
         steps = job["steps"]
         commands = "\n".join(s.get("run", "") for s in steps)
