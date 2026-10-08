@@ -1,0 +1,151 @@
+# STAGING ONLY: do not add a caller or admit a runner before the activation
+# prerequisites in docs/doctoring/bandscope-central-ci.md are verified.
+name: BandScope Linux CI
+
+on:
+  workflow_call:
+    inputs:
+      gate:
+        description: Fixed Linux gate (lock-validation or verify).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: develop
+  EXPECTED_NPM_VERSION: "10.9.9"
+
+concurrency:
+  group: >-
+    bandscope-linux-${{ github.repository }}-${{ inputs.gate }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    if: >-
+      ${{ github.repository == 'ContextualWisdomLab/bandscope' &&
+      ((github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/develop')) || (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/bandscope' &&
+      github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/bandscope' &&
+      (github.event.pull_request.base.ref == 'main' ||
+      github.event.pull_request.base.ref == 'develop'))) }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated, bandscope-ci]
+    defaults:
+      run:
+        shell: bash
+        working-directory: bandscope-source
+    steps:
+      - name: Admit fixed BandScope Linux gate
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          CALLER_SHA: ${{ github.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SELECTED_GATE: ${{ inputs.gate }}
+        run: |
+          set -euo pipefail
+          reject() {
+            printf '%s\n' 'BandScope admission rejected' >&2
+            exit 1
+          }
+          [[ "${CALLER_REPOSITORY:-}" == 'ContextualWisdomLab/bandscope' ]] || reject
+          [[ "${CALLER_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject
+          case "${SELECTED_GATE:-}" in
+            lock-validation|verify) ;;
+            *) reject ;;
+          esac
+          case "${CALLER_EVENT:-}" in
+            push)
+              case "${CALLER_REF:-}" in
+                refs/heads/main|refs/heads/develop) ;;
+                *) reject ;;
+              esac
+              ;;
+            pull_request)
+              [[ "${PR_HEAD_REPOSITORY:-}" == 'ContextualWisdomLab/bandscope' ]] || reject
+              [[ "${PR_BASE_REPOSITORY:-}" == 'ContextualWisdomLab/bandscope' ]] || reject
+              [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || reject
+              [[ "${CALLER_REF:-}" == "refs/pull/${PR_NUMBER}/merge" ]] || reject
+              case "${PR_BASE_REF:-}" in
+                main|develop) ;;
+                *) reject ;;
+              esac
+              ;;
+            *) reject ;;
+          esac
+
+      - name: Checkout BandScope source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/bandscope
+          ref: ${{ github.sha }}
+          path: bandscope-source
+          persist-credentials: false
+          clean: true
+      - name: Set up pinned Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.22.3"
+          package-manager-cache: false
+      - name: Activate pinned npm runtime
+        run: corepack enable npm
+      - name: Verify exact npm lockfile generator and bundled tar
+        run: |
+          test "$(npm --version)" = "$EXPECTED_NPM_VERSION"
+          npm run check:npm-runtime
+      - name: Validate the frozen package lock without lifecycle execution
+        if: ${{ inputs.gate == 'lock-validation' }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Reject manifest or lockfile drift
+        if: ${{ inputs.gate == 'lock-validation' }}
+        run: git diff --exit-code -- package.json package-lock.json
+      - name: Set up pinned uv
+        if: ${{ inputs.gate == 'verify' }}
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.8.6"
+          enable-cache: false
+      - name: Install node dependencies
+        if: ${{ inputs.gate == 'verify' }}
+        run: npm ci
+      - name: Sync Python dependencies
+        if: ${{ inputs.gate == 'verify' }}
+        run: uv sync --project services/analysis-engine --group dev --frozen
+      - name: Install stable Rust toolchain
+        if: ${{ inputs.gate == 'verify' }}
+        run: rustup toolchain install stable --profile minimal
+      - name: Build and install Rust numeric extension
+        if: ${{ inputs.gate == 'verify' }}
+        run: |
+          set -euo pipefail
+          VENV_PY="$PWD/services/analysis-engine/.venv/bin/python"
+          wheel_dir="$(mktemp -d "${RUNNER_TEMP:?}/bandscope-numeric.XXXXXXXX")"
+          trap 'rm -rf -- "$wheel_dir"' EXIT
+          uvx maturin@1.9.6 build --release \
+            --manifest-path services/analysis-engine/rust/Cargo.toml \
+            --interpreter "$VENV_PY" \
+            --out "$wheel_dir"
+          shopt -s nullglob
+          wheels=("$wheel_dir"/*.whl)
+          if [[ "${#wheels[@]}" -ne 1 || ! -f "${wheels[0]}" || -L "${wheels[0]}" ]]; then
+            printf '%s\n' 'Expected exactly one fresh numeric wheel' >&2
+            exit 1
+          fi
+          uv pip install --python "$VENV_PY" "${wheels[0]}"
+      - name: Run quickcheck
+        if: ${{ inputs.gate == 'verify' }}
+        run: ./scripts/harness/quickcheck.sh
