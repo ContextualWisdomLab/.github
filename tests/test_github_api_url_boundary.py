@@ -232,7 +232,7 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
 
 
-def test_documented_opener_lineage_references_published_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_documented_opener_lineage_references_published_commits() -> None:
     """Owner evidence must name the published commits that carry each repair."""
     doctoring = Path(
         "docs/doctoring/github-api-url-authority-2248.md"
@@ -248,12 +248,19 @@ def test_documented_opener_lineage_references_published_commits(monkeypatch: pyt
     assert "b35410673ce60f9a693532daf74862c08971e9e3" not in evidence
     assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
 
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **kw: type("MockProc", (object,), {"returncode": 0})(),
-    )
     _assert_g17_evidence_is_published(baseline)
+
+
+def test_sentinel_describes_redirect_change_as_hardening_not_prior_bypass() -> None:
+    """Security guidance must distinguish existing rejection from hardening."""
+    sentinel = Path(".jules/sentinel.md").read_text(encoding="utf-8")
+    section = sentinel.split(
+        "## 2026-10-08 - Make urllib Redirect Rejection Explicit", 1
+    )[1]
+
+    assert "HTTPDefaultErrorHandler` already raised `HTTPError`" in section
+    assert "defense in depth" in section
+    assert "could still be processed" not in section
 
 
 def test_published_lineage_guard_rejects_unreachable_g17_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
