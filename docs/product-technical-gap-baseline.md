@@ -1,5 +1,12 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 GRC central reusable quality lane
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| CONTROL-GRC-CENTRAL-QUALITY-01 | `.github#2602` predecessor `efb53f7b44d09614993702e4a20d75c06a190a37` carries the GRC reusable workflow, thin-caller template, and contract tests. Canonical runner-policy owner `.github#2565` is integrated at `ef65b2fdc2036ccaca8d19c1db88dc8075ae9164`; the stack repair preserves both source histories and reapplies the current-time CodeQL fixture repair to the owner tree. | Keep the product caller uninstalled until `linux-cluster-ops#326` provisions and proves disposable isolated capacity and cleanup. Re-fetch the published head and require exact-head required Checks, independent approval, and ordinary protected integration. No hosted fallback, borrowed privileged runner, or bypass. | **Draft / Proposed / merge HOLD** — source staged; runtime activation and protected integration pending. |
+
+
 ## 2026-10-09 reusable R matrix conservation
 
 | Gap | Exact evidence | Action | Status |

@@ -1276,7 +1276,21 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' not in prepare
+    personal, sidecar = prepare.split("          else\n", 1)
+    assert 'if [ "${PERSONAL_ROUTE_SELECTED:-}" = \'true\' ]; then' in personal
+    assert 'test -n "${LLM_GATEWAY_API_KEY:-}"' in personal
+    assert 'export NOEMA_LLM_MODEL="auto"' in personal
+    assert 'https://litellm.poinnetworks.net/v1/chat/completions' in personal
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in sidecar
+    admission = workflow_step(workflow, "Admit existing personal LiteLLM auto route")
+    assert 'scripts.ci.personal_review_route' in admission
+    assert '--zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED"' in admission
+    assert '--zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED"' in admission
+    assert '--private-target "$PRIVATE_TARGET"' in admission
+    assert "vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false'" in admission
+    assert "vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false'" in admission
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
