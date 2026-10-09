@@ -33,15 +33,36 @@ The PR head is re-read immediately before mutation, and the operation remains
 restricted to same-repository branches plus a credential that GitHub permits to
 start workflows.
 
-Strix now validates event metadata against the live pull request before the
-provider job can enter one `strix-security-scan-<repository>-<pull-request>`
-group shared by native PR and repository-dispatch evidence, with
-`cancel-in-progress: true`. A delayed stale event is skipped before concurrency
-and therefore cannot cancel newer evidence. Push and schedule runs receive a
-unique run-id admission output, so they neither cancel PR evidence nor one
-another. Workflow-level concurrency was deliberately not used because GitHub
-applies it before any live-head admission job can run and does not guarantee
-concurrency ordering.
+The original Strix design assumed that live-head admission ran before
+workflow-level concurrency. That ordering assumption was false: GitHub applies
+workflow-level concurrency before any job can query the live PR, so a delayed
+old `synchronize`, `closed`, or `converted_to_draft` event could cancel a
+newer current-head/lifecycle run before the admission job executed.
+
+The corrected contract separates three identities:
+
+- Workflow-level admission uses target repository, PR number, exact head SHA,
+  and event action. A delayed stale event therefore occupies a separate group
+  and cannot cancel the newer head before live admission. Push runs still
+  coalesce per protected branch; schedule and PR-less dispatch retain unique
+  run IDs.
+- The actual `strix` provider job uses a distinct stable group keyed only by
+  target repository and PR number, with `cancel-in-progress: false`. Native
+  PR and `repository_dispatch` events therefore serialize actual provider work
+  in the same queue without making a newer run blindly cancel current evidence.
+- The `cancel-superseded-pr-runs` cleanup job uses its own repository/PR/head/
+  action group, `actions: write`, and live PR revalidation before run selection
+  and immediately before each cancellation. It is the authority for retiring
+  obsolete heads; workflow-level cancellation is not treated as proof of
+  staleness.
+
+GitHub Actions does not support `queue: max`; the repair intentionally does
+not add that unsupported key. The structural regression in
+`tests/test_required_workflow_queue_contract.py` now pins workflow head/action
+identity, the separate PR-stable provider group, and head/action-scoped cleanup.
+The repair is Proposed until focused tests, actionlint, the full suite, fresh
+exact-head hosted Checks, qualifying independent approval, ordinary protected
+merge, and a post-merge live canary are observed.
 
 **Amendment (2026-09-05).** "nor one another" no longer holds for `push`
 events on the same branch. Measured at 14:27Z in `.github`: nine `push`/`main`

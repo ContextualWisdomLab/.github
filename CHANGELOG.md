@@ -1,3 +1,16 @@
+### Strix stale-event concurrency preserves current-head evidence
+
+- Workflow-level concurrency keys PR runs by target repository, PR number, exact
+  head SHA, and event action, so a delayed old event cannot cancel a newer head
+  before live admission. Push runs still coalesce by protected branch.
+- The Strix provider job uses a distinct target-repository/PR group with
+  `cancel-in-progress: false`, serializing native PR and repository-dispatch
+  model work without cancelling current evidence. Cleanup grouping includes the
+  event head/action and revalidates live repository/PR/head before cancellation.
+- Contract tests pin these identities. `queue: max` remains absent because
+  GitHub Actions does not support it; explicit admission and stale-run cleanup
+  remain the control.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

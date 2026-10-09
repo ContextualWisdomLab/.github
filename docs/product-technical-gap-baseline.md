@@ -1,11 +1,18 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-26 10:35 KST**
+작성 기준일: **2026-10-09 20:53 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
+현재 보호된 `main`: `7554587c2e3106a388998bcad048a3d7121de25e`
+현재 열린 PR 수: **419** (2026-10-09 20:53 KST live API pagination; 아래 표는 2026-08-26 snapshot이며 현재 목록은 live API로 재수집)
 
-이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 아래 기존 인벤토리는 2026-08-26 snapshot이며 현재 open PR 419개 전체 목록을 나타내지 않는다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-10-09 control-plane concurrency and ruleset evidence delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STRIX-STALE-EVENT-CANCELLATION-01 | **Proposed — test-first source repair on `fix/strix-stale-event-concurrency-20261009`; exact-head hosted Checks, independent review, and protected merge pending** | Protected `.github/main@7554587c2e3106a388998bcad048a3d7121de25e` used workflow-level Strix concurrency keyed only by target repository/PR with `cancel-in-progress: true`; a delayed old event could therefore cancel a current run before `admit-current-head` had a chance to read live PR state. The cleanup job's own PR-only group had the same pre-admission race. | Canonical owner is `.github`. RED contract commit `b334253a022f3c4e5f0d63daa5c467a7618ffaa1`; workflow repair commit `4c2d31c810ee864791edd9d4e87599f71d084a59`; follow-up test-contract commit `5a4dabe80e9859692368db8afec8b5004490c624`. The workflow group now includes repository/PR/head/action (while push scans still coalesce per protected branch); the actual provider job has a distinct repository/PR-only non-cancelling group shared by native and dispatch triggers; cleanup identity includes head/action and retains live target validation before selection and each cancellation. Required next gates: focused pytest, actionlint, full warning-fatal suite, fresh exact-head hosted Checks, independent approval, and post-merge current-head canary. No bypass or unsupported `queue: max` is used. |
+| CONTROL-REPO-RULESET-PERSISTENT-BYPASS-02 | **Open security follow-up — not part of the Strix repair** | Fresh `GET /repos/ContextualWisdomLab/.github/rulesets/17921150` reports active repository ruleset `Lock default branch` on `~DEFAULT_BRANCH`, but `bypass_actors` includes `OrganizationAdmin` with `bypass_mode=always`; its pull-request rule requires zero approvals and does not require last-push approval. The branch-protection endpoint returned HTTP 403 to this integration, so that separate surface remains unverified. | Canonical owner is `.github` governance. Extend the ruleset audit to cover repository-scoped rulesets or use an authorized settings path to remove the standing actor and define the required approval policy; retain exact ruleset evidence and verify a subsequent live read. The existing org-ruleset detector repair `#2596` covers ruleset `18156473` only and does not prove this repository ruleset is clean. No settings mutation was attempted in this run. |
 
 ### 2026-09-19 exact-head incident delta
 
