@@ -1,0 +1,138 @@
+name: K-CSAP Skills Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: k-csap-skills-quality
+    # This job gate is evaluated before runner assignment. A skipped job is not a quality verdict.
+    if: >-
+      github.repository == 'ContextualWisdomLab/k-csap-skills' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.state == 'open') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/master'))
+    runs-on: [self-hosted, Linux, X64, k-csap-isolated]
+    timeout-minutes: 20
+    steps:
+      - name: Admit only trusted K-CSAP source
+        id: admission
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_REF: ${{ github.ref }}
+          PR_STATE: ${{ github.event.pull_request.state || 'open' }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET_REPOSITORY" != "ContextualWisdomLab/k-csap-skills" ]; then
+            echo "::error::K-CSAP quality rejected an unexpected caller repository."
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            push|workflow_dispatch)
+              if [ "$EVENT_REF" != 'refs/heads/master' ]; then
+                echo "::error::K-CSAP quality only accepts master branch pushes or dispatches."
+                exit 1
+              fi
+              ;;
+            pull_request)
+              if [ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ] || [ "$PR_STATE" != "open" ]; then
+                echo "::error::K-CSAP quality accepts only open same-repository pull requests."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::K-CSAP quality rejected an unsupported event."
+              exit 1
+              ;;
+          esac
+          if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::K-CSAP quality rejected a malformed source SHA."
+            exit 1
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+
+      - name: Prepare run-owned source directory
+        id: prepare
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || ! [[ "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid run identity."
+            exit 1
+          fi
+          if [ -L "${GITHUB_WORKSPACE:?}" ] || [ ! -d "$GITHUB_WORKSPACE" ]; then
+            echo "::error::Workspace root is not a regular directory."
+            exit 1
+          fi
+          source_path="k-csap-quality.${RUN_ID}.${RUN_ATTEMPT}"
+          if [ -e "$GITHUB_WORKSPACE/$source_path" ] || [ -L "$GITHUB_WORKSPACE/$source_path" ]; then
+            echo "::error::Source path already exists; refusing stale source."
+            exit 1
+          fi
+          mkdir -- "$GITHUB_WORKSPACE/$source_path"
+          echo "source_path=$source_path" >>"$GITHUB_OUTPUT"
+
+      # PR exact head is checked; merge-candidate integration is a separate gate.
+      - name: Checkout exact caller source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ steps.prepare.outputs.source_path }}
+          persist-credentials: false
+          clean: true
+
+      - name: Install pinned uv action
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.9.7'
+          enable-cache: false
+
+      - name: Verify K-CSAP quality in a job-private environment
+        working-directory: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          job_root="$(mktemp -d "${RUNNER_TEMP:?}/k-csap-quality.XXXXXX")"
+          cleanup() { rm -rf -- "$job_root"; }
+          trap cleanup EXIT
+          unset PYTHONHOME PYTHONPATH
+          export UV_CACHE_DIR="$job_root/uv-cache"
+          export UV_PYTHON_INSTALL_DIR="$job_root/python"
+          export UV_PROJECT_ENVIRONMENT="$job_root/venv"
+          export UV_NO_CONFIG=1
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          uv python install 3.11.14
+          uv sync --locked --dev --python 3.11.14
+          uv run --python 3.11.14 ruff check .
+          uv run --python 3.11.14 pytest -q
+          uv run --python 3.11.14 python scripts/validate.py
+          git diff --check
+
+      - name: Clean run-owned source after any step result
+        if: always()
+        env:
+          SOURCE_PATH: ${{ steps.prepare.outputs.source_path }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          if [ -z "$SOURCE_PATH" ]; then exit 0; fi
+          if ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || ! [[ "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then exit 1; fi
+          if [ "$SOURCE_PATH" != "k-csap-quality.${RUN_ID}.${RUN_ATTEMPT}" ]; then exit 1; fi
+          if [ -L "${GITHUB_WORKSPACE:?}" ] || [ ! -d "$GITHUB_WORKSPACE" ]; then exit 1; fi
+          rm -rf -- "${GITHUB_WORKSPACE:?}/$SOURCE_PATH"

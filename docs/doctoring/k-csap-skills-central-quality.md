@@ -1,0 +1,44 @@
+# K-CSAP 중앙 품질 실행 상태
+
+확인일: 2026-10-09 KST. 관련 issue: 중앙 #2612. 이 문서는 실행 성공 또는 출시 승인이 아니다.
+
+## 현재 단계
+
+초안의 독립 리뷰가 FAIL이다. 원본 workflow SHA-256은 `1743d6c788606bdbd6caa2006a2de47a22029ed5696d2a9a705085542224fa45`, 테스트는 `29e2d825a666332c6bf8a3272359d72c743856606f5d940c3f6920869e354db6`이다. 리뷰 report SHA-256은 `a67ed03a6136c0bdc98b48201b68720489f10a68c10a7eaa8eaa5e72f5546fd9`이다. 초안의 9개 계약 테스트와 actionlint 통과는 이 FAIL을 대체하지 않는다.
+
+독립 재리뷰는 동일 workflow/test 해시에서 `PASS_WITH_ACTIVATION_LIMITATIONS`를 반환했다. 부모가 report SHA-256 `923b518cf61b072d3fb8ca7e03e5a1825faaca3c248942dd3048d2fbc2a2a378` 및 두 파일 해시를 직접 대조했다. 리뷰의 focused pytest 21개, custom-label actionlint exit 0, 별도 harmless cleanup probe 11/11은 로컬 계약 증거다. 초기 FAIL report는 역사 기록으로 보존한다. setup-uv 도구 상태는 private cleanup 범위 밖이며 외부 action 내부 cleanup, immutable download 무결성, 실제 원격 실행/App 승인은 미검증이다.
+
+현재 수리본은 job-level `if`를 runner 배정 전 gate로 추가하고, repo-scoped `k-csap-isolated` label을 사용한다. 기존 step admission은 checkout 전 방어층으로 유지했다. exact head, protected master ref, 일회용 source path, Python 3.11.14 및 uv/private venv/cache를 좁은 테스트로 검증했다. 초안 FAIL을 역사 기록으로 유지하며 수리본의 독립 재리뷰는 로컬 소스 한정 조건부 통과다. 수리 과정의 위임 writer 2회는 provider transport 실패로 결과 없이 종료했으며 부모가 테스트 RED를 확인하고 직접 수리했다. 수정본 로컬 `pytest` 21개 통과, scratch custom-label actionlint와 `git diff --check` exit 0; workflow SHA-256 `9c4cc914b57f919da06f434527670d34597ac4a8c1fc4c24008ce36440fdc5c9`, test SHA-256 `f053b9e139ddf3c2e566ce7966df1988af2a467d9627813404a2ee119da03f05`. 이는 실 runner에서의 실행/격리를 입증하지 않는다.
+
+## 리뷰 사실관계 구분
+
+리뷰는 “checkout도 admission 전에 실행된다”고 기록했으나 frozen YAML은 첫 step admission, 다음 step checkout 순서다. 이 서술은 현재 파일로 지지되지 않는다. 반면 job runner 배정은 첫 step보다 앞서므로 **step admission만으로 배정 이전 신뢰 경계가 생기지 않는다는 지적은 유효하다.** 원본 FAIL을 삭제하거나 PASS로 덮어쓰지 않는다. 다음 리뷰에서 이 두 결론을 구분한다.
+
+PR exact head 검증은 기존 PR #30의 exact-head 증거 계약을 이어받은 의도다. GitHub merge candidate를 검증했다는 주장은 하지 않는다. push/manual 호출은 protected master로 제한하는 수리 계약이다.
+
+## 원격 activation
+
+직접 API 조회 결과:
+
+- 조직 group 13 `CWL CI isolated`는 `visibility=selected`, `restricted_to_workflows=false`이다.
+- 허용 repository 목록에 K-CSAP이 없다. 소속 runner `orgmetra-ci-01`, `keyverse-ci-01`, `calendarweave-ci-01`은 모두 offline이다.
+- 제품 repo-scoped `k-csap-isolated-linux`는 online/idle이다. 조직 group 13의 runner가 아니다. group 구성원이란 이유 없이 옮기거나 relabel하지 않는다.
+- 중앙 global PR #2565의 head는 `ef65b2fdc2036ccaca8d19c1db88dc8075ae9164`, OPEN이다. 기존 owner source는 수정하지 않는다.
+
+중앙 reusable job은 caller에 제공된 repo-scoped runner도 사용할 수 있다는 소유권 교정을 반영했다. group 13 ACL 추가는 이 경로의 선행조건이 아니다. 현재 labels가 맞는 runner의 등록 상태만 확인했고 실제 reusable job 배정과 host isolation은 미검증이다. 동일 UID의 적대적 동시 writer, 잔류 프로세스, 강제 종료와 tool download 무결성은 activation gate에 남는다. 사용자 요구에 따라 hosted fallback은 추가하지 않는다. 실제 execution evidence가 없으면 unavailable로 남긴다.
+
+## AI 리뷰 및 키 경계
+
+중앙 #2560 key/relay custody와 Remora shared review owner를 유지한다. `LLM_GATEWAY_API_KEY` Secret metadata updated `2026-10-09T05:07:41Z`와 `LLM_GATEWAY_MODEL=auto`를 확인했다. 비밀 값은 읽지 않았고 중복 발급/덮어쓰기는 하지 않았다. 사용자가 지정한 `https://litellm.poinnetworks.net`의 실제 authenticated auto inference, private-data route 적격성, author-distinct App의 exact-head APPROVED는 아직 이 lane에서 검증하지 않았다.
+
+## 재현 가능한 테스트 환경
+
+새 전용 테스트 lock `requirements-k-csap-quality-tests-hashes.txt`는 `requirements-k-csap-quality-tests.in`에서 uv 0.12.5의 실제 compile로 생성했다. 공유 manifest/lock은 수정하지 않았다. private scratch CPython 3.11.16 환경에서 hash-required binary-only sync로 pytest 9.1.1, PyYAML 6.0.3 및 4개 전이 의존성을 설치하고 21개 계약 테스트를 실행해 통과했다. YAML 텍스트에서 기대값을 합성하는 대안 parser는 폐기했으며 실제 PyYAML로 구조를 읽는다. `subprocess.run(check=False)`를 명시하여 실패 exit 검증을 유지했다. 이 테스트 파일 delta는 별도 재검토 대상이다. runtime workflow의 Python pin은 3.11.14로 유지되어, 이 실행은 workflow 원격 runtime 실행 증거가 아니다.
+
+## 다음 gate
+
+1. 수리 writer의 실제 테스트 결과, 파일 해시, 수정 중단을 확인한다.
+2. 최종 해시에서 독립 재리뷰를 수행한다.
+3. 중앙 callee를 출판하고 immutable commit을 확보한다. 소비자 caller에 가짜 SHA나 mutable branch를 넣지 않는다.
+4. caller·runner ACL·capacity를 승인된 경계에서 연결하고 run ID와 job.runner_name을 검증한다.
+5. 실제 Noema/OpenCode auto inference 및 조건부 App 승인을 별도 확인한다. 단독 개발자에게 가상의 다른 인간 리뷰어를 요구하지 않는다.
