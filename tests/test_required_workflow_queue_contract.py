@@ -834,10 +834,11 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
 
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
-    rate limits rather than a shared pool. The workflow-level group now retires
-    superseded runs before runner admission, including runs still blocked by
-    the organization-wide job ceiling. Native and dispatched evidence share
-    one group; non-PR events use a unique run id.
+    rate limits rather than a shared pool. The workflow-level group is keyed by exact head and event action so a delayed
+    event cannot cancel a newer head before live admission. A distinct,
+    PR-stable job-level group serializes actual provider evidence across native
+    and dispatched events. The live-head-validated cleanup remains the authority
+    for retiring older-head runs. Non-PR events keep their established grouping.
 
     2026-09-05: push events are scoped per protected branch (``push-<ref>``)
     instead of a unique run id. Measured that morning in this repository:
@@ -876,15 +877,31 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
         "(github.event_name == 'push' && format('push-{0}', github.ref_name)) ||"
         in group_value
     )
-    assert "github.event.pull_request.head.sha" not in concurrency_contract
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" in group_value
+    assert "github.event.client_payload.pr_head_sha" in group_value
+    assert "github.event.action || github.event_name" in group_value
     assert workflow_level_cancels_in_progress(workflow)
-    assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
+    job_concurrency = strix_job.split("    concurrency:\n", 1)[1].split(
+        "    runs-on:", 1
+    )[0]
+    assert "strix-provider-evidence-${{" in job_concurrency
+    assert "github.event.pull_request.base.repo.full_name" in job_concurrency
+    assert "github.event.client_payload.target_repository" in job_concurrency
+    assert "github.event.pull_request.number" in job_concurrency
+    assert "github.event.client_payload.pr_number" in job_concurrency
+    assert re.search(r"(?m)^      cancel-in-progress: false$", job_concurrency)
+    assert "github.event.pull_request.head.sha" not in job_concurrency
+    assert "github.event.client_payload.pr_head_sha" not in job_concurrency
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
         "  strix:", 1
     )[0]
+    cleanup_concurrency = cleanup_job.split("    concurrency:\n", 1)[1].split(
+        "    runs-on:", 1
+    )[0]
+    assert "github.event.pull_request.head.sha" in cleanup_concurrency
+    assert "github.event.action" in cleanup_concurrency
     assert "github.event.action == 'synchronize'" in cleanup_job
     assert 'endswith("@" + $head_sha)' in cleanup_job
     assert "/force-cancel" in cleanup_job
