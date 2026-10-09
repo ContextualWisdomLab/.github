@@ -1,5 +1,24 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 OpenCode normalizer tree-mode integrity
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2564`; focused local
+verification is GREEN, while executable hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Gap / RCA.** The published normalizer blob was byte-identical to the
+warnings-fatal tested source, but the remote Git tree recorded mode `100644`
+while the verified tree and shebang contract required `100755`. The claimed
+exact remote/tested tree identity was therefore false and direct execution was
+removed.
+
+**Action / evidence.** A mode-only ordinary fast-forward restored `100755`
+without changing blob `fedb097409eeedee1b3a640923d1d5d88f60a473`.
+Source tree `89239520e294c41dacfd4cc4e0bed9a5166cfd2c` then matched the
+verified local tree. The focused normalizer corpus is **175 passed** with
+warnings fatal; Python compilation, executable-mode assertion, and diff
+checks are GREEN. Future publication receipts bind Git mode and content.
+
 ## 2026-10-09 OpenCode quoted coverage-label authority
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2564`; focused local

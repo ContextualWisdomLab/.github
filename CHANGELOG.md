@@ -1,3 +1,9 @@
+### OpenCode normalizer tree mode matches tested publication
+
+- Restore the OpenCode review normalizer's executable mode after its published
+  blob matched the tested source but its Git tree entry did not. Exact-tree
+  publication evidence now includes file mode as well as content identity.
+
 ### OpenCode quoted coverage labels cannot replace measured evidence
 
 - Reject a `coverage:` occurrence immediately preceded by a Markdown backtick
