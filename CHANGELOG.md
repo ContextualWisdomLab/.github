@@ -1,3 +1,15 @@
+### OpenCode quoted coverage labels cannot replace measured evidence
+
+- Reject a `coverage:` occurrence immediately preceded by a Markdown backtick
+  when selecting the authoritative coverage section or locating its boundary.
+  A reviewer warning that quotes a false full-coverage claim can therefore no
+  longer replace an earlier fail-closed coverage result.
+- A durable regression first reproduced the false approval on PR #2564's
+  reviewed head, then passed with the bounded label-admission repair alongside
+  the existing repeated-label, identifier-suffix, and full-summary cases.
+  Fresh exact-head hosted Checks and a qualifying independent approval remain
+  required before ordinary merge.
+
 ### OpenCode duplicate JSON members cannot replace review identity
 
 - Reject repeated object member names at every JSON nesting depth before a

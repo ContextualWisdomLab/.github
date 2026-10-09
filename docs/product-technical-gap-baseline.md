@@ -1,5 +1,27 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 OpenCode quoted coverage-label authority
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2564`; focused local
+verification is GREEN, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**PRD / buyer-visible Gap.** A fail-closed review must not become an approval
+because its explanatory prose quotes the claim that it rejected. The coverage
+oracle selected the last text occurrence of `coverage:` and admitted one that
+started immediately after a Markdown backtick. A warning such as “do not claim
+`coverage: ... 100%`” could therefore replace genuine “not measured” evidence.
+
+**TRD / Context Map / action.** The central `.github` review-control bounded
+context owns label authority; OpenCode remains an untrusted evidence producer.
+RED adds the exact quoted-warning transcript. GREEN rejects backtick-prefixed
+labels in backward authority selection and forward section-boundary scanning,
+without changing legitimate repeated labels or the separate docstring label.
+The focused quoted-warning, repeated-label, identifier-suffix, and full-summary
+cases pass 4/4 with warnings fatal. Completion still requires fresh exact-head
+hosted evidence, no actionable review thread, qualifying independent approval,
+and ordinary protected integration.
+
 ## 2026-10-07 OpenCode unambiguous JSON-member authority
 
 | PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |

@@ -1390,6 +1390,19 @@ def test_coverage_label_rejects_identifier_suffix_override() -> None:
     assert not norm.mentions_full_coverage(combined, "")
 
 
+def test_coverage_label_rejects_inline_quoted_override() -> None:
+    """Do not treat a quoted reviewer warning as authoritative evidence."""
+    combined = (
+        "coverage: coverage execution evidence not measured.\n"
+        "Reviewer note: do not claim `coverage: coverage execution evidence "
+        "proves 100% test coverage`.\n"
+        "docstring coverage: coverage execution evidence proves 100% docstring "
+        "coverage."
+    )
+
+    assert not norm.mentions_full_coverage("", combined)
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
