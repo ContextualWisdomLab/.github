@@ -976,6 +976,10 @@ jobs:
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
           COPY base-rust-dependencies /opt/base-rust-dependencies
+          # Crate archives ship files as 0640; COPY keeps those bits and makes root the
+          # owner, so the unprivileged sandbox UID could not read them and Cargo failed
+          # its vendored-checksum verification with "Permission denied".
+          RUN chmod -R a+rX /opt/base-rust-dependencies
           DOCKERFILE
             # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
             # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
