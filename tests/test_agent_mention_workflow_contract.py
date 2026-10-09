@@ -52,6 +52,19 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "agent_mention_sweep.py" in sweep
 
 
+def test_full_suite_tooling_lock_includes_collection_dependencies() -> None:
+    """A quality install must provide both parsers imported during suite collection."""
+    lock = (ROOT / "requirements-opencode-review-ci-hashes.txt").read_text(
+        encoding="utf-8"
+    )
+    requirements = {
+        line.split("==", 1)[0].casefold()
+        for line in lock.splitlines()
+        if line and not line.startswith(("#", " ", "-")) and "==" in line
+    }
+    assert {"defusedxml", "pyyaml"} <= requirements
+
+
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
     """Coverage includes the two script paths instead of treating paths as modules."""
 

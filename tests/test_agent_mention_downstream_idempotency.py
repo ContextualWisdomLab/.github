@@ -135,10 +135,10 @@ def test_forwarders_restrict_self_hosted_admission_to_trusted_main() -> None:
     """Branch workflows cannot select the main-only privileged runner group."""
     for path in (NOEMA_WORKFLOW, OPENCODE_WORKFLOW):
         text = path.read_text(encoding="utf-8")
-        selector = next(line for line in text.splitlines() if "runs-on:" in line)
+        selector = next(line for line in text.splitlines() if line.startswith("      group:"))
         assert "github.repository == 'ContextualWisdomLab/.github'" in selector
         assert "endsWith(github.workflow_ref, '@refs/heads/main')" in selector
         assert '"group":"CWL MCP remediation"' in selector
         assert '"labels":["self-hosted","linux","x64"]' in selector
-        assert "|| fromJSON('[\"ubuntu-24.04\"]')" in selector
+        assert '|| fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')' in selector
         assert "actions/checkout@" not in text
