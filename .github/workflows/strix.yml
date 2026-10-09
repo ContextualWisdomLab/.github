@@ -43,15 +43,14 @@ on:
     # IRT-bibliography-set). In every other repository the ruleset ignores
     # them, so the same doc/image-only decision is enforced by the
     # changed-scope job below. The run-name
-    # includes the PR number and head SHA for status grouping, while the
-    # concurrency group is scoped per repository AND pull request (native and
-    # dispatch PR runs share one group), or per protected branch for push
-    # events, to prevent shared-provider key rate-limit storms. That group
-    # runs with cancel-in-progress: true, so a newer head of the same PR or
-    # branch retires the older run: cancellation is a supersede signal, never
-    # passing evidence, and the merge scheduler still requires exact-head
-    # evidence before it will act. schedule and PR-less repository_dispatch
-    # keep a unique run id and so are never cancelled by a sibling.
+    # includes the PR number and head SHA for evidence identity. The
+    # workflow-level concurrency key also includes exact head and event action,
+    # so a delayed stale event cannot cancel a newer head or lifecycle run
+    # before live admission. The synchronize cleanup job separately re-reads
+    # the live target immediately before cancelling older runs. The `strix`
+    # provider job uses a distinct PR-stable group to serialize actual model
+    # work across native and dispatched events. Push scans coalesce by protected
+    # branch; schedule and PR-less repository_dispatch runs keep unique run IDs.
     # For PRs the merge scheduler manages, same-head Strix evidence
     # is still forced at merge time via repository_dispatch (which paths-ignore
     # does not affect), so merged code never loses evidence.
@@ -78,30 +77,15 @@ on:
     types: [strix-scan]
 
 concurrency:
-  # Workflow-level admission is required: job-level groups are never evaluated
-  # while the whole run is queued behind the organization job ceiling.
-  # Push scans coalesce per protected branch: a newer head of the same branch
-  # supersedes the older scan exactly as a newer PR head does. A push scan
-  # covers the whole tree (STRIX_TARGET_PATH is './' outside PR scope) and
-  # publishes no 'strix' commit status, so the newest head's scan is a
-  # complete scan OF THE CURRENT TREE -- not a record of every earlier
-  # commit's findings: code that entered and left main between two heads, and
-  # findings a retired run never uploaded, are absent from it. With the run-id
-  # fallback every main push was its own group and nothing ever retired a
-  # superseded main scan: on 2026-09-05 nine push/main runs were outstanding
-  # at once in this repository against a 10-30 minute normal scan -- five
-  # holding runner slots under the shared 60-job ceiling (running for up to
-  # two hours) and four still queued, which occupy no slot until a runner is
-  # assigned. schedule and repository_dispatch without a PR number keep a
-  # unique run id.
-  # Coverage trade, measured the same day: main moved 50 times in 24 hours
-  # (median gap 8.4 min, mean 26.5 min, bursty), so with cancel-in-progress
-  # only the final head of each merge burst completes a scan -- one completed
-  # main scan per quiet window, not one per push. That is the intended
-  # exchange: a cancelled push scan gives up its own report, and the scan that
-  # replaces it re-covers the current tree rather than that commit's history;
-  # a per-commit evidence-retention guarantee would need its own preservation
-  # contract. The weekly schedule scan is the floor.
+  # The workflow-level key includes PR identity, exact head, and event action.
+  # A delayed old event therefore cannot cancel a newer head/lifecycle run before
+  # admission. The live-head-validated cleanup job cancels older runs only after
+  # re-reading the target repository, PR, and head immediately before each
+  # cancellation. The `strix` job below uses a distinct PR-stable group to
+  # serialize provider calls across native and dispatched event classes.
+  # Push scans coalesce per protected branch; schedule and PR-less dispatch runs
+  # retain unique run IDs. Push scans cover the current tree, not every prior
+  # commit's findings; the weekly full-tree schedule remains the retention floor.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
@@ -109,7 +93,11 @@ concurrency:
     github.event.pull_request.number ||
     github.event.client_payload.pr_number ||
     (github.event_name == 'push' && format('push-{0}', github.ref_name)) ||
-    github.run_id }}
+    github.run_id }}-${{
+    github.event.pull_request.head.sha ||
+    github.event.client_payload.pr_head_sha ||
+    (github.event_name == 'push' && github.ref_name) ||
+    github.run_id }}-${{ github.event.action || github.event_name }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
@@ -324,21 +312,19 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'synchronize' || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
-    # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
-    # below) before selecting or cancelling anything, so it fully subsumes
-    # whatever an older, not-yet-run instance would have done. cancel-in-progress
-    # true is the right shape here (the merge scheduler's integrated exact-head
-    # coalescer instead uses its own admission-order queueing, since each instance
-    # carries a DIFFERENT specific expected-head only it can act on): it caps
-    # this job to one running + one queued per PR instead of letting a push
-    # burst pile up N independent, mutually-non-deduped sweeps that each cost a
-    # full admission slot under the shared 60-job ceiling. Matches
-    # codeql-pr.yml's established group-key style (PR-number scoped).
+    # Idempotent per exact event identity: the group includes this event's head
+    # and action, so a delayed stale cleanup cannot cancel a newer cleanup before
+    # live_target_matches runs. Duplicate same-head/same-action sweeps still
+    # coalesce, while distinct head/lifecycle events each get a chance to perform
+    # the authoritative live-state check. This avoids spending a runner on a
+    # stale event that would have been rejected only after admission.
     concurrency:
       group: >-
         cancel-superseded-pr-runs-${{
         github.event.pull_request.base.repo.full_name || github.repository }}-${{
-        github.event.pull_request.number || github.run_id }}
+        github.event.pull_request.number || github.run_id }}-${{
+        github.event.pull_request.head.sha || github.run_id }}-${{
+        github.event.action || github.event_name }}
       cancel-in-progress: true
     runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     # Bound this gh-api-only cleanup job so a stuck call (rate limit, hung
@@ -456,6 +442,15 @@ jobs:
       transport_http_status: ${{ steps.strix_sidecar_failure.outputs.transport_http_status }}
     needs: [changed-scope, admit-current-head]
     if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
+    concurrency:
+      group: >-
+        strix-provider-evidence-${{
+        github.event.pull_request.base.repo.full_name ||
+        github.event.client_payload.target_repository || github.repository }}-${{
+        github.event.pull_request.number ||
+        github.event.client_payload.pr_number ||
+        github.run_id }}
+      cancel-in-progress: false
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
     # legitimately require well over two hours to scan -- this org's own
     # standing operating directive accepts that central OpenCode/Strix/Noema
