@@ -1375,6 +1375,10 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section("coverage: first docstring coverage: second", "coverage:")
+        == " first "
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
@@ -1432,6 +1436,31 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     assert not norm.mentions_full_coverage(
         "", FULL_SUMMARY.replace("proves 100%", "not proven")
     )
+
+
+@pytest.mark.parametrize("identifier_prefix", ["no", "under", "redis"])
+def test_coverage_label_rejects_identifier_suffixes(identifier_prefix):
+    """Identifier suffixes must not satisfy the standalone coverage label."""
+    summary = FULL_SUMMARY.replace(
+        "Coverage:", f"{identifier_prefix}coverage:", 1
+    )
+
+    assert norm.label_section(summary.casefold(), "coverage:") == ""
+    assert not norm.mentions_full_coverage("", summary)
+
+
+def test_embedded_label_does_not_end_the_current_section():
+    """An identifier suffix must not truncate a preceding valid section."""
+    text = "coverage: verified notperformance: forged docstring coverage: verified"
+
+    assert norm.label_section(text, "coverage:") == " verified notperformance: forged "
+
+
+def test_verification_posture_rejects_identifier_suffix_labels():
+    """Every required verification label must have a standalone token boundary."""
+    summary = "\n".join(f"not{line.casefold()}" for line in FULL_SUMMARY.splitlines())
+
+    assert not norm.mentions_verification_posture("", summary)
 
 
 def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
