@@ -518,3 +518,242 @@ def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, 
 
 
 def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    rollout = (REPO_ROOT / "docs/org-required-workflow-rollout.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'cron: "11 2 * * *"' in workflow
+    assert "repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${RULESET_ID}" in workflow
+    assert 'orgs/${ORG_LOGIN}/repos?type=all&per_page=100' in workflow
+    assert "RULESET_SCOPE repository=${repository} inherited=${inherited}" in workflow
+    assert "HTTP 404" in workflow
+    assert "audit_central_required_workflows.py" in workflow
+    assert "Ruleset audit could not read inherited organization ruleset" in workflow
+    assert 'STACKED_RULESET_ID: "21732164"' in workflow
+    assert "audit_central_required_workflows.py --stacked" in workflow
+    assert "CWL Stacked OpenCode required workflow" in rollout
+    assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
+    assert "- `.github/workflows/noema-review.yml`" in rollout
+    assert "- `.github/workflows/sast-semgrep.yml`" in rollout
+
+
+def test_ruleset_audit_requires_dedicated_write_credential() -> None:
+    """The bypass audit must not confuse hidden fields with live drift."""
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    ruleset_step = workflow.split(
+        "- name: Read live inherited organization ruleset and repository scope\n", 1
+    )[1].split("      - name: ", 1)[0]
+    coverage_step = workflow.split(
+        "- name: Audit organization CodeQL coverage\n", 1
+    )[1].split("      - name: ", 1)[0]
+
+    assert (
+        "GH_TOKEN: ${{ secrets.CWL_RULESET_AUDIT_TOKEN || '' }}" in ruleset_step
+    )
+    assert (
+        "RULESET_WRITE_CREDENTIAL_AVAILABLE: "
+        "${{ secrets.CWL_RULESET_AUDIT_TOKEN != '' }}" in ruleset_step
+    )
+    assert 'if [ "$RULESET_WRITE_CREDENTIAL_AVAILABLE" = "false" ]; then' in ruleset_step
+    assert "requires CWL_RULESET_AUDIT_TOKEN with ruleset write access" in ruleset_step
+    assert "github.token" not in ruleset_step
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN "
+        "|| secrets.OPENCODE_APPROVE_TOKEN || '' }}" in coverage_step
+    )
+
+
+def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_guard() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Audit organization CodeQL coverage" in workflow
+    assert (
+        "ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' "
+        "|| secrets.OPENCODE_APPROVE_TOKEN != '' }}"
+    ) in workflow
+    assert 'if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then' in workflow
+    assert (
+        "::error::CodeQL coverage audit requires an org-scoped credential "
+        "(PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) to reliably enumerate "
+        "private organization repositories"
+    ) in workflow
+    assert (
+        'if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then\n'
+        '            echo "::error::CodeQL coverage audit requires an '
+        "org-scoped credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) "
+        "to reliably enumerate private organization repositories; the "
+        "repository-scoped github.token fallback cannot see them, which would "
+        'silently narrow this audit to a subset of the organization."\n'
+        "            exit 1\n"
+        "          fi"
+    ) in workflow
+    # This pinned `--jq .state` until 2026-09-07. What it protects is that the
+    # audit reads default-setup per repository, not that it reads only the
+    # state: `state == "configured"` with an empty `languages` list scans
+    # nothing and produces no analyses (live on life-os, aFIPC and inkspan),
+    # so the step now fetches the whole object and extracts both fields.
+    assert 'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup"' in workflow
+    assert """default_setup_state=$(jq '.state // null' "$default_setup_json")""" in workflow
+    assert (
+        """default_setup_languages=$(jq '.languages // []' "$default_setup_json")"""
+        in workflow
+    )
+    assert "default_setup_languages: $default_setup_languages" in workflow
+    assert (
+        'if [ "$archived" != "true" ]; then\n'
+        '              default_setup_json="$RUNNER_TEMP/codeql-default-setup-'
+        '${repository//[^A-Za-z0-9_.-]/_}.json"'
+    ) in workflow
+    assert (
+        "repos/${ORG_LOGIN}/${repository}/code-scanning/analyses?tool_name="
+        "CodeQL&per_page=1"
+    ) in workflow
+    assert "--jq '.[0] | if . then {created_at, error} else null end'" in workflow
+    assert "latest_codeql_analysis=null" in workflow
+    assert (
+        'if [ "$archived" != "true" ]; then\n'
+        '              analysis_json="$RUNNER_TEMP/codeql-analysis-'
+        '${repository//[^A-Za-z0-9_.-]/_}.json"'
+    ) in workflow
+    assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
+
+
+def test_codeql_coverage_audit_survives_a_ruleset_drift_failure() -> None:
+    """An owner-configured ruleset drift must not disable the coverage detector.
+
+    Both audits live in one job, and the ruleset step exits 1 on governance
+    drift. It did on 2026-09-06 ("exactly two approving reviews are not
+    required", "last-push approval protection is disabled"), so every run since
+    2026-09-04 failed before reaching the CodeQL coverage step. The subjects are
+    unrelated and the coverage step has no data dependency on the one above it,
+    so it is guarded by ``if: always()``.
+
+    The bootstrap steps below it are deliberately *not* given the same guard:
+    they open pull requests, and running a mutation after an unexplained
+    upstream failure is a different decision from running a read-only detector.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    coverage_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)[1]
+    before_next_step = coverage_step.split("      - name: ", 1)[0]
+
+    assert "\n        if: always()\n" in before_next_step
+    bootstrap_step = workflow.split(
+        "- name: Create missing CodeQL setup pull requests\n", 1
+    )[1].split("      - name: ", 1)[0]
+    assert "if: always()" not in bootstrap_step
+
+
+def test_codeql_gap_bootstrap_uses_trusted_opencode_identity_without_pr_head_execution() -> None:
+    """Backlog item 38 stays on trusted main and treats installation tokens as opaque."""
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    bootstrap_step = workflow.split(
+        "- name: Exchange OpenCode app token for CodeQL setup writes\n", 1
+    )[1]
+
+    assert "id-token: write" in workflow
+    assert "audience=${OIDC_AUDIENCE}" in bootstrap_step
+    assert "/exchange_github_app_token" in bootstrap_step
+    assert "token<<OPENCODE_TOKEN" in bootstrap_step
+    assert "bootstrap_codeql_pull_requests.py" in bootstrap_step
+    assert '"scripts/ci/bootstrap_codeql_pull_requests.py"' in workflow
+    assert "pull_request_target:" not in workflow
+    assert "pull_request:" not in workflow
+    assert "refs/pull/" not in bootstrap_step
+    assert "ghs_" not in bootstrap_step
+    assert "length" not in bootstrap_step
+    assert (
+        "central-required-workflow-ruleset-audit-${{ github.event_name == "
+        "'repository_dispatch' && github.event.action || github.event_name }}"
+        in workflow
+    )
+
+
+def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
+    """Devin finding: 'Private repositories disappear from audit'.
+
+    ORG_WIDE_CREDENTIAL_AVAILABLE only proves *some* org-scoped secret
+    exists, not that the specific credential used (PR_REVIEW_MERGE_TOKEN
+    when present) can see the full organization. A fine-grained token with
+    an incomplete repository allowlist does not 403 on the enumeration
+    call -- it silently returns a smaller repository list. This pins the
+    real post-enumeration completeness check: known-private, non-archived
+    sentinel repositories must all appear in the enumerated list, or the
+    step fails loudly instead of silently auditing a partial organization.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+
+    codeql_step = workflow.split('- name: "Audit organization CodeQL coverage"\n', 1)
+    if len(codeql_step) == 1:
+        codeql_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)
+    assert len(codeql_step) == 2, "CodeQL coverage step not found in workflow"
+    step_body = codeql_step[1]
+
+    assert 'PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(' in step_body
+    assert '"xtrmLLMBatchPython"' in step_body
+    assert '"linux-cluster-ops"' in step_body
+    assert '"gyeot"' in step_body
+    assert (
+        'jq -e --arg name "$sentinel" \'any(.[]; .name == $name)\' "$repositories_json"'
+        in step_body
+    )
+    assert 'missing_sentinels=()' in step_body
+    assert (
+        'if [ "${#missing_sentinels[@]}" -gt 0 ]; then\n'
+        '            echo "::error::CodeQL coverage audit\'s organization '
+        'repository enumeration is missing known-private sentinel '
+        "repository(ies): ${missing_sentinels[*]}."
+    ) in step_body
+    # The sentinel check must run against the same repositories_json used to
+    # drive the per-repository coverage loop below it, and must exit before
+    # that loop starts on a partial list.
+    sentinel_check_index = step_body.index("PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(")
+    coverage_loop_index = step_body.index("printf '[]\\n' >\"$coverage_json\"")
+    assert sentinel_check_index < coverage_loop_index
+    exit_index = step_body.index(
+        "exit 1", step_body.index("missing_sentinels[@]")
+    )
+    assert exit_index < coverage_loop_index
+
+
+def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/sast-semgrep.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--output=semgrep-results.raw.sarif" in workflow
+    assert (
+        'SEMGREP_IMAGE: "semgrep/semgrep@sha256:'
+        "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942\""
+    ) in workflow
+    assert (
+        workflow.count(
+            "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+        )
+        == 1
+    )
+    semgrep_job = workflow.split("\n  semgrep:\n", 1)[1]
+    job_header, steps = semgrep_job.split("\n    steps:\n", 1)
+    assert 'SEMGREP_IMAGE: "semgrep/semgrep@sha256:' in job_header
+    assert 'echo "Using ${SEMGREP_IMAGE}"' in steps
+    assert 'docker manifest inspect "${SEMGREP_IMAGE}"' in steps
+    assert '--entrypoint semgrep \\\n            "${SEMGREP_IMAGE}" \\\n' in steps
+    assert "Verify pinned Semgrep manifest" in workflow
+    assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
+    assert ".suppressions // []" in workflow
+    assert "SEMGREP_SUPPRESSED_COUNT" in workflow
+    assert "semgrep_sarif.outputs.finding_count != '0'" in workflow
+    assert 'SEMGREP_FINDING_COUNT:-missing}' in workflow
+    assert "--output=semgrep-results.sarif" not in workflow
