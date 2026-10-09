@@ -935,6 +935,26 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     return any(changed_file in combined for changed_file in changed_files)
 
 
+def _label_match_is_embedded(text: str, index: int, label: str) -> bool:
+    """Return whether one label match is embedded in a larger token."""
+    return (
+        index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_")
+    ) or (
+        label == "coverage:"
+        and text[max(0, index - len("docstring ")) : index] == "docstring "
+    )
+
+
+def _contains_standalone_label(text: str, label: str) -> bool:
+    """Return whether text contains a label outside larger tokens."""
+    index = text.find(label)
+    while index != -1:
+        if not _label_match_is_embedded(text, index, label):
+            return True
+        index = text.find(label, index + len(label))
+    return False
+
+
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
@@ -947,26 +967,27 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
         # Handle no-op PRs with empty/no changed files where deep verification labels may be omitted by model.
         return True
     return (
-        all(label in combined for label in APPROVAL_VERIFICATION_LABELS)
+        all(
+            _contains_standalone_label(combined, label)
+            for label in APPROVAL_VERIFICATION_LABELS
+        )
         and "codegraph" in combined
     )
 
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
-    # ⚡ Bolt: Fast path starts using native find, avoiding nested O(N) regex evaluation
-    starts: list[int] = []
-    index = text.find(label)
+    # One reverse scan avoids the prior Python loop and list of every match.
+    index = text.rfind(label)
     while index != -1:
-        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
-            index = text.find(label, index + len(label))
+        if _label_match_is_embedded(text, index, label):
+            index = text.rfind(label, 0, index)
             continue
-        starts.append(index)
-        index = text.find(label, index + len(label))
+        break
 
-    if not starts:
+    if index == -1:
         return ""
-    start = starts[-1] + len(label)
+    start = index + len(label)
 
     end = len(text)
     # ⚡ Bolt: Dynamically shrink the search window to prevent O(N) redundant scanning overhead
@@ -976,10 +997,7 @@ def label_section(text: str, label: str) -> str:
 
         idx = text.find(candidate, start, end)
         while idx != -1:
-            if (
-                candidate == "coverage:"
-                and text[max(0, idx - 10) : idx] == "docstring "
-            ):
+            if _label_match_is_embedded(text, idx, candidate):
                 idx = text.find(candidate, idx + len(candidate), end)
                 continue
             end = min(end, idx)
