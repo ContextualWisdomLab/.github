@@ -16,8 +16,7 @@ jobs:
     # on PRs. Default setup remains the repository's code-scanning upload owner.
     name: Analyze (actions)
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
     permissions:
       contents: read
       security-events: write
@@ -44,8 +43,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     name: Analyze (python)
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
     permissions:
       contents: read
       security-events: write
