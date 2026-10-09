@@ -1,3 +1,7 @@
+### A model-unavailable fallback review never satisfies the required OpenCode check
+
+- When the OpenCode model pool was exhausted, the fallback posted a deterministic CHANGES_REQUESTED blocker review. The required `opencode-review` bootstrap accepted any opencode-agent CHANGES_REQUESTED, so the check went green with no model verdict: from the 2026-08-27 gateway switch until the /v1 fix (#2333), no model verdict ran while required checks passed (for example run 34931908846, model=none). `opencode_review_receipt_gate.is_formal_receipt` likewise filtered fallback markers only for APPROVED, so the fallback review suppressed the scheduler wake that retries a real review. Both gates now treat a review carrying any fallback marker, in either state, as not a model verdict. The required step fails with an explicit `MODEL_OUTPUT_UNAVAILABLE` error, and the receipt gate keeps the retry wake alive. A later model-backed review on the same head still passes. Merges were never opened by the fallback; this fixes the check hiding the outage. Refs #2335.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
