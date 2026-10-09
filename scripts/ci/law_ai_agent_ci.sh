@@ -62,8 +62,16 @@ PY
 
 # Remove only this lane's private scratch cluster; failed stop leaves evidence for retry.
 cleanup_root() {
-  local root="$1" pg_bin="$2" cluster="$1/data/private/postgres/cluster"
+  local root="$1" pg_bin="$2" cluster="$1/data/private/postgres/cluster" boundary_path
   validate_owned_root "$root" || return 1
+  for boundary_path in \
+    "$root/data" "$root/data/private" "$root/data/private/postgres" \
+    "$cluster" "$cluster/postmaster.pid"; do
+    if [[ -L "$boundary_path" ]]; then
+      printf '%s\n' 'law-ci: PostgreSQL cluster boundary is symlinked; scratch retained' >&2
+      return 1
+    fi
+  done
   if [[ -e "$cluster" && ! -d "$cluster" ]]; then
     printf '%s\n' 'law-ci: PostgreSQL cluster path is not a directory; scratch retained' >&2
     return 1

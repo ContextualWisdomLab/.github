@@ -1,3 +1,12 @@
+### Law CI cleanup rejects symlinked PostgreSQL descendants
+
+- The central law-agent cleanup now refuses symbolic links at every component
+  from the owned scratch root through the PostgreSQL cluster and
+  `postmaster.pid`. Cancellation and normal-exit cleanup therefore retain
+  evidence instead of invoking `pg_ctl` through an untrusted descendant path.
+  Contracts cover all five descendant boundaries in normal and Actions-mode
+  execution. Hosted exact-head Checks and independent review remain required.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
