@@ -953,23 +953,28 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 
 def label_section(text: str, label: str) -> str:
-    """Return text after a verification label until the next known label."""
-    # ⚡ Bolt: Fast path starts using native find, avoiding nested O(N) regex evaluation
-    starts: list[int] = []
-    index = text.find(label)
+    """Return text after the last admissible label until the next known label."""
+    index = text.rfind(label)
     while index != -1:
-        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
-            index = text.find(label, index + len(label))
+        if (
+            (
+                index > 0
+                and (text[index - 1].isalnum() or text[index - 1] in "_-`")
+            )
+            or (
+                label == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            )
+        ):
+            index = text.rfind(label, 0, index)
             continue
-        starts.append(index)
-        index = text.find(label, index + len(label))
+        break
 
-    if not starts:
+    if index == -1:
         return ""
-    start = starts[-1] + len(label)
+    start = index + len(label)
 
     end = len(text)
-    # ⚡ Bolt: Dynamically shrink the search window to prevent O(N) redundant scanning overhead
     for candidate in APPROVAL_VERIFICATION_LABELS:
         if candidate == label:
             continue
@@ -977,8 +982,14 @@ def label_section(text: str, label: str) -> str:
         idx = text.find(candidate, start, end)
         while idx != -1:
             if (
-                candidate == "coverage:"
-                and text[max(0, idx - 10) : idx] == "docstring "
+                (
+                    idx > 0
+                    and (text[idx - 1].isalnum() or text[idx - 1] in "_-`")
+                )
+                or (
+                    candidate == "coverage:"
+                    and text[max(0, idx - 10) : idx] == "docstring "
+                )
             ):
                 idx = text.find(candidate, idx + len(candidate), end)
                 continue
@@ -1441,38 +1452,233 @@ def valid_control(
     return normalized
 
 
+class DuplicateJsonMemberError(ValueError):
+    """Signal that an object repeats a member name."""
+
+
+def load_json_without_duplicate_members(text: str) -> Any:
+    """Decode JSON while rejecting ambiguous object member authority."""
+
+    def reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one object only when every member name is unique."""
+        value: dict[str, Any] = {}
+        for key, member in pairs:
+            if key in value:
+                raise DuplicateJsonMemberError(key)
+            value[key] = member
+        return value
+
+    return json.loads(text, object_pairs_hook=reject_duplicate_members)
+
+
 def iter_json_objects(text: str) -> list[Any]:
     """Extract top-level JSON values without promoting nested control objects."""
-    decoder = json.JSONDecoder()
     values: list[Any] = []
 
     try:
         # Fast path for pure JSON payloads; preserve the single top-level value.
-        return [json.loads(text)]
-    except json.JSONDecodeError:
+        return [load_json_without_duplicate_members(text)]
+    except (DuplicateJsonMemberError, json.JSONDecodeError, RecursionError):
         # OpenCode exports may contain prose around the JSON control object.
         pass
 
-    index = 0
-    while True:
-        index = text.find("{", index)
-        if index == -1:
-            break
+    def blocks_nested_container(index: int, character: str) -> bool:
+        """Return whether an unmatched opener still resembles JSON syntax."""
         next_index = index + 1
         while next_index < len(text) and text[next_index] in " \t\r\n":
             next_index += 1
-        if next_index < len(text) and text[next_index] not in {'"', "}"}:
-            index += 1
+        next_character = text[next_index] if next_index < len(text) else ""
+        return (character == "{" and next_character in {'"', "}"}) or (
+            character == "["
+            and (
+                next_character in '\"{[-0123456789]'
+                or any(
+                    text.startswith(literal, next_index)
+                    for literal in (
+                        "true",
+                        "false",
+                        "null",
+                        "NaN",
+                        "Infinity",
+                    )
+                )
+            )
+        )
+
+    diagnostic_opener_indices: set[int] = set()
+    diagnostic_label = "Diagnostic:"
+    diagnostic_label_index = 0
+    diagnostic_label_complete = False
+    diagnostic_prefix_invalid = False
+    for diagnostic_index, diagnostic_character in enumerate(text):
+        if diagnostic_character in "\r\n":
+            diagnostic_label_index = 0
+            diagnostic_label_complete = False
+            diagnostic_prefix_invalid = False
+            continue
+        if diagnostic_prefix_invalid:
+            continue
+        if not diagnostic_label_complete:
+            if diagnostic_label_index == 0 and diagnostic_character.isspace():
+                continue
+            if (
+                diagnostic_label_index < len(diagnostic_label)
+                and diagnostic_character == diagnostic_label[diagnostic_label_index]
+            ):
+                diagnostic_label_index += 1
+                diagnostic_label_complete = diagnostic_label_index == len(
+                    diagnostic_label
+                )
+                continue
+            diagnostic_prefix_invalid = True
+            continue
+        if diagnostic_character.isspace():
+            continue
+        if diagnostic_character in "{[":
+            diagnostic_opener_indices.add(diagnostic_index)
+        diagnostic_prefix_invalid = True
+
+    def is_recoverable_prose_container(start_index: int, nested_index: int) -> bool:
+        """Return whether a known diagnostic frame precedes the nested value."""
+        if start_index not in diagnostic_opener_indices:
+            return False
+        frame_body = text[start_index + 1 : nested_index]
+        return frame_body.strip() == "pending" and any(
+            newline in frame_body for newline in "\r\n"
+        )
+
+    def apostrophe_is_word_internal(index: int) -> bool:
+        """Return whether an apostrophe joins two identifier-like characters."""
+        return (
+            0 < index < len(text) - 1
+            and (text[index - 1].isalnum() or text[index - 1] == "_")
+            and (text[index + 1].isalnum() or text[index + 1] == "_")
+        )
+
+    def delimiter_run_length_at(index: int, delimiter: str) -> int:
+        """Return the complete delimiter run length beginning at ``index``."""
+        run_length = 0
+        while (
+            index + run_length < len(text)
+            and text[index + run_length] == delimiter
+        ):
+            run_length += 1
+        return run_length
+
+    markdown_container_characters = frozenset(" \t>+-*.)0123456789")
+
+    def is_markdown_fence_prefix(start_index: int, end_index: int) -> bool:
+        """Return whether a line prefix contains only Markdown containers."""
+        return all(
+            text[index] in markdown_container_characters
+            for index in range(start_index, end_index)
+        )
+
+    matched_spans: list[tuple[int, int, int | None, bool]] = []
+    container_stack: list[tuple[str, int, bool]] = []
+    blocking_depth = 0
+    in_string = False
+    escaped = False
+    prose_quote_delimiter: str | None = None
+    prose_quote_escaped = False
+    prose_quote_skip_until = 0
+    line_start_index = 0
+    markdown_fence_line = False
+    markdown_fence_candidate_consumed = False
+    for index, character in enumerate(text):
+        if character in "\r\n":
+            line_start_index = index + 1
+            markdown_fence_line = False
+            markdown_fence_candidate_consumed = False
+        elif markdown_fence_line:
+            continue
+        if not container_stack:
+            if index < prose_quote_skip_until:
+                continue
+            if prose_quote_delimiter is not None:
+                if prose_quote_delimiter.startswith("`"):
+                    if character == "`":
+                        backtick_run_length = delimiter_run_length_at(index, "`")
+                        prose_quote_skip_until = index + backtick_run_length
+                        if backtick_run_length == len(prose_quote_delimiter):
+                            prose_quote_delimiter = None
+                elif prose_quote_escaped:
+                    prose_quote_escaped = False
+                elif character == "\\":
+                    prose_quote_escaped = True
+                elif character == prose_quote_delimiter and not (
+                    character == "'" and apostrophe_is_word_internal(index)
+                ):
+                    prose_quote_delimiter = None
+                continue
+            if character in {"`", "~"}:
+                delimiter_run_length = delimiter_run_length_at(index, character)
+                prose_quote_skip_until = index + delimiter_run_length
+                is_markdown_fence = (
+                    not markdown_fence_candidate_consumed
+                    and delimiter_run_length >= 3
+                    and is_markdown_fence_prefix(line_start_index, index)
+                )
+                markdown_fence_candidate_consumed = True
+                if is_markdown_fence:
+                    markdown_fence_line = True
+                elif character == "`":
+                    prose_quote_delimiter = "`" * delimiter_run_length
+                continue
+            if character in {'"', "'"} and not (
+                character == "'" and apostrophe_is_word_internal(index)
+            ):
+                prose_quote_delimiter = character
+                continue
+            if character in "{[":
+                blocks_nested = blocks_nested_container(index, character)
+                container_stack.append(
+                    ("}" if character == "{" else "]", index, blocks_nested)
+                )
+                blocking_depth += int(blocks_nested)
+            continue
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            parent_closer, parent_start, parent_blocks_nested = container_stack[-1]
+            if not parent_blocks_nested and not is_recoverable_prose_container(
+                parent_start, index
+            ):
+                container_stack[-1] = (parent_closer, parent_start, True)
+                blocking_depth += 1
+            blocks_nested = blocks_nested_container(index, character)
+            container_stack.append(
+                ("}" if character == "{" else "]", index, blocks_nested)
+            )
+            blocking_depth += int(blocks_nested)
+        elif character in "}]" and character == container_stack[-1][0]:
+            _, start_index, blocks_nested = container_stack.pop()
+            blocking_depth -= int(blocks_nested)
+            parent_start = container_stack[-1][1] if container_stack else None
+            matched_spans.append(
+                (start_index, index + 1, parent_start, blocking_depth > 0)
+            )
+
+    matched_starts = {start for start, _, _, _ in matched_spans}
+    for start_index, end_index, parent_start, blocked in matched_spans:
+        if blocked or parent_start in matched_starts:
             continue
         try:
-            value, new_index = decoder.raw_decode(text, index)
-            values.append(value)
-            # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
-            index = new_index
-            continue
-        except json.JSONDecodeError:
+            values.append(
+                load_json_without_duplicate_members(text[start_index:end_index])
+            )
+        except (DuplicateJsonMemberError, json.JSONDecodeError, RecursionError):
             pass
-        index += 1
 
     return values
 

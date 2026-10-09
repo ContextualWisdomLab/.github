@@ -1,5 +1,82 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 OpenCode normalizer tree-mode integrity
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2564`; focused local
+verification is GREEN, while executable hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Gap / RCA.** The published normalizer blob was byte-identical to the
+warnings-fatal tested source, but the remote Git tree recorded mode `100644`
+while the verified tree and shebang contract required `100755`. The claimed
+exact remote/tested tree identity was therefore false and direct execution was
+removed.
+
+**Action / evidence.** A mode-only ordinary fast-forward restored `100755`
+without changing blob `fedb097409eeedee1b3a640923d1d5d88f60a473`.
+Source tree `89239520e294c41dacfd4cc4e0bed9a5166cfd2c` then matched the
+verified local tree. The focused normalizer corpus is **175 passed** with
+warnings fatal; Python compilation, executable-mode assertion, and diff
+checks are GREEN. Future publication receipts bind Git mode and content.
+
+## 2026-10-09 OpenCode quoted coverage-label authority
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2564`; focused local
+verification is GREEN, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**PRD / buyer-visible Gap.** A fail-closed review must not become an approval
+because its explanatory prose quotes the claim that it rejected. The coverage
+oracle selected the last text occurrence of `coverage:` and admitted one that
+started immediately after a Markdown backtick. A warning such as “do not claim
+`coverage: ... 100%`” could therefore replace genuine “not measured” evidence.
+
+**TRD / Context Map / action.** The central `.github` review-control bounded
+context owns label authority; OpenCode remains an untrusted evidence producer.
+RED adds the exact quoted-warning transcript. GREEN rejects backtick-prefixed
+labels in backward authority selection and forward section-boundary scanning,
+without changing legitimate repeated labels or the separate docstring label.
+The focused quoted-warning, repeated-label, identifier-suffix, and full-summary
+cases pass 4/4 with warnings fatal. Completion still requires fresh exact-head
+hosted evidence, no actionable review thread, qualifying independent approval,
+and ordinary protected integration.
+
+## 2026-10-07 OpenCode unambiguous JSON-member authority
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must derive exact-run authority from an unambiguous JSON object. Repeated member names at any depth are invalid evidence; the PRD goal and loop remain unchanged. | `OpenCode model output → duplicate-aware JSON decoder → exact-run identity validation → review receipt gate`. The decoder boundary rejects ambiguity before domain validation, so neither outer identity nor nested evidence can acquire last-wins semantics. | No persistence, schema, table, or migration change. | Draft `ContextualWisdomLab/.github#2564@3ecb54b896fbf4c9b7fea1bf8749c28cc558c0cd` used Python's default `json.loads`, which retains only the last repeated member. RED proves `{"value":1,"value":2}` was accepted as one object and a stale first `head_sha` could be replaced by a later current-head value, producing exit 0. | Decode through the standard library with an `object_pairs_hook` that rejects the first repeated name at every nesting depth. Apply the same boundary to pure-JSON and mixed-prose recovery, preserve the original artifact on rejection, and bind the diagnostic-label branch so recovery authority cannot follow extra prose. Require fresh exact-head hosted Checks and a qualifying independent approval before merge. | **Proposed / local GREEN:** focused normalizer 174/174; target module 100% statement, branch, and public-doc coverage; warning-fatal repository suite 5,375 passed, 10 skipped, 40 subtests. Exact-head hosted evidence remains required. |
+
+## 2026-10-03 OpenCode tilde-fence authority boundary
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must treat every supported Markdown fence delimiter line as prose framing, never approval evidence. The PRD goal and loop remain unchanged. | `OpenCode model output → mixed-output normalizer → exact-run control candidate → review receipt gate`. Backtick and tilde delimiter lines, including blockquote, list-item, and continuation indentation, share one non-authoritative boundary; fenced bodies and later independent lines retain their existing identity. | No persistence, schema, table, or migration change. | Draft successor `ContextualWisdomLab/.github#2564@420f631b3b8bc0bb3c8dae4d69134ce97d932e02` ignored backtick delimiter-line controls but did not recognize root tilde fences. RED `11c9c5ca2dce8d7ef32b078d76d7cd31101557e2` binds opening and closing false admissions; GREEN `02f2763ff08d05060c66c8d6531df1aa8e49d035` closes the root form. Independent review then reproduced the same bypass under blockquote and list-item prefixes. RED `0c226a1587b089a1ab267e48ab00ec9b0b69214c` binds four nested forms; GREEN `3ddd31841b73c6d5ae8555f6c8a838cb2b5f4e55` closes those same-line cases. A second pass found exponential regex backtracking and four-space/ordered-list continuation gaps. RED `f2aada37f6aa904442105d653d1217b834d8a18f` binds five failures and the no-prefix-copy invariant. | Retain backtick-only inline quotation semantics and the transparent fenced-body contract. Evaluate at most one fence candidate per line, and conservatively fail closed when its prefix contains only whitespace or Markdown container-marker characters. GREEN `e5ef765fb523596fdcc683876d80bc1bc644e566` removes regex backtracking and prefix copying; a 100,000-marker failing prefix completes in about 0.03 seconds. This intentionally over-approximates CommonMark containers rather than claiming a full Markdown parser. Require fresh exact-head hosted Checks, coverage, and an independent current-head review before merge. | **Proposed / local GREEN:** focused normalizer 171/171; warning-fatal repository suite 5,372 passed, 10 skipped, 40 subtests; exact-head hosted evidence remains required. |
+
+## 2026-10-03 OpenCode fence-delimiter authority boundary
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must admit only independent top-level exact-run JSON. Markdown fence delimiter lines are prose framing, not a channel for approval evidence. The PRD goal and loop remain unchanged. | `OpenCode model output → mixed-output normalizer → exact-run control candidate → review receipt gate`. Fence delimiter lines terminate before candidate discovery; later independent lines keep their existing identity. | No persistence, schema, table, or migration change. | Draft successor `ContextualWisdomLab/.github#2564@2974f7a806af50bcc64be627d37182683467b61e` recognized a line-start Markdown fence but continued scanning the remainder of that same line. Consequently a balanced control in either an opening fence info string or the suffix of a closing fence delimiter was promoted as top-level authority. RED `807fba4b845cba193126c1484b52e803315865a7` binds both attacks. | In `iter_json_objects`, retain a line-local fence-delimiter state through the newline and ignore all remaining delimiter-line characters. GREEN `705ac4a0a76d8160cc229e2b5e5a0337b7dfb2c9` implements the minimal state transition while preserving the existing transparent fenced-body contract. Require fresh exact-head hosted Checks, coverage, and an independent current-head review before merge. | **Proposed / local GREEN:** focused normalizer 158/158; warning-fatal repository suite 5,359 passed, 10 skipped, 40 subtests; compileall and diff checks pass. Exact-head hosted evidence remains required. |
+
+## 2026-10-03 OpenCode inline-quotation authority boundary
+
+| PRD / TRD scope | Context Map / UML | ERD | Gap / executable evidence | Action | Status |
+|---|---|---|---|---|---|
+| The central `.github` review-control owner must admit only independent exact-run JSON as OpenCode approval evidence and must fail closed without terminating the review step on hostile model output. The PRD goal and loop remain unchanged. | `OpenCode model output → mixed-output normalizer → exact-run control candidate → review receipt gate`. Quoted examples stay outside the control-candidate boundary; repository and product consumers continue to use the released central workflow contract. | No persistence, schema, table, or migration change. | On draft successor `ContextualWisdomLab/.github#2564` parent `d2f1f1530a0e37ac6d17c23fceac8a9a861dbbe1`, balanced controls inside `'…'`, `` `…` ``, or `` ``…`` `` were promoted as authoritative. The same spans containing `{` or `[` hid a later real control, while 10,000-level JSON nesting raised uncaught `RecursionError`. Integrated source repair `10b32952bae391d794a5d1af36be71f80b32a252` binds both false-positive/false-negative directions, Markdown-fence compatibility, contractions, and crash containment. Independent review then reproduced early termination by an apostrophe inside a quote, quote adjacency to a word, and mixed-length backtick runs; the integrated repair binds and corrects those composition cases. A second pass found quadratic same-line prefix copying during fence classification; RED measured 800,863 copied characters across 400 spans and the same source commit restores constant-width classification. | Track the top-level quotation delimiter; treat apostrophes as word-internal only when both neighbors are identifier-like; consume a complete backtick run and close inline spans only on the exact delimiter length; leave only line-start triple-or-longer Markdown fences transparent; check the maximum three-space fence indent before slicing; catch `RecursionError` at both decoder boundaries. Require fresh exact-head hosted Checks, coverage, and an independent current-head review before merge. | **Proposed / local GREEN:** focused normalizer 156/156; warning-fatal repository suite 5,357 passed, 10 skipped, 40 subtests. The current execution image lacks the locked `coverage` and `interrogate` modules, so no new local coverage percentage is claimed; hosted exact-head evidence remains required. |
+
+## 2026-10-03 OpenCode linear-time transcript framing contract
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The exact-head diagnostic compatibility repair called prefix-wide `str.rfind()` twice for each nested non-JSON opener. Untrusted model output could therefore drive the mixed-output scanner toward quadratic work before evidence normalization. | Independent exact-head review of #2564 `a62fe71a7573cf377da535d2dcb72e9f714b263d`; deterministic RED `e9a080f59ff6d85101c78da8ac1d4eddcd53c7b7` observes 129 reverse searches for 64 nested openers. | Preclassify exact line-local `Diagnostic:` opener positions in one linear pass, use O(1) membership during nesting, and retain the existing exact recovery grammar and fail-closed ambiguity rules. GREEN `5f5c2dc9b3ad8e7476663ce4d3c32ee49a8de4a4` observes one decoder-internal reverse search and scales from about 0.010 s at 16k openers to 0.080 s at 128k. | **Proposed / focused GREEN; exact-head hosted Checks and qualifying independent approval required.** |
+
+## 2026-10-03 OpenCode quoted-prose and unfinished-wrapper evidence boundary
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The single-pass mixed-output scanner treated a quoted prose `{` or `[` as an outer JSON container, so its closing prose quote could consume a later independent exact-run control. Conversely, an unfinished invalid-token wrapper was not retained as an evidence boundary, so its completed nested control could be promoted at EOF. The Strix runtime-quality self-test also required the deleted `decoder.raw_decode` implementation string instead of executing the active scanner contract. | Draft successor `ContextualWisdomLab/.github#2564`; review threads `PRRT_kwDOS_C14s6oi-5R` and `PRRT_kwDOS_C14s6oi-6j`; concurrent RED `4de4805502e0fa2cae1178919ec31eec9fcd7249` and GREEN `a16431475a223d213b7e827b274282feda92286c`; three additional test-first RED cycles produced 11 focused failures across quoted delimiters, unfinished quotes, same-line/newline invalid wrappers, and false diagnostic aliases, while the Strix harness failed both its stale implementation assertion and quoted-brace CLI case | In the central `.github` review-control owner, preserve the concurrent ancestry and CLI regression, track prose quotation state independently from JSON strings, and keep an unfinished quote fail-closed. Retain only the exact newline-separated `Diagnostic: [pending` / `Diagnostic: {pending` recovery grammar; every other unfinished invalid parent blocks nested values. Replace the stale implementation assertion with execution of the active scanner contract. | **Proposed / exact integrated tree GREEN: focused normalizer 134/134; target statement/branch/public-doc coverage 100%; repository suite 5,335 passed, 10 skipped, 40 subtests; filtered and complete Strix harness PASS; both actionable threads resolved. Fresh terminal hosted Checks and qualifying independent approval remain required.** |
+
 ## 2026-10-03 Noema document-reader prerelease security-oracle closure
 
 | Gap | Exact evidence | Action | Status |
@@ -3731,3 +3808,186 @@ verdict-shape acceptance, and qualifying independent approval.
 **Gap / failure scene.** The v2 handler names a run with `head/base/required-run/producer-source`, but its required-workflow fallback looked up only `head/base/required-run`. When authenticated status publication is unavailable, a completed clean handler job could not be found and a rerun ended false RED. Omitting the producer source would also allow a regenerated live merge revision to reuse predecessor evidence.
 
 **Action / evidence.** Correct the fallback lookup to include the live merge source and retain fail-closed base, head, required-run, workflow-path, job-name, GHAS-identity, and SARIF checks. The test-first repair reproduced two failures, then passed 96 focused workflow-contract tests; the new edge case rejects a stale merge-source title. Ruff E9/F/I on the changed dispatch-contract file and `git diff --check` pass. Fresh hosted Checks and a qualifying independent approval are still required on the unchanged executable delta before merge.
+
+## 2026-10-01 OpenCode evidence-label identity boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; fresh exact-head
+hosted Checks and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode response normalization and approval-evidence admission. OpenCode
+is the untrusted evidence producer; repository review workflows consume only
+the normalizer's fail-closed verdict contract.
+
+**Gap / RCA.** The optimized last-label search used an unconstrained
+`rfind("coverage:")`. A response could state that real coverage evidence was
+not measured, then append `uncoverage: ... 100%`; the suffix beginning inside
+`uncoverage:` was accepted as a newer `coverage:` label. The false label could
+therefore replace the genuine fail-closed section and make
+`mentions_full_coverage` return true. The same missing identity boundary also
+affected forward searches for the next section label.
+
+**RED → GREEN / action.** RED
+`af06cf9c87de4ac76db575d087a170746d6ab83d` adds the durable suffix-forgery
+case. GREEN `4d49b8307706ab8d4565cca8b0d9728bcdad2a35` rejects label occurrences whose
+preceding character is alphanumeric, underscore, or hyphen in both backward
+selection and forward section termination. It retains decorated Markdown
+labels, repeated legitimate labels, and the separate `docstring coverage:`
+rule. Local direct behavior cases, Python compilation, and `git diff --check`
+are GREEN; the local environment has no pytest installation, so no full-suite
+claim is made. Completion still requires hosted exact-head tests, terminal
+required Checks, no unresolved actionable thread, qualifying independent
+approval, and ordinary protected integration.
+
+## 2026-10-01 OpenCode outermost JSON evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable repair
+and local focused verification are GREEN, while fresh exact-head hosted Checks
+and a qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode response normalization and exact-run evidence admission. The
+model response is untrusted input; downstream required-review workflows may
+consume only top-level controls accepted by this owner contract.
+
+**Gap / RCA.** Exact-head Strix run
+[36794394865](https://github.com/ContextualWisdomLab/.github/actions/runs/36794394865)
+reported repeated JSON decoding in `iter_json_objects`. Direct reproduction
+confirmed two effects from the same retry-at-every-`{` loop: a malformed outer
+object could promote its valid nested exact-run control into top-level evidence,
+and doubling an unclosed nested prefix increased processing time by roughly
+four times. The first effect is an identity-boundary false admission; the
+second permits model-controlled quadratic work.
+
+**RED → GREEN / action.** RED
+`d05f67f6c5f164309d3cbf15f4858c5fa3d176cd` records the malformed-object
+promotion. GREEN `86f52f320e8eb5ac56efdf9a3e2552b20bf409de`
+tracks one outermost container at a time, handles quoted strings and escapes,
+and decodes only a completed outermost span. Follow-up test commit
+`1a00c73a752b45d9d2a808d9bc96baae51ea8402` binds the same rule to malformed
+array nesting. The existing embedded-object cases and both new adversarial
+cases pass; Python compilation and `git diff --check` are GREEN. A direct
+3,200-level measurement completed in 0.001236 seconds, while the prior
+1,600-level case required 0.065367 seconds. These are local diagnostic values,
+not a hosted performance claim. Pytest is unavailable in the local runner, so
+the complete suite remains an exact-head hosted acceptance requirement.
+
+
+## 2026-10-01 OpenCode mixed-output JSON framing boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN complete, fresh exact-head hosted Checks and a qualifying independent
+approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. OpenCode output is
+untrusted: prose delimiters must not block a later complete top-level control,
+while actual malformed outer containers must continue to suppress nested
+controls.
+
+**Gap / RCA.** CodeRabbit review on prior exact head
+`2ee8ddad072fe59bbe33c99994fa1e8c9cb5387c` showed that
+`Diagnostic: [pending` was treated as an unclosed JSON array and hid a later
+valid control. Direct reproduction showed the same regression for
+`Diagnostic: {pending`. The outermost single-pass repair had dropped the
+predecessor's candidate-start grammar gate.
+
+**RED → GREEN / action.** RED
+`42099a359cdfb8126ea4e3d9118c60f6d98af1fa` binds both prose delimiters.
+GREEN `07baba20259c9061fbb647963f09745a9ca6931b` admits an object start only
+before `"` or `}`, and an array start only before a JSON value starter.
+Existing malformed object/array nested-control cases remain fail-closed.
+Direct focused cases 8/8, Python compilation, and `git diff --check` are GREEN;
+pytest is unavailable locally, so the full hosted suite remains required.
+
+
+## 2026-10-01 balanced invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output normalization and exact-run evidence admission.
+OpenCode model output is untrusted. A nested control inside any balanced outer
+container—including a syntactically invalid one—must never acquire top-level
+identity.
+
+**Gap / RCA.** The candidate-start allowlist skipped balanced wrappers whose
+first token was invalid JSON. Inputs such as `[undefined, {control}]`,
+`[unquoted_token, {control}]`, and `{unquoted_key: {control}}` therefore
+promoted the nested exact-run control. The earlier `NaN`/`Infinity` repair
+covered Python JSON extensions but not the general invalid-token boundary.
+
+**RED → GREEN / action.** RED
+`b5a0507b8ee4ec70cc5fca751f34df98719f219b` reproduces all three promotions.
+GREEN `443c29aa6f56735f7fcf0ee6a550b6bad5f7e2f8` treats an invalid starter as a
+malformed outer container when its token reaches a structural separator before
+another opener; the proven unclosed prose-delimiter recovery remains intact.
+Focused parser verification is 118/118 GREEN. Full repository verification
+reached 5,318 passed, 7 skipped, and 40 subtests; its sole failure was the
+published-commit ancestry test because the isolated `git archive` intentionally
+has no `.git` directory. Warnings-fatal compilation and diff whitespace checks
+are GREEN. Exact Git tree `dccb57a152c21600305c0eabac06cb29de2e0cf7`
+preserves source mode `100755`.
+
+## 2026-10-03 separatorless invalid-wrapper evidence regression
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; local focused
+RED→GREEN is complete. Fresh exact-head hosted Checks, no unresolved actionable
+thread, and qualifying independent approval remain mandatory before ordinary
+merge.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns OpenCode mixed-output framing and exact-run evidence identity. Model output
+is untrusted; only controls that are top-level in the producer output may enter
+the approval contract.
+
+**Gap / RCA.** Exact head
+`24efc99bb0aad3f4c0d76b00b173b6d9a5be34ee` preserved comma/colon invalid-token
+tests but lost the separatorless regression cases and their span-ownership
+implementation during concurrent branch restoration. Consequently
+`[undefined {control}]`, `[unquoted_token {control}]`, and
+`{unquoted_key {control}}` promoted the nested control. The parser skipped the
+invalid outer opener when its token reached another opener, even when the outer
+container later closed.
+
+**RED → GREEN / action.** RED
+`4752398da1aef77ab8172126e2d3668870f628aa` binds the three real-parser
+failures. GREEN `f6d6e255ed479150dbbd48490f0a527ce06e0917` records matched parent/child
+spans and decodes only spans without a matched or JSON-shaped enclosing parent.
+Balanced malformed wrappers therefore retain outer ownership, while an
+unclosed prose delimiter such as `Diagnostic: [pending` still cannot hide a
+later independent control. Focused framing verification is 10/10 GREEN;
+complete repository verification and fresh hosted exact-head evidence remain
+required.
+
+## 2026-10-01 separatorless invalid-token wrapper evidence boundary
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2543`; executable
+RED→GREEN is published, while fresh exact-head hosted Checks and a qualifying
+independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` review-control bounded context
+owns mixed-output framing and exact-run evidence admission. Balanced malformed
+wrappers remain evidence boundaries even when the malformed token and nested
+container have no JSON separator; unclosed prose delimiters must still permit a
+later complete top-level control.
+
+**Gap / RCA.** Exact-head CodeRabbit review of
+`a5fddfa7c46ff68eea593a4dd71bc6196bc640ba` found that the invalid-token scan
+stopped at a nested `{` or `[` and discarded the outer opener. Inputs
+`[unquoted_token {control}]` and `{unquoted_key {control}}` therefore promoted
+the nested exact-run control despite their balanced outer wrappers.
+
+**RED → GREEN / action.** RED
+`8b1bd4a43be7604d6aa7b9e524295fea7501334c` binds both separatorless attacks.
+GREEN `5261145a73e7b5a0b53c224317002fe98961f16f` records matched container spans,
+their immediate parents, and JSON-like blocking depth in one linear scan.
+Nested candidates are rejected when a balanced parent exists or a JSON-like
+ancestor remains open; candidates after unmatched prose delimiters remain
+recoverable. Focused normalizer verification is 120/120 GREEN. The repository
+run passed 5,321 tests, skipped 5 optional cases, and passed 40 subtests; its
+only two initial failures were direct `python -m pip` calls in a verification
+venv without pip, and both passed in the pip-equipped locked venv (2/2). The
+source mode remains `100755`.
