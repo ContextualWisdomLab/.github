@@ -7,7 +7,23 @@ their main-ref predicates; their non-main fallback must never be GitHub-hosted.
 from pathlib import Path
 import json
 import re
+import pytest
 import yaml
+
+
+STATIC_RUNNER_GROUP_LABELS = {
+    'CWL central control': set(),
+    'CWL central CodeQL': set(),
+    'CWL central OpenCode': set(),
+    'CWL CI isolated': {'cwlab-ci-isolated'},
+    'CWL law CI': {'law-ai-agent-ci'},
+}
+
+
+def required_static_labels(group: object) -> set[str]:
+    """Return the exact additional labels admitted for a static runner group."""
+    assert group in STATIC_RUNNER_GROUP_LABELS, ('unsupported static group', group)
+    return {'self-hosted', 'linux', 'x64'} | STATIC_RUNNER_GROUP_LABELS[group]
 
 
 def test_every_runner_requires_self_hosted_and_no_hosted_fallback() -> None:
@@ -33,10 +49,7 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
     paths = sorted(set(Path('.github/workflows').glob('*.yml')) |
                    set(Path('.github/workflows').glob('*.yaml')))
     observed = 0
-    groups = {
-        'CWL central control', 'CWL central CodeQL',
-        'CWL central OpenCode', 'CWL CI isolated',
-    }
+    groups = set(STATIC_RUNNER_GROUP_LABELS)
     for path in paths:
         for job_id, job in yaml.safe_load(path.read_text())['jobs'].items():
             if 'runs-on' not in job:
@@ -50,20 +63,26 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                     # typed-pair and R-matrix contracts, not literal evaluation.
                     assert any(name in group for name in groups), (path, job_id, group)
                     continue
-                assert group in groups, (path, job_id, 'unsupported static group', group)
                 labels = runner.get('labels')
                 assert isinstance(labels, list) and all(isinstance(label, str) for label in labels), (
                     path, job_id, 'static labels must be a string list', labels,
                 )
-                required = {'self-hosted', 'linux', 'x64'}
-                if group == 'CWL CI isolated':
-                    required.add('cwlab-ci-isolated')
+                required = required_static_labels(group)
                 assert required.issubset(label.lower() for label in labels), (
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
             else:
                 assert isinstance(runner, str) and 'cwlab-ci-isolated' in runner, (path, job_id, runner)
     assert observed, 'runner selector coverage is empty'
+
+
+def test_static_runner_group_policy_is_explicit_and_fail_closed() -> None:
+    """Bind dedicated groups to their isolation labels and reject unknown groups."""
+    assert required_static_labels('CWL law CI') == {
+        'self-hosted', 'linux', 'x64', 'law-ai-agent-ci',
+    }
+    with pytest.raises(AssertionError, match='unsupported static group'):
+        required_static_labels('CWL ungoverned CI')
 
 
 def test_isolated_fallback_never_selects_privileged_group() -> None:
