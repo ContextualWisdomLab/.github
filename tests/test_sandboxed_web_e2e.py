@@ -1535,6 +1535,231 @@ def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
         assert "--ro-bind /etc/nsswitch.conf /etc/nsswitch.conf" in command
 
 
+@pytest.mark.parametrize("bound_target", [False, True])
+def test_isolated_command_rejects_workspace_link_to_external_executable(monkeypatch, tmp_path, bound_target):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "host-tool"
+    outside.write_text("host", encoding="utf-8")
+    outside.chmod(0o700)
+    (repo / "host-link").symlink_to(outside)
+    if bound_target:
+        monkeypatch.setattr(sandboxed_web_e2e, "_bind_roots", lambda: [tmp_path])
+
+    with pytest.raises(RuntimeError, match="outside the isolated bind roots"):
+        sandboxed_web_e2e.isolated_command(
+            "./host-link", backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_rejects_symlink_before_dotdot_traversal(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    (repo / "deep").mkdir(parents=True)
+    (repo / "deep" / "link").symlink_to("..", target_is_directory=True)
+    decoy = repo / "host-tool"
+    decoy.write_text("decoy", encoding="utf-8")
+    decoy.chmod(0o700)
+    outside = tmp_path / "host-tool"
+    outside.write_text("host", encoding="utf-8")
+    outside.chmod(0o700)
+    assert (repo / "deep/link/../../host-tool").resolve() == outside
+
+    with pytest.raises(RuntimeError, match="outside the isolated bind roots"):
+        sandboxed_web_e2e.isolated_command(
+            "./deep/link/../../host-tool", backend="/never-executed-bwrap",
+            cwd=repo, sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_relative_path_sibling_symlink_cannot_escape(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    bin_dir = sandbox / "bin"
+    repo.mkdir(parents=True)
+    bin_dir.mkdir()
+    outside = tmp_path / "host-tool"
+    outside.write_text("host", encoding="utf-8")
+    outside.chmod(0o700)
+    (bin_dir / "tool").symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="could not be resolved|outside the isolated bind roots"):
+        sandboxed_web_e2e.isolated_command(
+            "tool", backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "../bin"},
+        )
+
+
+def test_isolated_command_accepts_internal_link_and_sibling_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    bin_dir = sandbox / "bin"
+    repo.mkdir(parents=True)
+    bin_dir.mkdir()
+    tool = bin_dir / "tool"
+    tool.write_text("local", encoding="utf-8")
+    tool.chmod(0o700)
+    (repo / "internal-link").symlink_to("../bin/tool")
+    command = sandboxed_web_e2e.isolated_command(
+        "./internal-link", backend="/never-executed-bwrap", cwd=repo,
+        sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+    )
+    assert command.endswith("./internal-link")
+    command = sandboxed_web_e2e.isolated_command(
+        "tool", backend="/never-executed-bwrap", cwd=repo,
+        sandbox_root=sandbox, env={"PATH": "../bin"},
+    )
+    assert command.endswith("-- tool")
+
+
+def test_isolated_command_resolution_error_fails_closed(monkeypatch, tmp_path):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    tool = repo / "tool"
+    tool.write_text("local", encoding="utf-8")
+    tool.chmod(0o700)
+    original_resolve = Path.resolve
+
+    def denied(path, *args, **kwargs):
+        if path == tool:
+            raise OSError("resolution denied")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", denied)
+    with pytest.raises(RuntimeError, match="resolution denied"):
+        sandboxed_web_e2e.isolated_command(
+            "./tool", backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
+@pytest.mark.parametrize("lookup", ["absolute", "bare"])
+@pytest.mark.parametrize("bound_home", [False, True])
+def test_isolated_command_rejects_home_overlapping_bind_root(monkeypatch, tmp_path, lookup, bound_home):
+    sandbox = tmp_path / "home" / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    host_bin = tmp_path / "home" / "bin"
+    host_bin.mkdir()
+    tool = host_bin / "tool"
+    tool.write_text("host", encoding="utf-8")
+    tool.chmod(0o700)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    if bound_home:
+        monkeypatch.setattr(sandboxed_web_e2e, "_bind_roots", lambda: [tmp_path])
+
+    with pytest.raises(RuntimeError, match="host home directory"):
+        sandboxed_web_e2e.isolated_command(
+            str(tool) if lookup == "absolute" else "tool",
+            backend="/never-executed-bwrap", cwd=repo, sandbox_root=sandbox,
+            env={"PATH": str(host_bin)},
+        )
+
+
+def test_isolated_command_home_exception_requires_workspace_local_spelling(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    sandbox = home / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    tool = repo / "tool"
+    tool.write_text("local", encoding="utf-8")
+    tool.chmod(0o700)
+    alias = home / "host-alias"
+    alias.symlink_to(tool)
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    with pytest.raises(RuntimeError, match="host home directory"):
+        sandboxed_web_e2e.isolated_command(
+            str(alias), backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_relative_path_does_not_search_wrapper_cwd(monkeypatch, tmp_path):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    wrapper = sandbox / "wrapper"
+    repo.mkdir(parents=True)
+    (wrapper / "bin").mkdir(parents=True)
+    tool = wrapper / "bin" / "tool"
+    tool.write_text("not in command cwd", encoding="utf-8")
+    tool.chmod(0o700)
+    monkeypatch.chdir(wrapper)
+
+    with pytest.raises(RuntimeError, match="could not be resolved"):
+        sandboxed_web_e2e.isolated_command(
+            "tool", backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "bin"},
+        )
+
+
+def test_isolated_command_relative_path_preserves_lookup_order(monkeypatch, tmp_path):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    (repo / "bin").mkdir(parents=True)
+    local = repo / "bin" / "tool"
+    local.write_text("local", encoding="utf-8")
+    local.chmod(0o700)
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    host = host_bin / "tool"
+    host.write_text("host", encoding="utf-8")
+    host.chmod(0o700)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "unrelated-home")
+    result = sandboxed_web_e2e._resolve_isolated_executable(
+        "tool", cwd=repo, sandbox_root=sandbox, path=f"bin{os.pathsep}{host_bin}",
+    )
+    assert result == local
+
+
+def test_which_relative_path_symlink_dotdot_skips_host_directory(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    (repo / "deep").mkdir(parents=True)
+    (repo / "deep" / "link").symlink_to("..", target_is_directory=True)
+    decoy = repo / "tool"
+    decoy.write_text("decoy", encoding="utf-8")
+    decoy.chmod(0o700)
+    outside = tmp_path / "tool"
+    outside.write_text("host", encoding="utf-8")
+    outside.chmod(0o700)
+    assert sandboxed_web_e2e._which_relative_to_cwd(
+        "tool", cwd=repo, sandbox_root=sandbox, path="deep/link/../..",
+    ) is None
+
+
+@pytest.mark.parametrize("command,path_value", [("./tool", "/usr/bin"), ("tool", "bin")])
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError])
+def test_isolated_command_resolution_exceptions_deny(monkeypatch, tmp_path, command, path_value, error_type):
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    (repo / "bin").mkdir(parents=True)
+    tool = repo / "tool"
+    tool.write_text("local", encoding="utf-8")
+    tool.chmod(0o700)
+    (repo / "bin" / "tool").write_text("local", encoding="utf-8")
+    (repo / "bin" / "tool").chmod(0o700)
+    original_resolve = Path.resolve
+
+    def denied(path, *args, **kwargs):
+        if path == tool or path == repo / "bin":
+            raise error_type("resolution denied")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", denied)
+    with pytest.raises(RuntimeError, match="resolution denied"):
+        sandboxed_web_e2e.isolated_command(
+            command, backend="/never-executed-bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": path_value},
+        )
+
+
 def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
     """Executable paths from a user's home cannot enter the isolated runner."""
     monkeypatch.setattr(
