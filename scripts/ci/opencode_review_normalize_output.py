@@ -954,17 +954,22 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
-    # ⚡ Bolt: Fast path starts using native rfind, avoiding forward O(N) iterative scans
-    index = text.rfind(label)
-    while index != -1:
-        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
-            index = text.rfind(label, 0, index)
+    # ⚡ Bolt: Fast path starts using native rfind, avoiding forward iterative scans
+    start_idx = text.rfind(label)
+    while start_idx != -1:
+        # Prevent partial token matches like "undercoverage:" or "docstring coverage:"
+        # using strict word-boundary (non-whitespace) validation to catch _ or - prefixes
+        if start_idx > 0 and not text[start_idx - 1].isspace():
+            start_idx = text.rfind(label, 0, start_idx)
+            continue
+        if label == "coverage:" and text[max(0, start_idx - 10) : start_idx] == "docstring ":
+            start_idx = text.rfind(label, 0, start_idx)
             continue
         break
 
-    if index == -1:
+    if start_idx == -1:
         return ""
-    start = index + len(label)
+    start = start_idx + len(label)
 
     end = len(text)
     # ⚡ Bolt: Dynamically shrink the search window to prevent O(N) redundant scanning overhead

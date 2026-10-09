@@ -248,6 +248,14 @@ def test_documented_opener_lineage_references_published_commits() -> None:
     assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
     _assert_g17_evidence_is_published(baseline)
 
+    unpublished = baseline.replace(
+        "57477289ebec5631b0c48f0bc419f336dbe19deb",
+        "1111111111111111111111111111111111111111",
+        1,
+    )
+    with pytest.raises(AssertionError, match="not published"):
+        _assert_g17_evidence_is_published(unpublished)
+
 
 def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
     """A commit-shaped but unpublished G-17 evidence identifier must fail closed."""
