@@ -35,9 +35,11 @@ def default_setup_scanning_nothing(name: str) -> dict:
     }
 
 
-def covered_by_recent_analysis(name: str, *, days_ago: int = 1) -> dict:
+def covered_by_recent_analysis(
+    name: str, *, days_ago: int = 1, now: datetime = NOW
+) -> dict:
     """Return a repository payload covered by a recent, successful CodeQL analysis."""
-    created_at = (NOW - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
+    created_at = (now - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
     return {
         "name": name,
         "archived": False,
@@ -262,10 +264,26 @@ def test_null_latest_analysis_is_not_coverage() -> None:
     ]
 
 
-def test_audit_codeql_coverage_defaults_now_to_current_time() -> None:
-    repositories = [covered_by_recent_analysis("DefaultNowRepo", days_ago=0)]
+def test_audit_codeql_coverage_defaults_now_to_current_time(monkeypatch) -> None:
+    current_utc = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        requested_timezone = None
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.requested_timezone = tz
+            if tz is None:
+                return current_utc.replace(tzinfo=None)
+            return current_utc.astimezone(tz)
+
+    monkeypatch.setattr(audit, "datetime", FrozenDateTime)
+    repositories = [
+        covered_by_recent_analysis("DefaultNowRepo", days_ago=0, now=current_utc)
+    ]
 
     assert audit.audit_codeql_coverage(repositories) == []
+    assert FrozenDateTime.requested_timezone is timezone.utc
 
 
 def test_load_payload_reads_from_stdin(monkeypatch) -> None:
@@ -299,10 +317,29 @@ def test_main_fail_path_reports_gaps_from_stdin(monkeypatch, capsys) -> None:
     assert "FAIL: 1 repositories have no CodeQL coverage" in captured.err
 
 
-def test_main_pass_path_reports_from_file_arg(tmp_path, capsys) -> None:
+def test_main_pass_path_reports_from_file_arg(tmp_path, capsys, monkeypatch) -> None:
+    current_utc = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return current_utc.replace(tzinfo=None)
+            return current_utc.astimezone(tz)
+
+    monkeypatch.setattr(audit, "datetime", FrozenDateTime)
     payload_path = tmp_path / "repositories.json"
     payload_path.write_text(
-        json.dumps([covered_by_default_setup("ELUNVERA"), covered_by_recent_analysis("Orgmetra")]),
+        json.dumps(
+            [
+                covered_by_default_setup("ELUNVERA"),
+                covered_by_recent_analysis(
+                    "Orgmetra",
+                    days_ago=audit.CODEQL_ANALYSIS_FRESHNESS_DAYS,
+                    now=current_utc,
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -311,6 +348,45 @@ def test_main_pass_path_reports_from_file_arg(tmp_path, capsys) -> None:
         "PASS: all 2 repositories have real CodeQL coverage"
         in capsys.readouterr().out
     )
+
+
+def test_main_rejects_analysis_older_than_freshness_boundary(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    current_utc = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return current_utc.replace(tzinfo=None)
+            return current_utc.astimezone(tz)
+
+    monkeypatch.setattr(audit, "datetime", FrozenDateTime)
+    payload_path = tmp_path / "repositories.json"
+    stale_created_at = (
+        current_utc
+        - timedelta(days=audit.CODEQL_ANALYSIS_FRESHNESS_DAYS, microseconds=1)
+    ).isoformat().replace("+00:00", "Z")
+    payload_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "Orgmetra",
+                    "archived": False,
+                    "default_setup_state": None,
+                    "latest_codeql_analysis": {
+                        "created_at": stale_created_at,
+                        "error": "",
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert audit.main([str(payload_path)]) == 1
+    assert "ERROR: Orgmetra has no CodeQL coverage" in capsys.readouterr().err
 
 
 def test_main_reports_malformed_json_load_reason(monkeypatch, capsys) -> None:

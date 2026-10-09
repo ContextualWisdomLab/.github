@@ -1,11 +1,51 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-03 Noema document-reader prerelease security-oracle closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The transitive lock security regression converted dot-separated version parts with `int()`, so an npm prerelease such as `3.1.8-beta.1` raised `ValueError` before the security assertion and could not preserve prerelease ordering against the final fixed release | Independent `.github#2531` review `PRR_kwDOS_C14s8AAAABQb3fbw`; RED commit `b4a24d2585e0b076c51552c43f3c29a466fdd6dd` reproduces the exception in `test_prerelease_does_not_satisfy_final_security_minimum`; GREEN commit `e169a9d3defe06f427ca53071bc8ff3a20483b4a` passes the focused file and the 5,176-test repository suite | Parse every matching hoisted or nested lock version with the already pinned `packaging.version.Version`, compare it with semantic final-release minima, and retain the prerelease regression case | **Proposed / focused 4 tests and full 5,176 tests GREEN; exact-head hosted Checks and qualifying approval required** |
+
+## 2026-10-01 bounded Maturin release downloader SAST closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The canonical Maturin asset verifier replaced a suppressed dynamic `urlopen` call with direct `HTTPSConnection`, but Semgrep's low-confidence certificate-validation audit still rejects every use of that low-level API | `.github#2531@e33d97d022e1c1a26b35d51f9fa4b695fe969547`; SAST run `36802256836`; job `110178968784`; rule `python.lang.security.audit.httpsconnection-detected.httpsconnection-detected` | At source-repair head `eede925e71e0f1526560a305f5219a13c6631227`, replace the low-level connection with a standard-library opener whose redirect handler admits one credential-free HTTPS hop only from the fixed GitHub release path to the exact release-assets host; preserve bounded reads and terminal response closure; prohibit scanner suppressions | **Proposed / RED scanner-contract reproduction and 31 tests plus 4 subtests GREEN locally; source-repair exact-head Security, Python Security, SAST, and runtime-quality GREEN; terminal CodeQL and independent approval required** |
+
+## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | Failing predecessor `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`, Python Security run `36799069276`, job `110169140365`; repaired exact head `fe879f7b7f48f729f757e03851bf61149470ccb5`, Python Security run `36800615364`, Security Scan run `36800615435`, SAST run `36800615456`, and runtime-quality run `36800615444` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require authenticated CodeQL verdict evidence plus independent approval | **Proposed / dependency, security, SAST, and runtime-quality Checks GREEN; CodeQL run `36800615319` fail-closed pending authenticated verdicts; independent approval required** |
+
+## 2026-10-01 PyJWT recursion denial-of-service closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix source and hash lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v / CVE-2026-101918 disclosed an unauthenticated recursion DoS | Security Scan run `36741151937`; dependency-review job `109975641239`; OSV job `109975641271`; dependent `.github#2540@612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; canonical owner PR #2531 predecessor `dde3ea7876ceb1569db717975cc74f44cc8d18f9` | In canonical owner PR #2531, advance source and lock to 2.15.0 without unrelated package movement, preserve exact source/lock parity, and merge-forward dependent branches only after owner acceptance | **Proposed / exact-head Checks and independent approval required** |
+
+## 2026-10-01 shared urllib3 security closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| pip-audit and Strix locks retained urllib3 2.7.0 after CVE-2026-97687 and CVE-2026-97689 were published | Python Security run `36733279716`, job `109949358063`; exact predecessor `d1aa3659fca527a6c7330151f3ab4df3d7578391` | In canonical owner PR #2531, pin urllib3 2.8.0 in both source inputs, regenerate both hash locks without unrelated version movement, and bind all four files with one contract | **Proposed / exact-head Checks and independent approval required** |
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-09-30 공유 보안 기준 exact-head delta
+
+이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
+보호 `main`은 `37b10243cec3d160ecc9c1be75c71428b160a703`이고, live API의 첫
+페이지에는 열린 PR 50개가 있었다. 페이지 전체를 조직의 총 PR 수로 추론하지 않는다.
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
 
 ### 2026-09-19 exact-head incident delta
 

@@ -325,8 +325,12 @@ def _which_relative_to_cwd(argv0: str, *, cwd: Path, sandbox_root: Path, path: s
     for entry in search_path.split(os.pathsep):
         directory = Path(entry) if entry else cwd
         if not directory.is_absolute():
-            directory = Path(os.path.normpath(cwd / directory))
-            if not directory.is_relative_to(sandbox_root):
+            directory = cwd / directory
+            try:
+                resolved_directory = directory.resolve()
+            except (OSError, RuntimeError) as exc:
+                raise RuntimeError(f"executable PATH resolution failed: {exc}") from exc
+            if not resolved_directory.is_relative_to(sandbox_root.resolve()):
                 continue
         candidate = directory / argv0
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -360,11 +364,14 @@ def _resolve_isolated_executable(
     repository under test.
     """
     if os.path.dirname(argv0):
-        candidate = Path(os.path.normpath(cwd / argv0))
+        candidate = cwd / argv0
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
         return None
-    found = shutil.which(argv0, path=path)
+    search_path = path if path is not None else os.environ.get("PATH", os.defpath)
+    if any(not Path(entry).is_absolute() for entry in search_path.split(os.pathsep)):
+        return _which_relative_to_cwd(argv0, cwd=cwd, sandbox_root=sandbox_root, path=search_path)
+    found = shutil.which(argv0, path=search_path)
     if found is not None:
         return Path(found)
     return _which_relative_to_cwd(argv0, cwd=cwd, sandbox_root=sandbox_root, path=path)
@@ -401,17 +408,33 @@ def isolated_command(
     )
     if executable_path is None:
         raise RuntimeError(f"executable could not be resolved for isolation validation: {argv[0]}")
-    if executable_path.is_relative_to(Path.home()):
-        raise RuntimeError("commands from the host home directory are not allowed in isolation")
-    if not (
+    try:
+        resolved_executable = executable_path.resolve()
+        resolved_sandbox = sandbox_root.resolve()
+        resolved_bind_roots = [root.resolve() for root in bind_roots]
+        resolved_home = Path.home().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"executable resolution failed for isolation validation: {exc}") from exc
+    workspace_local = (
         executable_path.is_relative_to(sandbox_root)
-        or any(executable_path.is_relative_to(root) for root in bind_roots)
+        and resolved_executable.is_relative_to(resolved_sandbox)
+    )
+    bound_executable = any(resolved_executable.is_relative_to(root) for root in resolved_bind_roots)
+    if executable_path.is_relative_to(sandbox_root) and not workspace_local:
+        raise RuntimeError(f"executable is outside the isolated bind roots: {resolved_executable}")
+    if not workspace_local and (
+        executable_path.is_relative_to(Path.home()) or resolved_executable.is_relative_to(resolved_home)
     ):
+        detail = "commands from the host home directory are not allowed in isolation"
+        if os.path.dirname(argv[0]) and not bound_executable:
+            detail = f"executable is outside the isolated bind roots: {resolved_executable}; {detail}"
+        raise RuntimeError(detail)
+    if not workspace_local and not bound_executable:
         raise RuntimeError(
-            f"executable is outside the isolated bind roots: {executable_path}"
+            f"executable is outside the isolated bind roots: {resolved_executable}"
         )
-    if Path(argv[0]).is_absolute() and executable_path.is_relative_to(sandbox_root):
-        argv[0] = str(Path(SANDBOX_MOUNT) / executable_path.relative_to(sandbox_root))
+    if Path(argv[0]).is_absolute() and workspace_local:
+        argv[0] = str(Path(SANDBOX_MOUNT) / resolved_executable.relative_to(resolved_sandbox))
     args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))

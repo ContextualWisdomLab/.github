@@ -956,26 +956,24 @@ def test_prescreen_refuses_rebound_license_evidence(
         prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
 
 
-def test_prescreen_refuses_complete_rows_without_sdist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_prescreen_refuses_an_unsupported_runtime_variant(tmp_path: Path) -> None:
+    """A transported receipt cannot introduce an unsupported interpreter version."""
     scope_root, scope_rows = _prescreen_case(tmp_path)
-    sdist_row = scope_rows[-1]
-    first_archive = dict(scope_rows[0]["archives"][0])
-    first_path = scope_root / scope_rows[0]["artifact_name"] / first_archive["file"]
-    sdist_row["leg"] = "extra-py3.12"
-    sdist_row["artifact_name"] = "repro-digest-extra-py3.12"
-    sdist_row["archives"] = [first_archive]
-    extra_folder = scope_root / sdist_row["artifact_name"]
-    extra_folder.mkdir()
-    (extra_folder / first_archive["file"]).write_bytes(first_path.read_bytes())
-    monkeypatch.setattr(prescreen_module, "_build_packages", lambda item, folder: [])
-    monkeypatch.setattr(prescreen_module, "_maturin_tool", lambda item, folder: {
-        "key": "github-release/maturin@1.15.0/sha256/" + "a" * 64,
-        "legs": [item["leg"]], "build_envs": {item["leg"]: "fixture"},
-    })
+    scope = _scope_with_variants(scope_rows, scope_root)
+    row = scope["verified_runtime_variants"][-1]
+    old_leg = row["leg"]
+    row["leg"] = "universal2-apple-darwin-py3.15"
+    row["artifact_name"] = f"repro-macos-x86-{row['leg']}"
+    folder = scope_root / row["artifact_name"]
+    shutil.copytree(scope_root / f"repro-macos-x86-{old_leg}", folder)
+    runtime = json.loads((folder / f"{old_leg}.runtime.json").read_text())
+    runtime["leg"] = row["leg"]
+    runtime["python_version"] = "3.15"
+    runtime_path = folder / f"{row['leg']}.runtime.json"
+    runtime_path.write_text(json.dumps(runtime))
+    row["members"][runtime_path.name] = hashlib.sha256(runtime_path.read_bytes()).hexdigest()
     with pytest.raises(gate.GateError, match="runtime archive coverage is incomplete"):
-        prescreen(_scope_with_variants(scope_rows, scope_root), scope_root)
+        prescreen(scope, scope_root)
 
 
 def test_prescreen_cli_writes_once_and_refuses_existing_output(
@@ -1565,3 +1563,103 @@ def test_build_native_packages_require_the_build_interpreter_architecture(tmp_pa
     monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": wrong_arch, "needed": []}])
     with pytest.raises(gate.GateError, match="requires aarch64 architecture"):
         _build_packages(row, folder)
+
+
+@pytest.mark.parametrize("mutation,message", [
+    ("oversized", "runtime receipt is oversized"),
+    ("changed", "runtime receipt changed after transport"),
+    ("architecture", "architecture"),
+])
+def test_prescreen_rechecks_transported_runtime_receipts(tmp_path, mutation, message):
+    root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, root)
+    row = rows[0]
+    path = root / row["artifact_name"] / f"{row['leg']}.runtime.json"
+    if mutation == "oversized":
+        path.write_bytes(b" " * (1024 * 1024 + 1))
+    elif mutation == "changed":
+        path.write_bytes(path.read_bytes() + b" ")
+    else:
+        runtime = json.loads(path.read_bytes())
+        runtime["machine"] = "unknown"
+        path.write_text(json.dumps(runtime))
+        row["members"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(gate.GateError, match=message):
+        prescreen(scope, root)
+
+
+@pytest.mark.parametrize("build_env", [None, "runner:macos/15/macOS/unknown"])
+def test_build_packages_reject_unknown_universal_interpreter(tmp_path, build_env):
+    root, rows = _prescreen_case(tmp_path)
+    row = next(row for row in rows if row["leg"].startswith("universal2-"))
+    folder = root / row["artifact_name"]
+    path = folder / f"{row['leg']}.build-first.json"
+    receipt = json.loads(path.read_bytes())
+    receipt["build_env"] = build_env
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(gate.GateError, match="build interpreter architecture is missing"):
+        _build_packages(row, folder)
+
+
+def test_prescreen_refuses_an_unknown_runtime_target(tmp_path):
+    """An unrecognized target is rejected before receipts or package evaluation."""
+    scope_root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, scope_root)
+    rows[0]["leg"] = "foreign-target-py3.12"
+    rows[0]["artifact_name"] = "repro-digest-foreign-target-py3.12"
+    with pytest.raises(gate.GateError, match="runtime archive coverage is incomplete"):
+        prescreen(scope, scope_root)
+
+
+@pytest.mark.parametrize("mutation,message", [
+    ("missing", "verified scope evidence is incomplete"),
+    ("replacement", "runtime archive coverage is incomplete"),
+    ("duplicate", "scope evidence row is malformed"),
+    ("variant-arch", "scope evidence row is malformed"),
+    ("not-a-row", "scope evidence row is malformed"),
+    ("not-a-leg", "scope evidence row is malformed"),
+])
+def test_prescreen_requires_exact_matrix_before_any_file_io(tmp_path, monkeypatch, mutation, message):
+    """Malformed matrices fail at admission rather than after partial native inspection."""
+    root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, root)
+    if mutation == "missing":
+        rows.pop()
+    elif mutation == "replacement":
+        rows[-1]["leg"] = "x86_64-unknown-linux-gnu-py3.15"
+    elif mutation == "duplicate":
+        rows[-1]["leg"] = rows[0]["leg"]
+    elif mutation == "variant-arch":
+        scope["verified_runtime_variants"][0]["arch"] = "arm64"
+    elif mutation == "not-a-row":
+        scope["verified_runtime_variants"][0] = None
+    else:
+        rows[0]["leg"] = 12
+    monkeypatch.setattr(gate, "_require_regular_file", lambda *args, **kwargs: pytest.fail("file I/O before matrix admission"))
+    with pytest.raises(gate.GateError, match=message) as result:
+        prescreen(scope, root)
+    assert result.value.code == gate.SCOPE_UNVERIFIABLE
+
+
+@pytest.mark.parametrize("field,value", [("artifact_name", "foreign"), ("archives", "not-a-list")])
+def test_prescreen_rejects_malformed_primary_archive_rows_before_io(tmp_path, monkeypatch, field, value):
+    """Exact matrix membership cannot authorize an invalid artifact location or archive shape."""
+    root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, root)
+    rows[0][field] = value
+    monkeypatch.setattr(gate, "_require_regular_file", lambda *args, **kwargs: pytest.fail("invalid archive row reached file I/O"))
+    with pytest.raises(gate.GateError, match="scope evidence row is malformed") as result:
+        prescreen(scope, root)
+    assert result.value.code == gate.SCOPE_UNVERIFIABLE
+
+
+@pytest.mark.parametrize("field,value", [("artifact_name", "foreign"), ("archives", "not-a-list")])
+def test_prescreen_rejects_malformed_variant_shapes_at_admission(tmp_path, monkeypatch, field, value):
+    """Invalid Intel variant shapes fail before any primary-leg filesystem inspection."""
+    root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, root)
+    scope["verified_runtime_variants"][0][field] = value
+    monkeypatch.setattr(gate, "_require_regular_file", lambda *args, **kwargs: pytest.fail("invalid variant reached file I/O"))
+    with pytest.raises(gate.GateError, match="scope evidence row is malformed") as result:
+        prescreen(scope, root)
+    assert result.value.code == gate.SCOPE_UNVERIFIABLE
