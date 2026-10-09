@@ -17,6 +17,11 @@
 
 ### Isolated CI routing gains a runner-group authority boundary
 
+- Reject the complete reusable R matrix when any requested leg is not one of
+  the admitted Linux/x64 image aliases. A required macOS, Windows, ARM, or
+  unknown leg can no longer disappear while the remaining Ubuntu leg reports
+  success; callers must request only executable legs or receive a failed
+  admission job.
 - Serialize the caller-controlled R matrix OS label with GitHub `toJSON()`
   before inserting it into the group-scoped runner selector. Quotes,
   backslashes, newlines, and duplicate `group`/`labels` text remain one
