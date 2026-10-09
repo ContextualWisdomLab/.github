@@ -26,8 +26,6 @@ jobs:
   audit:
     name: Audit organization ruleset 18156473
     runs-on: ${{ github.repository == 'ContextualWisdomLab/.github' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
-    env:
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -41,12 +39,18 @@ jobs:
 
       - name: Read live inherited organization ruleset and repository scope
         env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_AUDIT_TOKEN || '' }}
           ORG_LOGIN: ContextualWisdomLab
+          RULESET_WRITE_CREDENTIAL_AVAILABLE: ${{ secrets.CWL_RULESET_AUDIT_TOKEN != '' }}
           RULESET_ID: "18156473"
           STACKED_RULESET_ID: "21732164"
           RULESET_SENTINEL_REPOSITORY: naruon
         run: |
           set -euo pipefail
+          if [ "$RULESET_WRITE_CREDENTIAL_AVAILABLE" = "false" ]; then
+            echo "::error::Ruleset bypass audit requires CWL_RULESET_AUDIT_TOKEN with ruleset write access; github.token and review/merge credentials are not accepted as substitutes."
+            exit 1
+          fi
           ruleset_json="$RUNNER_TEMP/central-required-workflow-ruleset.json"
           ruleset_with_scope_json="$RUNNER_TEMP/central-required-workflow-ruleset-with-scope.json"
           ruleset_error="$RUNNER_TEMP/central-required-workflow-ruleset.error"
@@ -118,6 +122,7 @@ jobs:
         # unrelated failure.
         if: always()
         env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
           ORG_LOGIN: ContextualWisdomLab
           ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
         run: |

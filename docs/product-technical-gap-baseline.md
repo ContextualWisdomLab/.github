@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-07 persistent-bypass incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-RULESET-PERSISTENT-BYPASS-01 | **GREEN locally; protected integration, credential provisioning, and live ruleset remediation pending** | LineageWeave #1153 head `f18c736f4c51dea62d2f543134e077a3f9d9eb22` and squash result `03c575013e00fbce3d31bdc73eabd2bd13fa65e1` have the same tree, but the head had failed Tests and no APPROVED review. The active organization ruleset exposed an organization-admin `ALWAYS` bypass actor. RED proved `audit_ruleset()` accepted both that standing actor and a payload that omitted `bypass_actors`; GREEN reports the standing actor plus missing or malformed actor data as drift. The scheduled read now requires the dedicated `CWL_RULESET_AUDIT_TOKEN` capability and never falls back to `github.token`; an absent token or hidden `bypass_actors` fails closed. | `.github` owns `scripts/ci/audit_central_required_workflows.py` and the audit credential boundary. Merge this contract through exact-head Checks and independent review, provision `CWL_RULESET_AUDIT_TOKEN` with ruleset-write access, then remove the persistent actor from live ruleset `18156473` through the protected organization-admin settings path and capture the next scheduled audit success. LineageWeave #1170 preserves the complete Voice delta and retains only the incident record; neither lane retroactively certifies #1153. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

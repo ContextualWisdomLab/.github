@@ -1,3 +1,11 @@
+### Central ruleset audit detects standing bypass actors
+
+- The ruleset audit now fails closed when the visible payload for ruleset
+  `18156473` exposes a persistent bypass actor or omits/malforms
+  `bypass_actors`. This closes the detector gap exposed by LineageWeave PR
+  #1153; it does not claim that the live actor has been removed. Protected
+  settings cleanup and a subsequent scheduled audit remain required evidence.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS

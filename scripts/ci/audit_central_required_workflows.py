@@ -60,6 +60,26 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     if payload.get("enforcement") != "active":
         errors.append("central ruleset enforcement is not active")
 
+    bypass_actors = payload.get("bypass_actors")
+    if "bypass_actors" not in payload:
+        errors.append("central ruleset bypass actor data is missing")
+    elif not isinstance(bypass_actors, list):
+        errors.append("central ruleset bypass actor data is malformed")
+    elif bypass_actors:
+        actor_labels = sorted(
+            (
+                f"{actor.get('actor_type', '<missing>')}:"
+                f"{actor.get('actor_id', '<missing>')}:"
+                f"{actor.get('bypass_mode', '<missing>')}"
+            )
+            if isinstance(actor, dict)
+            else "<malformed>"
+            for actor in bypass_actors
+        )
+        errors.append(
+            f"central ruleset has persistent bypass actors: {actor_labels}"
+        )
+
     conditions = payload.get("conditions")
     conditions = conditions if isinstance(conditions, dict) else {}
     repository_names = conditions.get("repository_name")
