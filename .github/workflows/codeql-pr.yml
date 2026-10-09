@@ -60,7 +60,7 @@ jobs:
     name: Detect CodeQL languages
     # Draft PRs get no runner; ready_for_review re-runs this on the same head.
     if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
-    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}' || '"ubuntu-24.04"')) }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -164,7 +164,7 @@ jobs:
     # dependency exactly; the only case where it's genuinely skipped is a
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
-    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}' || '"ubuntu-24.04"')) }}
     # Verdict reads have exceeded five minutes; retain the ten-minute control budget.
     timeout-minutes: 10
     permissions:
@@ -367,7 +367,7 @@ jobs:
       && github.event.pull_request.state != 'closed'
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
-    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}' || '"ubuntu-24.04"')) }}
     timeout-minutes: 5
     permissions:
       contents: read
