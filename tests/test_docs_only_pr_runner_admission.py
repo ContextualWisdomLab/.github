@@ -17,8 +17,8 @@ the ruleset excludes -- see
 `docs/doctoring/required-workflow-path-filter-boundary.md`.
 
 See also `tests/test_required_security_runner_image_contract.py` and
-`tests/test_required_review_runner_image_contract.py`, which pin the
-`runs-on: ubuntu-24.04` counts these gate jobs add.
+`tests/test_required_review_runner_image_contract.py`, which pin each gate's
+supported hosted fallback and trusted self-hosted routing boundary.
 """
 
 from __future__ import annotations
@@ -139,8 +139,19 @@ def test_gate_jobs_use_supported_runner_allocation():
         elif filename == "noema-review.yml":
             assert "endsWith(github.workflow_ref, '@refs/heads/main')" in block, filename
             assert "fromJSON('[\"ubuntu-24.04\"]')" in block, filename
+        elif filename == "security-scan.yml":
+            assert "github.repository == 'ContextualWisdomLab/.github'" in block
+            assert "github.repository == 'ContextualWisdomLab/fast-mlsirm'" in block
+            assert (
+                "github.workflow_ref == "
+                "'ContextualWisdomLab/.github/.github/workflows/"
+                "security-scan.yml@refs/heads/main'"
+            ) in block
+            assert '"group":"CWL MCP remediation"' in block
+            assert '"group":"CWL CI isolated"' in block
+            assert "fromJSON('[\"ubuntu-24.04\"]')" in block
         else:
-            assert "runs-on: ubuntu-24.04" in block, filename
+            raise AssertionError(f"unclassified runner contract: {filename}")
         assert "runs-on: ubuntu-latest" not in block, filename
 
 
@@ -250,7 +261,17 @@ def test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level():
     assert "changed-scope:" not in workflow
     assert "needs: changed-scope" not in workflow
     assert "needs.changed-scope" not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") == 1
+    assert workflow.count("runs-on:") == 1
+    assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
+    assert "github.repository == 'ContextualWisdomLab/fast-mlsirm'" in workflow
+    assert (
+        "github.workflow_ref == "
+        "'ContextualWisdomLab/.github/.github/workflows/"
+        "sast-semgrep.yml@refs/heads/main'"
+    ) in workflow
+    assert '"group":"CWL MCP remediation"' in workflow
+    assert '"group":"CWL CI isolated"' in workflow
+    assert "fromJSON('[\"ubuntu-24.04\"]')" in workflow
 
     semgrep = _top_level_job_block(workflow, "semgrep")
     assert not re.search(r"(?m)^    needs:", semgrep)

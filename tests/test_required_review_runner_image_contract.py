@@ -95,10 +95,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_hosted() -> None:
-    """Separate short metadata work from model work without granting PR runner access."""
+def test_codeql_pr_routes_trusted_main_isolated_product_and_hosted_consumers() -> None:
+    """Preserve three runner trust levels without granting control-runner access."""
     workflow = Path(".github/workflows/codeql-pr.yml").read_text()
     assert workflow.count('"group":"CWL central control"') == 3
     assert workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'") == 3
-    assert workflow.count("|| '\"ubuntu-24.04\"'") == 3
+    assert workflow.count("github.repository == 'ContextualWisdomLab/.github'") == 3
+    assert workflow.count("github.repository == 'ContextualWisdomLab/fast-mlsirm'") == 3
+    assert workflow.count('"group":"CWL CI isolated"') == 3
+    assert workflow.count("'\"ubuntu-24.04\"'") == 3
     assert '"group":"CWL MCP remediation"' not in workflow

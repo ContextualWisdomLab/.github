@@ -49,7 +49,7 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assertIn("labels: [self-hosted, linux, x64]", workflow)
 
     def test_codeql_pr_uses_explicit_supported_image(self) -> None:
-        """Require trusted-main control routing and Ubuntu fallback for all three jobs."""
+        """Require control, isolated-product, and Ubuntu routes for all three jobs."""
         workflow = CODEQL_PR.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         selectors = [
@@ -64,7 +64,15 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
             )
             self.assertIn('"group":"CWL central control"', selector)
             self.assertIn('"labels":["self-hosted","linux","x64"]', selector)
-            self.assertIn("|| '\"ubuntu-24.04\"'", selector)
+            self.assertIn("github.repository == 'ContextualWisdomLab/.github'", selector)
+            self.assertIn(
+                "github.repository == 'ContextualWisdomLab/fast-mlsirm'",
+                selector,
+            )
+            self.assertIn('"group":"CWL CI isolated"', selector)
+            self.assertIn('"labels":["self-hosted","Linux","X64"]', selector)
+            self.assertIn("'\"ubuntu-24.04\"'", selector)
+            self.assertNotIn('"group":"CWL MCP remediation"', selector)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
         """Require validation, scan, and attempt wake jobs in the dedicated group."""
