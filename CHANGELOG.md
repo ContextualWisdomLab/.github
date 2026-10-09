@@ -1,3 +1,14 @@
+### Verification labels require standalone token boundaries
+
+- The central review normalizer now rejects required labels embedded in larger
+  identifiers such as `nocoverage:` and `notperformance:`. One shared predicate
+  protects reverse section selection, forward section termination, and the
+  verification-posture presence gate while retaining the intentional
+  `docstring coverage:` collision rule. RED commit `9a2ec91a` reproduces the
+  fail-open paths; the repaired module has 100% statement, branch, and
+  public-doc coverage. Hosted exact-head Checks and independent approval remain
+  required before protected integration.
+
 ### Git lineage tests again use real repository evidence
 
 - Removed PR #2576's module-wide `subprocess.run` replacement after a RED

@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-09 review-label token-boundary delta
+
+| Gap ID | 상태 | exact-tree evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-REVIEW-LABEL-TOKEN-BOUNDARY-01 | **Source repaired on Draft `.github#2576`; protected integration pending** | RED `9a2ec91ad9f1f6c91000e02174ddad00d1c9b575` proves that `nocoverage:`, `undercoverage:`, `rediscoverage:`, and `notperformance:` were accepted as standalone verification labels. The forward scan also truncated a valid coverage section at an embedded suffix, while a summary with every label prefixed by `not` satisfied the posture gate. GREEN uses one native boundary predicate for reverse selection, forward termination, and required-label presence. Focused normal and `GITHUB_ACTIONS=true` runs pass 114 tests; the changed module covers 750 statements and 362 branches at 100%, with 100% public-doc coverage. The warnings-as-errors repository suite passes 5,162 tests, 11 skips, and 40 subtests after deselecting two fixed-date CodeQL fixture failures that reproduce unchanged on parent `8b94e1ba`; the PR body remains the authority for the published exact head. | Canonical owner is central `.github/scripts/ci/opencode_review_normalize_output.py`; #2576 preserves executable mode `100755` and carries #2593's valid direct `docstring coverage:` regression intent. Keep #2576 Draft until exact-current-head hosted checks and a qualifying independent approval exist. Repair the two parent-reproduced CodeQL fixture time bombs in their own bounded owner lane; do not treat them as source evidence against this parser fix or bypass them at merge time. |
+
 ### 2026-10-07 Git lineage test-integrity delta
 
 | Gap ID | 상태 | exact-tree evidence | causal owner / next gate |
