@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 reusable R matrix conservation
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#2565@6e924f32a2dbaa0950709c6d8f1391fc1058ef43` printed `STOP` for unsupported R platform legs but returned exit 0 whenever at least one Ubuntu leg remained; the workflow then expanded only the filtered output, so a required macOS, Windows, ARM, or unknown check could disappear while the reusable workflow passed | RED changed the existing executable contract to require the mixed Ubuntu+macOS+Windows+ARM matrix to fail; exact-parent execution failed because the script returned 0 and emitted only Ubuntu. The inline workflow copy had identical behavior | **PRD:** requested required checks are conserved or the request fails; partial silent execution is forbidden. **TRD/RCA:** reject the entire matrix on the first unsupported leg and return the original rows only when every row is admitted; keep the owner script byte-equivalent to the workflow inline copy. **Context Map:** central `.github` owns reusable R admission; product callers consume the released contract. **Flow:** `caller matrix → validate every row → all admitted → fixed isolated Linux/x64 execution`, otherwise `STOP / nonzero`. DB/UI/ERD changes are N/A | **Proposed / focused RED→GREEN complete; full exact-tree verification, hosted exact-head Checks, isolated-capacity canary, and qualifying independent approval remain required** |
+
 ## 2026-10-07 security scanner runner isolation
 
 | Gap | Exact evidence | Action | Status |

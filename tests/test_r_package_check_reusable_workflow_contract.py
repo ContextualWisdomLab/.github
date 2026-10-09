@@ -124,7 +124,7 @@ def test_matrix_runner_format_renders_valid_group_scoped_json() -> None:
     assert workflow.count('group: CWL CI isolated') == 2
     assert workflow.count('labels: [self-hosted, Linux, X64, cwlab-ci-isolated]') == 2
     assert 'toJSON(matrix.config.os)' not in workflow
-    assert 'STOP: no supported Linux/x64 legs' in workflow
+    assert 'STOP unsupported platform leg:' in workflow
 
 
 def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:

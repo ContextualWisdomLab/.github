@@ -18,8 +18,8 @@ class Admission(unittest.TestCase):
                 {'os': 'ubuntu-24.04-arm', 'r': 'release'}]
         result = subprocess.run([sys.executable, str(script), json.dumps(rows)],
                                 capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), rows[:1])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
         self.assertIn('STOP', result.stderr)
         for invalid in ([], rows[1:], [{'os': 'ubuntu-evil', 'r': 'release'}],
                         [{'os': 'ubuntu-latest', 'r': ''}], {}):
