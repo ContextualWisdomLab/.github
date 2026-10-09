@@ -38,9 +38,20 @@ Production repair lineage:
 
 - `a2e9126416c96bb8c5fa1e00190a8eca45758883` replaces CodeQL's default `urlopen` transport with a local `OpenerDirector` whose `_RejectRedirects` handler refuses every redirect;
 - `4c7bcbeb06e421b98b0992b62cac06eaae45a98c` applies the same fail-closed boundary to the Strix evidence client;
-- `e06b6dd84b012db9c3fafc09d417a85f4aaeff4c` binds the hostile and positive-control tests to the actual no-redirect openers and includes same-authority redirects in the refusal contract.
+- `e06b6dd84b012db9c3fafc09d417a85f4aaeff4c` adds direct-handler hostile cases, canonical opener positive controls, and same-authority redirects to the refusal contract;
+- `57477289ebec5631b0c48f0bc419f336dbe19deb` closes the remaining executable-binding gap: both actual module-level production openers receive a synthetic 302 through their real HTTPS open/response chains, and the regression proves transport sees exactly the original canonical request plus bearer and never receives a redirected request.
 
-The redirect repair removes the two dynamic `urlopen` sinks rather than broadening a Semgrep/Bandit suppression. A 3xx response now terminates as the opener's HTTP error path; no second request object is created and the bearer credential cannot be forwarded by redirect machinery.
+The redirect repair removes the two dynamic `urlopen` sinks rather than broadening a Semgrep/Bandit suppression. A 3xx response now terminates as the opener's HTTP error path; no second request object is created and the bearer credential cannot be forwarded by redirect machinery. The executable proof patches only the actual opener's bounded HTTPS transport slot for a synthetic response; it does not replace `open()`, call the redirect handler directly as its oracle, or contact a network endpoint.
+
+## Production opener-chain RED → evidence repair
+
+Current-head review found that the direct `_RejectRedirects.redirect_request(...)` unit cases would remain green if either production `_GITHUB_API_OPENER` were accidentally rebuilt with Python's default redirect handler. Commit `57477289ebec5631b0c48f0bc419f336dbe19deb` therefore drives each public client path through its actual module-level opener. A synthetic HTTPS transport returns `302 Location: https://api.github.com/repos/ContextualWisdomLab/redirected`; the contract requires the client-specific HTTP error and exactly one transport call containing the original bearer header.
+
+Mutation RED temporarily replaced both `build_opener(_RejectRedirects())` constructions with `build_opener()`. Both new tests failed on the forbidden second request and recorded `Authorization='Bearer test-token'` at that redirect target. Restoring the production constructors made the complete authority file GREEN (`31 passed`, including malformed-authority parse failures for both clients and all four redirect target classes). This binds the executable claim to the production handler chain without adding network I/O, sharing runtime helpers, or changing the standalone CodeQL module.
+
+The broader focused run then exposed four pre-existing Strix fixtures still patching the removed module-level `urlopen` symbol: HTTP error, URL error, malformed JSON, and success. Their RED result was `2 failed, 77 passed` because monkeypatch setup stopped before those cases reached production. They now patch `binding._GITHUB_API_OPENER.open`, matching the real call path; the three-file CodeQL/Strix/authority suite passes in both normal and `GITHUB_ACTIONS=true` modes (`87 passed` each), with 100% statement and branch coverage across the two affected production modules.
+
+A clean worktree at predecessor `25f83aaee9eb97e423f6ef2467e722035bc2e362` reproduced those two Strix failures in the full suite (`2 failed, 3354 passed, 28 skipped, 40 subtests`) and the repository-wide pre-existing 98% coverage gate (`262` missed statements). The repair removes the two causal suite failures and all misses in the two affected production modules; it does not claim to close unrelated coverage debt in `actions_queue_health*`, Rust materialization, Noema document handling, or scheduler code.
 
 ## Alternatives rejected
 
@@ -48,11 +59,11 @@ Broad Semgrep/Bandit suppression, path exclusion, or threshold weakening were re
 
 ## Evidence and acceptance
 
-Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. Python stdlib `HTTPRedirectHandler` behavior was inspected during review because redirect construction is the second network-authority decision that the original source predicate did not control.
+Primary scanner rule inspected at [semgrep/semgrep-rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`](https://github.com/semgrep/semgrep-rules/commit/40b8c63f75dc7c22c8a77482d73bfb864b146f7e): `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. Python stdlib `HTTPRedirectHandler` behavior was inspected during review because redirect construction is the second network-authority decision that the original source predicate did not control.
 
 Acceptance requires all of the following on the exact PR head:
 
-1. `tests/test_github_api_url_boundary.py` passes initial hostile-authority, redirect-refusal, and canonical positive-control cases for both clients;
+1. `tests/test_github_api_url_boundary.py` passes initial hostile-authority, direct-handler redirect-refusal, actual-production-opener synthetic-302, and canonical positive-control cases for both clients;
 2. existing CodeQL GHAS identity and Strix evidence-binding suites remain green;
 3. Semgrep and Python/Bandit no longer report the #2248 baseline findings and introduce no replacement Medium+ finding;
 4. no security rule, path, threshold, or required check is weakened;
