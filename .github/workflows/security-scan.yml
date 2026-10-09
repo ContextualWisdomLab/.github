@@ -71,7 +71,7 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -126,7 +126,7 @@ jobs:
   osv-scan:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 25
     permissions:
       actions: read
@@ -352,7 +352,7 @@ jobs:
   dependency-review:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       pull-requests: read
@@ -436,7 +436,7 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       security-events: write
@@ -526,7 +526,7 @@ jobs:
   trivy-fs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       security-events: write
@@ -633,7 +633,7 @@ jobs:
   scorecard:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:

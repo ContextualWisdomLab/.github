@@ -62,3 +62,16 @@ def test_opencode_gateway_config_keeps_reasoning_and_tools():
     assert provider["options"] == {"baseURL": "https://litellm.poinnetworks.net/v1", "apiKey": "{env:LLM_GATEWAY_API_KEY}"}
     assert provider["models"]["auto"]["tool_call"]
     assert provider["models"]["auto"]["options"]["reasoningEffort"] == "high"
+
+
+def test_hosted_only_release_legs_are_disabled_without_partial_publication():
+    import yaml
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / '.github/workflows/fast-mlsirm-publish-pypi.yml').read_text())
+    jobs = workflow['jobs']
+    assert jobs['wheels']['if'] == '${{ false }}'
+    assert jobs['macos-x86-runtime']['if'] == '${{ false }}'
+    assert 'macos-x86-runtime' in jobs['reproducibility-record']['needs']
+    assert 'reproducibility-record' in jobs['publish-pypi']['needs']
+    assert 'release-admission' in jobs['publish-pypi']['needs']
+    assert 'if' not in jobs['publish-pypi']
