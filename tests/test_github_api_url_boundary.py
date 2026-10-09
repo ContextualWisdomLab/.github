@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any
+import urllib.error
 from urllib.request import Request
 from urllib.response import addinfourl
 
@@ -178,9 +179,9 @@ def test_codeql_identity_client_never_constructs_redirect_request_with_bearer_to
     )
     handler = identity._RejectRedirects()
 
-    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+    with pytest.raises(urllib.error.HTTPError):
+        handler.redirect_request(request, None, 302, "Found", {}, target)
 
-    assert redirected is None
     assert request.get_header("Authorization") == "Bearer test-token"
 
 
@@ -195,9 +196,9 @@ def test_strix_evidence_client_never_constructs_redirect_request_with_bearer_tok
     )
     handler = binding._RejectRedirects()
 
-    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+    with pytest.raises(urllib.error.HTTPError):
+        handler.redirect_request(request, None, 302, "Found", {}, target)
 
-    assert redirected is None
     assert request.get_header("Authorization") == "Bearer test-token"
 
 
@@ -246,10 +247,23 @@ def test_documented_opener_lineage_references_published_commits() -> None:
     assert "9c19c6e00eafc028068719ab482282c1256f8893" in baseline
     assert "b35410673ce60f9a693532daf74862c08971e9e3" not in evidence
     assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
+
     _assert_g17_evidence_is_published(baseline)
 
 
-def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
+def test_sentinel_describes_redirect_change_as_hardening_not_prior_bypass() -> None:
+    """Security guidance must distinguish existing rejection from hardening."""
+    sentinel = Path(".jules/sentinel.md").read_text(encoding="utf-8")
+    section = sentinel.split(
+        "## 2026-10-08 - Make urllib Redirect Rejection Explicit", 1
+    )[1]
+
+    assert "HTTPDefaultErrorHandler` already raised `HTTPError`" in section
+    assert "defense in depth" in section
+    assert "could still be processed" not in section
+
+
+def test_published_lineage_guard_rejects_unreachable_g17_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
     """A commit-shaped but unpublished G-17 evidence identifier must fail closed."""
     baseline = Path("docs/product-technical-gap-baseline.md").read_text(
         encoding="utf-8"
@@ -258,6 +272,12 @@ def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
         "57477289ebec5631b0c48f0bc419f336dbe19deb",
         "0000000000000000000000000000000000000000",
         1,
+    )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **kw: type("MockProc", (object,), {"returncode": 1})(),
     )
 
     with pytest.raises(AssertionError, match="not published"):
