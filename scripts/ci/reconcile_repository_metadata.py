@@ -1,7 +1,7 @@
 """Reconcile public GitHub repository metadata from a reviewed desired-state manifest.
 
 The reconciler is intentionally narrow: it changes repository descriptions,
-repository topics, and GitHub Pages settings. README content remains owned by
+homepage URLs, repository topics, and GitHub Pages settings. README content remains owned by
 the target repository so badge/content changes can pass through that
 repository's normal review path.
 """
@@ -9,6 +9,7 @@ repository's normal review path.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -25,7 +27,9 @@ REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
 PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"
-PAGES_MODES = {"legacy", "workflow"}
+PAGES_MODES = {"legacy", "legacy-root", "workflow"}
+DEFAULT_PAGES_WORKFLOW = ".github/workflows/pages.yml"
+PAGES_WORKFLOW_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 
 
 class ManifestError(ValueError):
@@ -58,10 +62,10 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError("repository names must preserve exact GitHub-safe casing")
     item = _require_exact_dict(raw, field=f"repositories.{name}")
     required = {"description", "topics", "deepwiki", "pages"}
-    allowed = required | {"pages_mode"}
+    allowed = required | {"homepage", "pages_mode", "pages_workflow", "pages_branch"}
     if not required.issubset(item) or not set(item).issubset(allowed):
         raise ManifestError(
-            f"repositories.{name} must contain exactly {sorted(required)} plus optional pages_mode"
+            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode/pages_workflow/pages_branch"
         )
 
     description = item["description"]
@@ -92,6 +96,31 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
     if len(set(topics)) != len(topics):
         raise ManifestError(f"repositories.{name}.topics contains duplicates")
 
+    if "homepage" in item:
+        homepage = item["homepage"]
+        if homepage is not None:
+            if type(homepage) is not str or homepage != homepage.strip():
+                raise ManifestError(f"repositories.{name}.homepage is invalid")
+            parsed = urlsplit(homepage)
+            hostname = parsed.hostname
+            normalized_hostname = hostname.rstrip(".").casefold() if hostname else ""
+            try:
+                internal_address = bool(normalized_hostname) and not ipaddress.ip_address(
+                    normalized_hostname
+                ).is_global
+            except ValueError:
+                internal_address = False
+            if (
+                parsed.scheme != "https"
+                or not normalized_hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or normalized_hostname == "localhost"
+                or normalized_hostname.endswith((".internal", ".local", ".localhost"))
+                or internal_address
+            ):
+                raise ManifestError(f"repositories.{name}.homepage is invalid")
+
     if type(item["deepwiki"]) is not bool or type(item["pages"]) is not bool:
         raise ManifestError(
             f"repositories.{name} deepwiki/pages flags must be booleans"
@@ -105,6 +134,24 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError(
             f"repositories.{name}.pages_mode is only valid when Pages is enabled"
         )
+    pages_workflow = item.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+    if "pages_workflow" in item and (
+        pages_mode != "workflow"
+        or type(pages_workflow) is not str
+        or not PAGES_WORKFLOW_RE.fullmatch(pages_workflow)
+    ):
+        raise ManifestError(
+            f"repositories.{name}.pages_workflow requires a safe Actions workflow path"
+        )
+    pages_branch = item.get("pages_branch")
+    if "pages_branch" in item and (
+        pages_mode != "legacy-root"
+        or type(pages_branch) is not str
+        or not REPOSITORY_RE.fullmatch(pages_branch)
+    ):
+        raise ManifestError(
+            f"repositories.{name}.pages_branch requires a safe legacy-root branch"
+        )
 
     validated = {
         "description": description,
@@ -112,8 +159,14 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         "deepwiki": item["deepwiki"],
         "pages": item["pages"],
     }
+    if "homepage" in item:
+        validated["homepage"] = item["homepage"]
     if "pages_mode" in item:
         validated["pages_mode"] = pages_mode
+    if "pages_workflow" in item:
+        validated["pages_workflow"] = pages_workflow
+    if "pages_branch" in item:
+        validated["pages_branch"] = pages_branch
     return validated
 
 
@@ -202,15 +255,17 @@ def _pages_configuration(repository: str) -> dict[str, Any]:
     return _require_exact_dict(payload, field=f"Pages configuration for {repository}")
 
 
-def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -> bool:
-    """Return whether Pages already serves the desired legacy /docs source."""
+def _pages_configuration_matches(
+    current: dict[str, Any], default_branch: str, source_path: str = "/docs"
+) -> bool:
+    """Return whether Pages already serves the desired legacy source path."""
 
     source = current.get("source")
     if type(source) is not dict:
         return False
     return (
         source.get("branch") == default_branch
-        and source.get("path") == "/docs"
+        and source.get("path") == source_path
         and current.get("build_type") in (None, "legacy")
     )
 
@@ -279,12 +334,20 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
     return _repository_file_exists(repository, default_branch, "docs/index.md")
 
 
-def _workflow_pages_definition_exists(repository: str, default_branch: str) -> bool:
-    """Return whether the standard reviewed Pages workflow exists on the default branch."""
+def _root_index_exists(repository: str, branch: str) -> bool:
+    """Return whether the reviewed Pages branch contains a root index source."""
 
     return _repository_file_exists(
-        repository, default_branch, ".github/workflows/pages.yml"
-    )
+        repository, branch, "index.html"
+    ) or _repository_file_exists(repository, branch, "index.md")
+
+
+def _workflow_pages_definition_exists(
+    repository: str, default_branch: str, workflow_path: str = DEFAULT_PAGES_WORKFLOW
+) -> bool:
+    """Return whether the reviewed Pages workflow exists on the default branch."""
+
+    return _repository_file_exists(repository, default_branch, workflow_path)
 
 
 def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
@@ -336,9 +399,19 @@ def _pages_precondition(repository: str, default_branch: str, desired: dict[str,
         return
     pages_mode = desired.get("pages_mode", "legacy")
     if pages_mode == "workflow":
-        if not _workflow_pages_definition_exists(repository, default_branch):
+        workflow_path = desired.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+        if not _workflow_pages_definition_exists(
+            repository, default_branch, workflow_path
+        ):
             raise RuntimeError(
-                f"workflow Pages requested for {repository} but .github/workflows/pages.yml is not on {default_branch}"
+                f"workflow Pages requested for {repository} but {workflow_path} is not on {default_branch}"
+            )
+        return
+    if pages_mode == "legacy-root":
+        pages_branch = desired.get("pages_branch", default_branch)
+        if not _root_index_exists(repository, pages_branch):
+            raise RuntimeError(
+                f"root Pages requested for {repository} but no index source is on {pages_branch}"
             )
         return
     if not _docs_index_exists(repository, default_branch):
@@ -363,12 +436,26 @@ def _workflow_pages_live_precondition(repository: str, desired: dict[str, Any]) 
         )
 
 
+def _require_active_public_repository(
+    repository: str, repository_payload: dict[str, Any]
+) -> None:
+    """Reject private, non-public, or archived repositories before any mutation."""
+
+    if (
+        repository_payload.get("private") is True
+        or repository_payload.get("visibility") not in (None, "public")
+        or repository_payload.get("archived") is True
+    ):
+        raise RuntimeError(f"{repository} is not an active public repository")
+
+
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
     repository_payload = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
     )
+    _require_active_public_repository(repository, repository_payload)
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
@@ -385,11 +472,18 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     _pages_precondition(repository, default_branch, desired)
     _workflow_pages_live_precondition(repository, desired)
 
+    repository_patch = {}
     if repository_payload.get("description") != desired["description"]:
+        repository_patch["description"] = desired["description"]
+    if "homepage" in desired and (repository_payload.get("homepage") or None) != desired[
+        "homepage"
+    ]:
+        repository_patch["homepage"] = desired["homepage"]
+    if repository_patch:
         _gh_api(
             "PATCH",
             f"repos/{ORGANIZATION}/{repository}",
-            body={"description": desired["description"]},
+            body=repository_patch,
         )
 
     current_topics = json.loads(
@@ -408,9 +502,11 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
+        source_path = "/" if pages_mode == "legacy-root" else "/docs"
+        source_branch = desired.get("pages_branch", default_branch)
         pages_body = {
             "build_type": "legacy",
-            "source": {"branch": default_branch, "path": "/docs"},
+            "source": {"branch": source_branch, "path": source_path},
         }
         if not pages_exists:
             _gh_api(
@@ -419,7 +515,7 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
                 body=pages_body,
             )
         elif not _pages_configuration_matches(
-            _pages_configuration(repository), default_branch
+            _pages_configuration(repository), source_branch, source_path
         ):
             _gh_api(
                 "PUT",
@@ -436,11 +532,16 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     repository_payload = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
     )
+    _require_active_public_repository(repository, repository_payload)
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
     if repository_payload.get("description") != desired["description"]:
         raise RuntimeError(f"description did not converge for {repository}")
+    if "homepage" in desired and (repository_payload.get("homepage") or None) != desired[
+        "homepage"
+    ]:
+        raise RuntimeError(f"homepage did not converge for {repository}")
 
     current_topics = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")
@@ -454,10 +555,17 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     if desired["pages"]:
         pages_mode = desired.get("pages_mode", "legacy")
         if pages_mode == "workflow":
-            if not _workflow_pages_definition_exists(repository, default_branch):
+            workflow_path = desired.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+            if not _workflow_pages_definition_exists(
+                repository, default_branch, workflow_path
+            ):
                 raise RuntimeError(
                     f"Pages workflow source did not converge for {repository}"
                 )
+        elif pages_mode == "legacy-root":
+            pages_branch = desired.get("pages_branch", default_branch)
+            if not _root_index_exists(repository, pages_branch):
+                raise RuntimeError(f"Pages root source did not converge for {repository}")
         elif not _docs_index_exists(repository, default_branch):
             raise RuntimeError(f"Pages source did not converge for {repository}")
 
@@ -472,8 +580,15 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                 raise RuntimeError(
                     f"GitHub Pages deployment mode did not converge for {repository}"
                 )
-        elif not _pages_configuration_matches(current_pages, default_branch):
-            raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
+        else:
+            source_path = "/" if pages_mode == "legacy-root" else "/docs"
+            source_branch = desired.get("pages_branch", default_branch)
+            if not _pages_configuration_matches(
+                current_pages, source_branch, source_path
+            ):
+                raise RuntimeError(
+                    f"GitHub Pages configuration did not converge for {repository}"
+                )
         _pages_publication_ready(repository, current_pages)
     elif pages_exists:
         raise RuntimeError(f"GitHub Pages remained published for {repository}")
