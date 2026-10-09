@@ -279,9 +279,14 @@ jobs:
             echo "::error::OpenCode admission rejected malformed pull request metadata."
             exit 1
           fi
-          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
-          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          IFS=/ read -r target_owner target_name <<<"$TARGET_REPOSITORY"
+          live_pr="$(gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid state}}}' \
+            -f owner="$target_owner" \
+            -f name="$target_name" \
+            -F number="$PR_NUMBER")"
+          live_head="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.data.repository.pullRequest.state // empty | ascii_downcase' <<<"$live_pr")"
           expected_state=open
           [ "$EXPECTED_ACTION" = "closed" ] && expected_state=closed
           if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "$expected_state" ]; then
