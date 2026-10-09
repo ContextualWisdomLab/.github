@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+### 2026-10-09 Maturin downloader SSRF evidence boundary
+
+| Gap ID | Status | Exact evidence | Action |
+|---|---|---|---|
+| CONTROL-MATURIN-DOWNLOAD-SSRF-CLAIM-01 | **Proposed on `.github#2605`; source behavior unchanged; fresh exact-head Checks and independent approval required** | At exact head `b51836f156b3af83cc28d36c2491d3c9d0f99b64`, `.jules/sentinel.md` claimed replacing `urlopen()` with the default `build_opener().open()` hardened dynamic URLs. Python's default opener does not enforce a scheme, authority, path, or redirect allowlist. The actual verifier admits five literal asset filenames before combining one with the fixed `https://github.com/PyO3/maturin/releases/download/v1.15.0/` origin and tag. | Correct the guidance to name the existing filename and fixed-origin contract as the security boundary, and classify the opener substitution only as scanner compatibility. Preserve the exact asset-name, digest, archive-shape, native-link, byte-limit, and response-lifecycle gates. |
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
