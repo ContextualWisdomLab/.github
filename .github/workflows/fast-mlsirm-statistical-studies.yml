@@ -19,7 +19,8 @@ jobs:
   rust-ignored:
     name: Ignored Rust studies shard ${{ matrix.shard }}
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     # Large Monte Carlo recovery tests are real evidence, not a reason to
     # silently discard a shard after the helper's default 30-minute bound.
     timeout-minutes: 180
@@ -53,7 +54,8 @@ jobs:
   rust-pyo3-ignored:
     name: Ignored PyO3 studies
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -67,7 +69,8 @@ jobs:
   rust-recovery:
     name: Literature CPU recovery studies
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -100,7 +103,8 @@ jobs:
   grm-recovery:
     name: GRM 500-rep recovery study
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -131,7 +135,8 @@ jobs:
   gpu-recovery:
     name: Literature GPU recovery parity
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 90
     env:
       WGPU_BACKEND: vulkan

@@ -21,7 +21,8 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     name: python (${{ matrix.python-version }})
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +51,8 @@ jobs:
     needs: python-matrix
     if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')) }}
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     steps:
       - name: Require every CPython matrix leg
         run: |
@@ -61,7 +63,8 @@ jobs:
   rust:
     if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -89,7 +92,8 @@ jobs:
     # non-execution allowlist entry. The full paper-design recovery study
     # remains in the scheduled/manual workflow.
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 240
     env:
       WGPU_BACKEND: vulkan
@@ -186,7 +190,8 @@ jobs:
     # dev extra); this job adds the Atheris coverage-guided harnesses with a
     # ~60s-per-target budget. Longer campaigns can be run nightly if desired.
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -236,7 +241,8 @@ jobs:
   package:
     if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

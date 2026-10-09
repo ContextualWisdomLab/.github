@@ -21,7 +21,8 @@ concurrency:
 jobs:
   publish-release-tag:
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 10
     permissions:
       contents: read

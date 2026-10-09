@@ -26,7 +26,8 @@ jobs:
   verify-release:
     name: verify release provenance
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 5
     outputs:
       release_commit: ${{ steps.release-source.outputs.value }}
@@ -150,7 +151,8 @@ jobs:
     name: sdist
     needs: verify-release
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 15
     env:
       SOURCE_DATE_EPOCH: ${{ needs.verify-release.outputs.source_date_epoch }}
@@ -387,7 +389,8 @@ jobs:
     name: wheels (${{ matrix.target }}, py${{ matrix.python-version }})
     needs: [verify-release, sdist]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 90
     env:
       SOURCE_DATE_EPOCH: ${{ needs.verify-release.outputs.source_date_epoch }}
@@ -694,7 +697,8 @@ jobs:
     name: macOS x86 runtime ${{ matrix.python-version }}
     needs: [verify-release, wheels]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -781,7 +785,8 @@ jobs:
     name: reproducibility record
     needs: [verify-release, sdist, wheels, macos-x86-runtime]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1086,7 +1091,8 @@ jobs:
     name: release admission
     needs: [verify-release, reproducibility-record, dependency-gate]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1559,7 +1565,8 @@ jobs:
     name: create tag and release after admission
     needs: [verify-release, release-admission]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 10
     permissions:
       contents: write
@@ -1823,7 +1830,8 @@ jobs:
     name: attach release assets
     needs: [sdist, wheels, reproducibility-record, release-admission, create-tag-and-release]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 10
     permissions:
       contents: write
@@ -1899,7 +1907,8 @@ jobs:
     name: publish to PyPI
     needs: [sdist, wheels, reproducibility-record, release-admission, create-tag-and-release]
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 15
     environment: pypi
     permissions:

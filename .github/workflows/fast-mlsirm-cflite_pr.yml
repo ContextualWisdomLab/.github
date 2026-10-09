@@ -10,7 +10,8 @@ jobs:
   PR:
     if: ${{ !github.event.pull_request.draft && github.event.action != 'closed' }}
     runs-on:
-      labels: [self-hosted, Linux, X64, cwlab, ubuntu-24.04]
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
     permissions:
       contents: read
       security-events: write
