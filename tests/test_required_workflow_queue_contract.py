@@ -240,9 +240,6 @@ def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
 def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     """Do not enqueue a scheduler run after every required workflow completion."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-        "permissions:", 1
-    )[0]
 
     assert "org-sweep" not in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
@@ -834,8 +831,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
 
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
-    rate limits rather than a shared pool. The workflow-level group is keyed by exact head and event action so a delayed
-    event cannot cancel a newer head before live admission. A distinct,
+    rate limits rather than a shared pool. The workflow-level group is keyed
+    by exact head and event action so a delayed event cannot cancel a newer
+    head before live admission. A distinct,
     PR-stable job-level group serializes actual provider evidence across native
     and dispatched events. The live-head-validated cleanup remains the authority
     for retiring older-head runs. Non-PR events keep their established grouping.
