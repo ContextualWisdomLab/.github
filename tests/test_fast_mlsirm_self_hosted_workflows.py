@@ -31,12 +31,13 @@ def test_disabled_release_legs_fail_the_caller_instead_of_reporting_success():
     assert text.count("    if: ${{ false }}") == 2
     assert "  publication-disabled:\n" in text
     assert "    needs: [sdist]\n" in text
-    assert "wheel legs are disabled; this release was not published" in text
-    assert "      - run: exit 1\n" in text
+    assert "publication disabled (release runner matrix unavailable)" in text
+    assert "required macOS, Windows, and ARM self-hosted release legs" in text
+    assert "          exit 1\n" in text
 
 
-def test_release_dependency_gate_passes_only_declared_provider_secrets():
-    """Keep the PyPI credential outside the dependency-analysis boundary."""
+def test_release_dependency_gate_does_not_cross_provider_credentials():
+    """Keep provider credentials behind contextual-orchestrator's boundary."""
     text = workflow_text("fast-mlsirm-publish-pypi.yml")
     gate = text.split("  dependency-gate:\n", 1)[1].split("\n  release-admission:\n", 1)[0]
     assert "secrets: inherit" not in gate
@@ -47,7 +48,7 @@ def test_release_dependency_gate_passes_only_declared_provider_secrets():
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
     ):
-        assert f"      {name}: ${{{{ secrets.{name} }}}}" in gate
+        assert name not in gate
     assert "PIPY_TOKEN" not in gate
 
 

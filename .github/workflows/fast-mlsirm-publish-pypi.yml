@@ -383,14 +383,19 @@ jobs:
           path: repro-digest
 
   publication-disabled:
-    name: wheel legs are disabled; this release was not published
+    name: publication disabled (release runner matrix unavailable)
     needs: [sdist]
     runs-on:
       group: CWL CI isolated
       labels: [self-hosted, Linux, X64]
     timeout-minutes: 1
     steps:
-      - run: exit 1
+      - name: Fail closed while required release runners are unavailable
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          echo "::error::Release ${RELEASE_TAG} was not tagged, released, or published because the required macOS, Windows, and ARM self-hosted release legs are unavailable."
+          exit 1
 
   wheels:
     # Disabled until self-hosted macOS, Windows and ARM release legs are available.
@@ -1091,12 +1096,9 @@ jobs:
       distribution_set_artifact_digest: ${{ needs.reproducibility-record.outputs.distribution_set_artifact_digest }}
       wheel_filename: ${{ needs.reproducibility-record.outputs.selected_wheel_filename }}
       sdist_filename: ${{ needs.reproducibility-record.outputs.selected_sdist_filename }}
-    secrets:
-      BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-      NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    # The pinned owner contract still declares direct provider credentials.
+    # Do not cross that legacy boundary: this release path remains fail-closed
+    # until an immutable gateway-token-only contract is released and pinned.
 
   # R5b/R5c: nothing is tagged, released or published until the exact thirteen
   # files match both the reproducibility record and a successful same-run
