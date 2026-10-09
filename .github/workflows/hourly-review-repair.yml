@@ -136,9 +136,7 @@ permissions:
 jobs:
   resolve-target:
     name: Resolve target(s) for ${{ github.event.schedule }}
-    runs-on:
-      group: CWL central control
-      labels: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.lookup.outputs.targets }}
     steps:

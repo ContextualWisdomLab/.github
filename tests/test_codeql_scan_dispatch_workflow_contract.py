@@ -36,6 +36,7 @@ RUN_BLOCK_STEP_NAMES = (
     "Exchange OpenCode app token for target repository content reads",
     "Re-validate live pull request metadata before privileged scan",
     "Fetch the pinned CodeQL SARIF gate and GHAS identity scripts",
+    "Materialize pull request head for CodeQL scan",
     "Verify GHAS base/head CodeQL configuration identity",
     "Publish CodeQL dispatch status",
     "Exchange OpenCode app token for run settlement",
@@ -1055,7 +1056,7 @@ def test_dispatch_settles_all_languages_with_one_run_wide_mutation() -> None:
     assert "actions: write" in settlement.split("    steps:\n", 1)[0]
     assert 'github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in settlement
     assert 'github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in settlement
-    assert 'github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100" | jq -s .' in settlement
+    assert 'github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100"' in settlement
     assert "rerun-failed-jobs" in settlement
     assert '"rerun"' in settlement
     assert "actions/jobs/${REQUIRED_JOB_ID}/rerun" not in workflow
@@ -1143,10 +1144,6 @@ def _run_settlement_step(
             "run_attempt": 1,
             "steps": [
                 {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-                {
-                    "name": "Verify GHAS base/head CodeQL configuration identity",
-                    "conclusion": "success",
-                },
                 {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
             ],
         },
@@ -1157,10 +1154,6 @@ def _run_settlement_step(
             "run_attempt": 1,
             "steps": [
                 {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-                {
-                    "name": "Verify GHAS base/head CodeQL configuration identity",
-                    "conclusion": "success",
-                },
                 {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
             ],
         },
@@ -1189,7 +1182,6 @@ def _run_settlement_step(
         "set -euo pipefail\n"
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
-        'if printf \'%s\\n\' "$@" | grep -qx -- --slurp; then exit 2; fi\n'
         'if printf \'%s\\n\' "$@" | grep -qx POST; then\n'
         '  printf \'%s\\n\' "$endpoint" >>"$FAKE_POST_LOG"\n'
         '  if [ -n "${FAKE_WAKE_POST_FAIL_TOKEN:-}" ] && '
@@ -1227,10 +1219,10 @@ def _run_settlement_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
-        "FAKE_REQUIRED_JOB_PAGES": "\n".join(json.dumps({"jobs": [job]}) for job in required_jobs),
-        "FAKE_HANDLER_JOB_PAGES": json.dumps({"jobs": handler_jobs}),
+        "FAKE_REQUIRED_JOB_PAGES": json.dumps([{"jobs": required_jobs}]),
+        "FAKE_HANDLER_JOB_PAGES": json.dumps([{"jobs": handler_jobs}]),
         "FAKE_HANDLER_ARTIFACT_PAGES": json.dumps(
-            {"artifacts": handler_artifacts}
+            [{"artifacts": handler_artifacts}]
         ),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_EXIT": "0",
@@ -1580,49 +1572,6 @@ def test_dispatch_settlement_rejects_missing_handler_gate_steps(tmp_path: Path) 
     assert not post_log.exists()
 
 
-def test_dispatch_settlement_rejects_failed_ghas_identity_after_clean_gate(
-    tmp_path: Path,
-) -> None:
-    """Settlement cannot wake a required run after GHAS identity proof failed."""
-    result, post_log = _run_settlement_step(
-        tmp_path,
-        handler_jobs=[
-            {
-                "name": "CodeQL dispatch scan (python)",
-                "status": "completed",
-                "conclusion": "failure",
-                "run_attempt": 1,
-                "steps": [
-                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-                    {
-                        "name": "Verify GHAS base/head CodeQL configuration identity",
-                        "conclusion": "failure",
-                    },
-                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
-                ],
-            },
-            {
-                "name": "CodeQL dispatch scan (actions)",
-                "status": "completed",
-                "conclusion": "success",
-                "run_attempt": 1,
-                "steps": [
-                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-                    {
-                        "name": "Verify GHAS base/head CodeQL configuration identity",
-                        "conclusion": "success",
-                    },
-                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
-                ],
-            },
-        ],
-    )
-
-    assert result.returncode == 1
-    assert "missing GHAS configuration identity proof for python" in result.stdout
-    assert not post_log.exists()
-
-
 def test_dispatch_settlement_rejects_unproven_matrix_subset(tmp_path: Path) -> None:
     """Every required shard needs current handler gate and artifact evidence."""
     result, post_log = _run_settlement_step(
@@ -1734,88 +1683,3 @@ def test_codeql_scan_dispatch_bridge_has_explicit_removal_condition() -> None:
 
     assert "LEGACY_V1_REMOVAL_CONDITION" in workflow
     assert "protected v2 producer" in workflow
-
-
-def test_codeql_scan_checkout_cleans_reused_workspace_without_persisting_token():
-    """Fetch the validated head with native checkout cleanup on persistent runners."""
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    block = workflow.split('      - name: Materialize pull request head for CodeQL scan\n', 1)[1].split('\n      - name:', 1)[0]
-    assert 'uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' in block
-    assert 'repository: ${{ needs.validate-dispatch.outputs.target_repository }}' in block
-    assert 'ref: ${{ needs.validate-dispatch.outputs.head_sha }}' in block
-    assert 'persist-credentials: false' in block
-    assert 'clean: true' in block
-    assert 'git remote add origin' not in block
-
-
-@pytest.mark.parametrize("creator,accepted", [
-    ("cwl-noema-review[bot]", True), ("attacker", False),
-    ("opencode-agent[bot]", False),
-])
-def test_owned_codeql_status_token_checks_its_actual_creator(
-    tmp_path: Path, creator: str, accepted: bool,
-) -> None:
-    """The owned credential cannot silently publish as a different principal."""
-    publish = _extract_run_block(WORKFLOW_PATH.read_text(), "Publish CodeQL dispatch status")
-    function = publish[publish.index("post_status() {"):publish.index('if post_status')]
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    gh = fake_bin / "gh"
-    response = json.dumps({"creator": {"login": creator}})
-    gh.write_text("#!/bin/bash\nprintf '%s\\n' '" + response + "'\n")
-    gh.chmod(0o755)
-    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
-           "FAKE_CREATOR": creator, "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
-           "HEAD_SHA": "b" * 40, "state": "success",
-           "receipt_context": "codeql-dispatch/python", "receipt_description": "verified",
-           "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
-           "GITHUB_RUN_ID": "100"}
-    result = subprocess.run(["bash"], input='set -euo pipefail\n' + function +
-                            '\npost_status noema-status-token synthetic-owned-token\n',
-                            env=env, text=True, capture_output=True)
-    assert (result.returncode == 0) == accepted, result.stdout + result.stderr
-
-
-def test_owned_codeql_wake_preserves_exact_run_wide_settlement(tmp_path: Path) -> None:
-    """The owned token follows the existing full proof before a single mutation."""
-    result, posts = _run_settlement_step(tmp_path, extra_env={
-        "NOEMA_WAKE_TOKEN": "owned-token", "TARGET_APP_WAKE_TOKEN": "foreign-token",
-        "FAKE_DENIED_TOKEN": "foreign-token", "GITHUB_WAKE_TOKEN": "",
-    })
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "using noema-settlement-token" in result.stdout
-    assert posts.read_text().splitlines() == [
-        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
-    ]
-
-
-def test_owned_codeql_writers_are_separate_target_scoped_credentials() -> None:
-    """Read, status and wake tokens each retain one narrow permission purpose."""
-    workflow = WORKFLOW_PATH.read_text()
-    for name,config,permission in (
-        ("Noema CodeQL status token", "noema_analysis_config", "statuses"),
-        ("Noema CodeQL settlement token", "noema_settlement_config", "actions"),
-    ):
-        step = workflow.split(f"      - name: Mint target-scoped {name}\n", 1)[1].split("      - name:", 1)[0]
-        assert f"repositories: ${{{{ steps.{config}.outputs.repository }}}}" in step
-        assert f"permission-{permission}: write" in step
-        assert "permission-security-events" not in step
-        assert "continue-on-error: true" in step
-
-
-def test_owned_status_configuration_survives_failed_analysis_gate(tmp_path: Path) -> None:
-    """A failed gate can publish failure without minting an analysis reader."""
-    workflow = WORKFLOW_PATH.read_text()
-    config = workflow.split("        id: noema_analysis_config\n", 1)[1].split("      - name:", 1)[0]
-    assert "if: always() && steps.live_metadata.outcome == 'success'" in config
-    reader = workflow.split("        id: noema_analysis_token\n", 1)[1].split("      - name:", 1)[0]
-    assert "if: steps.gate.outcome == 'success'" in reader
-    output = tmp_path / "outputs"
-    script = _extract_run_block(workflow, "Detect optional Noema analysis-read credential")
-    result = subprocess.run(["bash"], input=script, text=True, capture_output=True,
-                            env={**os.environ, "TARGET_REPOSITORY": "ContextualWisdomLab/disksage",
-                                 "NOEMA_APP_CLIENT_ID": "synthetic-client",
-                                 "NOEMA_APP_PRIVATE_KEY": "synthetic-key",
-                                 "GITHUB_OUTPUT": str(output)})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert output.read_text().splitlines() == ["repository=disksage", "available=true"]

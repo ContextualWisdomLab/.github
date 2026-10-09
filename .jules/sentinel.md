@@ -51,7 +51,3 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
-## 2026-10-08 - Make urllib Redirect Rejection Explicit
-**Vulnerability:** Authenticated redirect rejection must remain fail-closed if the configured opener chain changes.
-**Learning:** In the current `build_opener(_RejectRedirects())` chain, returning `None` did not forward the redirect: `HTTPDefaultErrorHandler` already raised `HTTPError`. Raising the same typed error directly in `_RejectRedirects` is defense in depth that removes dependence on the downstream handler order; it does not prove a prior SSRF or credential leak.
-**Prevention:** Exercise redirects through the production opener and assert that transport receives only the original request. Keep the explicit `HTTPError` raise so later opener composition cannot weaken the fail-closed boundary.

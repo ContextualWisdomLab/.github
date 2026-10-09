@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import subprocess
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -72,43 +71,3 @@ def test_health_polling_has_no_attempt_or_elapsed_deadline() -> None:
     assert "timeout_seconds" not in block.casefold()
     assert 'kill -0 "$sidecar_pid"' in block
     assert 'fail "sidecar exited before healthz' in block
-
-
-def test_health_wait_reports_completed_stages_without_reading_report_content(tmp_path: Path) -> None:
-    """Pending startup remains observable without exposing provider report content."""
-    block = _health_poll_block(_SIDECAR.read_text(encoding="utf-8"))
-    for states in ((False,) * 4, (True, True, False, False), (True,) * 4):
-        reports = [tmp_path / f"report-{index}.json" for index in range(4)]
-        for report, present in zip(reports, states):
-            if present:
-                report.write_text('{"credential":"DO_NOT_PRINT"}')
-            else:
-                report.unlink(missing_ok=True)
-        script = r'''
-set -eu
-i=0
-calls=0
-sidecar_pid=$$
-ORCHESTRATOR_HOST=127.0.0.1
-ORCHESTRATOR_PORT=18080
-discovery_report=$1
-catalog_file=$2
-policy_report=$3
-preflight_report=$4
-curl() { calls=$((calls + 1)); [ "$calls" -gt 60 ]; }
-sleep() { :; }
-log() { printf '%s\n' "$*"; }
-''' + block
-        result = subprocess.run(
-            ["bash", "-c", script, "startup-test", *map(str, reports)],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        assert result.returncode == 0, result.stderr
-        discovery, catalog, policy, preflight = (
-            "present" if present else "absent" for present in states
-        )
-        assert result.stdout == (
-            f"startup pending: polls=60 discovery={discovery} catalog={catalog} "
-            f"policy={policy} preflight={preflight}\n"
-        )
-        assert "DO_NOT_PRINT" not in result.stdout + result.stderr

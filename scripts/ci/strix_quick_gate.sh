@@ -243,7 +243,7 @@ PY
 sanitize_remediation_evidence_claims() {
 	local log_file="$1"
 	local report_root="$2"
-	local binder="$SCRIPT_DIR/strix_evidence_binding.py"
+	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
 	local report_file
 
 	if [ ! -f "$binder" ] || [ -L "$binder" ]; then
@@ -2260,23 +2260,6 @@ vulnerability_file_is_below_threshold() {
 	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
 }
 
-# A model can name a CVE in a package the repository never depends on
-# (fast-mlsirm#2246: "CVE-2024-1234 in lodash 4.17.20" on a Rust/Python tree).
-# Such a finding has no file location; record it as unverified instead of
-# failing closed, but only when every package it names is absent from every
-# dependency manifest and lockfile, and only when the pull request changes no
-# dependency manifest (REPO_ROOT is the base checkout, so a dependency the PR
-# adds would otherwise look absent).
-vulnerability_file_is_unverified_dependency() {
-	local changed_file
-	for changed_file in "${CHANGED_FILES[@]}"; do
-		if is_dependency_manifest_path "$changed_file"; then
-			return 1
-		fi
-	done
-	python3 -I "$SCRIPT_DIR/strix_unverified_dependency.py" "$1" "$REPO_ROOT"
-}
-
 evaluate_pull_request_findings() {
 	PR_FINDINGS_DECISION="not_applicable"
 	if ! is_pull_request_event; then
@@ -2293,7 +2276,6 @@ evaluate_pull_request_findings() {
 	local found_baseline_threshold_finding=0
 	local found_changed_manifest_only_threshold_finding=0
 	local found_retryable_model_inconsistency=0
-	local found_unverified_dependency=0
 	local found_any_vuln_file=0
 	local run_dir vulnerabilities_dir vuln_file line severity rank
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
@@ -2328,10 +2310,6 @@ evaluate_pull_request_findings() {
 			mapfile -t vulnerability_location_records < <(extract_vulnerability_location_records "$vuln_file")
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
-				if vulnerability_file_is_unverified_dependency "$vuln_file"; then
-					found_unverified_dependency=1
-					continue
-				fi
 				PR_FINDINGS_DECISION="block_unmapped"
 				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
 				return 1
@@ -2370,12 +2348,6 @@ evaluate_pull_request_findings() {
 			done
 		done
 	done
-
-	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ] &&
-		[ "$found_unverified_dependency" -eq 1 ] && vulnerability_file_is_unverified_dependency "$STRIX_LOG"; then
-		PR_FINDINGS_DECISION="allow_unverified_dependency"
-		return 0
-	fi
 
 	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ]; then
 		rank="$(extract_max_severity_rank "$STRIX_LOG")"
@@ -2471,9 +2443,6 @@ has_unmapped_threshold_report() {
 			local vulnerability_locations=()
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
-				if vulnerability_file_is_unverified_dependency "$vuln_file"; then
-					continue
-				fi
 				return 0
 			fi
 		done
@@ -2820,11 +2789,6 @@ child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"
 child_env["pnpm_config_ignore_scripts"] = "true"
 child_env["YARN_ENABLE_SCRIPTS"] = "false"
 child_env["BUN_CONFIG_IGNORE_SCRIPTS"] = "true"
-# Strix posts PostHog telemetry by default. Runner egress blocks it, and the
-# swallowed traceback (``requests.post(..., timeout=SEND_TIMEOUT)``) lands in
-# strix.log, where the report failure-signal scan reads "timeout" and fails a
-# clean scan closed. Scan metadata also has no business leaving the runner.
-child_env["STRIX_TELEMETRY"] = "0"
 child_env["STRIX_LLM"] = os.environ["STRIX_CHILD_MODEL"]
 child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
@@ -2949,14 +2913,7 @@ scan_output_dir.mkdir()
 # Keep scanner-created state and relative report files outside the untrusted
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
-# strix_report_scope.py only accepts a completed PR scan whose report names a
-# changed file. A clean scan's report otherwise mentions paths at the model's
-# discretion, so ask for them explicitly; the attestation check is unchanged.
-REPORT_SCOPE_INSTRUCTION = (
-    "In the final penetration test report, list every source file you reviewed "
-    "by its path relative to the scan target, including files with no findings."
-)
-command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode, "--instruction", REPORT_SCOPE_INSTRUCTION]
+command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
 
 try:
     process = subprocess.Popen(
@@ -3032,15 +2989,8 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		# Synthetic changed-file inventories have no authenticated scope to attest.
-		if is_pull_request_event && [ "${STRIX_TEST_CHANGED_FILES_OVERRIDE+x}" != x ] &&
-			! python3 "$SCRIPT_DIR/strix_report_scope.py" "$STRIX_SCAN_OUTPUT_DIR" "${CHANGED_FILES[@]}"; then
-			echo "Strix completed without a report tied to a changed source file; failing closed." >&2
-			return 1
-		fi
 		if has_blocking_vulnerability_reports; then
-			if ! evaluate_pull_request_findings ||
-				{ [ "$PR_FINDINGS_DECISION" != "allow_baseline" ] && [ "$PR_FINDINGS_DECISION" != "allow_unverified_dependency" ]; }; then
+			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
 				return 1
 			fi
@@ -3697,7 +3647,7 @@ has_blocking_vulnerability_reports() {
 
 fail_reported_vulnerabilities_before_fallback_success() {
 	case "$PR_FINDINGS_DECISION" in
-	allow_baseline | allow_unverified_dependency)
+	allow_baseline)
 		return 1
 		;;
 	esac
@@ -4630,7 +4580,7 @@ run_current_target_scan() {
 	fi
 
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
-		{ [ "$PR_FINDINGS_DECISION" = "allow_baseline" ] || [ "$PR_FINDINGS_DECISION" = "allow_unverified_dependency" ]; }; then
+		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
 		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
 		return 1
 	fi

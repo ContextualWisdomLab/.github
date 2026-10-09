@@ -16,7 +16,7 @@ WORKFLOW = Path(".github/workflows/agent-review-runtime-quality-ci.yml")
 
 
 def test_context_helper_is_part_of_the_focused_exact_head_quality_gate() -> None:
-    """Require focused tests, coverage, docstring, and compile evidence."""
+    """Require trigger, full-suite, coverage, docstring, and compile evidence."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert workflow.count("scripts/ci/pr_review_autofix_context.py") >= 3
@@ -36,13 +36,6 @@ def test_context_helper_is_part_of_the_focused_exact_head_quality_gate() -> None
     )
     pytest_targets = suite[pytest_start:coverage_start]
     assert "tests/" not in pytest_targets
-    pytest_command = suite[pytest_start:].split("          python -m interrogate", 1)[0]
-    assert "tests/test_pr_review_autofix_context_failed_checks.py" in pytest_command
-    assert "tests/test_pr_review_autofix_context_import_fallback.py" in pytest_command
-    assert "tests/test_contextual_orchestrator_review_runtime_preflight.py" in pytest_command
-    assert "tests/test_repository_branch_coverage_reporting_edges.py" in pytest_command
-    assert "--cov-fail-under=100" in pytest_command
-    assert pytest_command.rstrip().endswith("tests/test_repository_branch_coverage_reporting_edges.py")
     assert (
         "python -m pytest -q \\\n"
         "            --cov=scripts.ci.pr_review_conflict_scope \\\n"

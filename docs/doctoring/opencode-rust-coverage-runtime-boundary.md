@@ -18,35 +18,9 @@ declarations and the isolated container's `docker run --env` arguments. If that
 workflow changes, its `REVIEW_DISPATCH_BLOB_SHA` pin must change with it; this
 does not rewrite the review-agent key system.
 
-### Base-pinned Rust releases (2026-09-30)
-
-Debian's `rustc` (1.85) is older than the MSRV of repositories that pin a newer
-release; fast-mlsirm pins 1.97.1 and its dependency graph needs at least 1.90,
-so `maturin build --offline` could never build `_core` and coverage evidence
-failed for every fast-mlsirm pull request. When the live-validated **base**
-commit carries `rust-toolchain.toml` (or `rust-toolchain`),
-`scripts/ci/resolve_base_rust_toolchain.py` selects its exact `1.x.y` channel;
-`stable`, `nightly-*`, custom `path` toolchains and unparsable files select the
-central pin instead. The pull-request head's pin is never read. The image build
-(network allowed, before any PR content is mounted) then downloads
-`rustup-init` 1.29.1 from `static.rust-lang.org`, verifies its SHA-256, and
-installs only that release with `--profile minimal --component
-llvm-tools-preview`; rustup checks each component against the hashes in the
-channel manifest. `cargo` and `rustc` are symlinked straight to the toolchain
-binaries, so no rustup proxy runs inside the `--network=none` sandbox, and the
-second reviewed LLVM pair becomes:
-
-- `LLVM_COV=/usr/local/libexec/opencode-rust/llvm-cov`
-- `LLVM_PROFDATA=/usr/local/libexec/opencode-rust/llvm-profdata`
-
-Those tools ship with the same rustc release, so they match its profile format.
-Repositories without a base pin keep the Debian image unchanged, and if the
-pinned layer fails to build, the job rebuilds the Debian image rather than
-losing coverage for that repository.
-
 The runtime MUST NOT fall back to unversioned `llvm-cov` or `llvm-profdata`, a
-host-runner tool, a pull-request-selected path, or an LLVM binary downloaded at
-PR runtime. Missing, changed, or non-executable reviewed paths are coverage-evidence
+host-runner tool, a pull-request-selected path, or a dynamically downloaded LLVM
+binary. Missing, changed, or non-executable reviewed paths are coverage-evidence
 failures rather than reasons to measure a different toolchain.
 
 NIST SP 800-218 PW.4.1 covers acquiring and maintaining third-party software
