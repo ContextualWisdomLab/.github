@@ -55,6 +55,34 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
+check_sidecar_disk_space() {
+  local runner_temp_free_kib
+  # A full self-hosted runner disk (cwlab-s1-04, 2026-09-29) surfaced as a
+  # venv or pip failure and was misread as a provider outage. Name the cause
+  # before the uncredentialed preparation step performs any disk-heavy I/O.
+  local low_free_kib=$((2 * 1024 * 1024))
+  local min_free_kib=$((512 * 1024))
+  runner_temp_free_kib="$(df -Pk "${RUNNER_TEMP:-/tmp}" | awk 'NR == 2 { print $4 }')"
+  case "$runner_temp_free_kib" in
+    ''|*[!0-9]*) fail "could not read free space for ${RUNNER_TEMP:-/tmp}" ;;
+  esac
+  if [ "$runner_temp_free_kib" -lt "$min_free_kib" ]; then
+    fail "runner disk has $((runner_temp_free_kib / 1024)) MiB free under ${RUNNER_TEMP:-/tmp}; sidecar provisioning needs at least 512 MiB. Reclaim runner disk before rerunning."
+  elif [ "$runner_temp_free_kib" -lt "$low_free_kib" ]; then
+    printf '::warning::runner disk has %s MiB free under %s; reclaim runner disk before it fills.\n' \
+      "$((runner_temp_free_kib / 1024))" "${RUNNER_TEMP:-/tmp}"
+  fi
+}
+
+case "${CONTEXTUAL_ORCHESTRATOR_GATEWAY_MODE:-sidecar}" in
+  sidecar) ;;
+  external)
+    [ "$#" -eq 0 ] || fail "external gateway mode does not support sidecar preparation"
+    exec "$sidecar_python" "$ORG_REPO_ROOT/scripts/ci/external_review_gateway.py"
+    ;;
+  *) fail "unsupported gateway mode" ;;
+esac
+
 # Clone and hash-pinned installation happen in the uncredentialed --prepare
 # step. Launch only rechecks that receipt, then masks the bearer before
 # launcher startup or health diagnostics can emit it.
@@ -63,6 +91,7 @@ prepare_orchestrator_closure() {
   for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY ORCHESTRATOR_TOKEN; do
     [ -z "${!secret_name:-}" ] || fail "prepare requires an uncredentialed step"
   done
+  check_sidecar_disk_space
   if [ "$ORCHESTRATOR_GIT_URL" != "https://github.com/ContextualWisdomLab/contextual-orchestrator.git" ] \
     || ! [[ "$ORCHESTRATOR_PIN_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     fail "unsupported orchestrator source; require approved origin and exact commit"
@@ -90,7 +119,9 @@ prepare_orchestrator_closure() {
     > "$ORCHESTRATOR_WORK/prepared.pending.json"
   # The pinned lock includes CPython 3.12 wheels; isolate them from consumer runtimes.
   "$sidecar_python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else "sidecar requires Python 3.12 for its pinned wheel hashes")'
-  "$sidecar_python" -m venv "$ORCHESTRATOR_WORK/.venv"
+  # RUNNER_TEMP persists on self-hosted runners; a cancelled job can leave a
+  # half-written pip that a plain re-run of venv keeps. Always rebuild.
+  "$sidecar_python" -m venv --clear "$ORCHESTRATOR_WORK/.venv"
   sidecar_python="$ORCHESTRATOR_WORK/.venv/bin/python"
   log "installing hash-pinned orchestrator dependencies at ${checked_out}"
   "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \

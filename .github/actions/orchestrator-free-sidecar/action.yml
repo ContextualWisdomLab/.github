@@ -5,6 +5,19 @@ inputs:
     description: Run prepare in a separate uncredentialed action step, then launch with provider credentials.
     required: false
     default: "launch"
+  gateway_mode:
+    description: Bootstrap mode; external remains blocked until a released CO adapter is registered.
+    required: false
+    default: "sidecar"
+  gateway_base_url:
+    description: Deployment-authorized HTTPS gateway origin; never sourced from PR content.
+    required: false
+  gateway_token_file:
+    description: Private runner-owned inference token file; never a raw credential input.
+    required: false
+  gateway_contract_revision:
+    description: Immutable released CO adapter revision registered by protected owner source.
+    required: false
   require_zdr:
     description: Require an attested Zero Data Retention route for private or internal content.
     required: false
@@ -38,6 +51,10 @@ runs:
       env:
         SIDECAR_MODE: ${{ inputs.mode }}
         SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
+        CONTEXTUAL_ORCHESTRATOR_GATEWAY_MODE: ${{ inputs.gateway_mode }}
+        CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ inputs.gateway_base_url }}
+        CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE: ${{ inputs.gateway_token_file }}
+        CONTEXTUAL_ORCHESTRATOR_GATEWAY_CONTRACT_REVISION: ${{ inputs.gateway_contract_revision }}
         CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ inputs.require_zdr }}
         ORCHESTRATOR_CATALOG_LIMIT: ${{ inputs.catalog_limit }}
         ORCHESTRATOR_CATALOG_ACCOUNT_CAP: ${{ inputs.catalog_account_cap }}

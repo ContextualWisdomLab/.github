@@ -4,8 +4,22 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
+
+# The PR scan target is a private directory holding only the changed files, so
+# a path under it (as Strix reports it) is bound to this invocation's scope.
+SCOPE_PATH_RE = re.compile(r"/workspace/strix-pr-scope\.[A-Za-z0-9]+/([A-Za-z0-9_./-]+)")
+
+
+def _names_scoped_ancestor(report: str, changed_paths: list[str]) -> bool:
+    """True when the report names a PR-scope directory or file containing a changed path."""
+    for match in SCOPE_PATH_RE.finditer(report):
+        named = match.group(1).strip("/")
+        if named and any(path == named or path.startswith(named + "/") for path in changed_paths):
+            return True
+    return False
 
 
 def validate(output: Path, changed_paths: list[str]) -> None:
@@ -28,7 +42,7 @@ def validate(output: Path, changed_paths: list[str]) -> None:
     if metadata.get("status") != "completed" or results.get("scan_completed") is not True or results.get("success") is not True:
         raise ValueError("scan report is incomplete")
     report = report_path.read_text(encoding="utf-8")
-    if not any(path in report for path in changed_paths):
+    if not any(path in report for path in changed_paths) and not _names_scoped_ancestor(report, changed_paths):
         raise ValueError("scan report does not identify a changed source file")
 
 
