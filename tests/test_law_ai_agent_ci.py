@@ -181,6 +181,57 @@ def test_cleanup_preserves_cluster_when_pid_metadata_is_missing(tmp_path):
     assert marker.is_file()
 
 
+@pytest.mark.parametrize('unsafe_child', [
+    'data', 'private', 'postgres', 'cluster', 'postmaster-pid',
+])
+def test_cleanup_refuses_symlinked_cluster_boundaries(tmp_path, unsafe_child):
+    """Never invoke PostgreSQL cleanup through a symlinked cluster boundary."""
+    runner = tmp_path / 'runner'
+    runner.mkdir(mode=0o700)
+    root = runner / 'lawci.keep'
+    root.mkdir(mode=0o700)
+    cluster = root / 'data/private/postgres/cluster'
+    foreign_root = tmp_path / 'foreign-root'
+    foreign_cluster = foreign_root / 'data/private/postgres/cluster'
+    foreign_cluster.mkdir(mode=0o700, parents=True)
+    foreign_pid = foreign_cluster / 'postmaster.pid'
+    foreign_pid.write_text('foreign\n')
+    child_paths = {
+        'data': Path('data'),
+        'private': Path('data/private'),
+        'postgres': Path('data/private/postgres'),
+        'cluster': Path('data/private/postgres/cluster'),
+    }
+    if unsafe_child == 'postmaster-pid':
+        cluster.mkdir(mode=0o700, parents=True)
+        (cluster / 'postmaster.pid').symlink_to(foreign_pid)
+    else:
+        child_path = child_paths[unsafe_child]
+        (root / child_path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (root / child_path).symlink_to(foreign_root / child_path, target_is_directory=True)
+    marker = runner / 'law-ci-state-3.14'
+    marker.write_text(str(root) + '\n')
+    marker.chmod(0o600)
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    pg_config = tools / 'pg_config'
+    pg_config.write_text('#!/bin/bash\nprintf "%s\\n" "$SYNTHETIC_TOOLS"\n')
+    pg_config.chmod(0o700)
+    pg_ctl = tools / 'pg_ctl'
+    pg_ctl.write_text('#!/bin/bash\nprintf "called\\n" >> "$SYNTHETIC_TRACE"\nexit 9\n')
+    pg_ctl.chmod(0o700)
+    trace = tmp_path / 'trace'
+    env = {**os.environ, 'RUNNER_TEMP': str(runner),
+           'SYNTHETIC_TOOLS': str(tools), 'SYNTHETIC_TRACE': str(trace),
+           'PATH': str(tools) + os.pathsep + os.environ['PATH']}
+    result = helper('cleanup', env=env)
+    assert result.returncode != 0
+    assert not trace.exists()
+    assert foreign_pid.read_text() == 'foreign\n'
+    assert root.is_dir()
+    assert marker.is_file()
+
+
 def short_temp_root():
     """Select a canonical base leaving room for both private temporary roots."""
     base = Path(tempfile.gettempdir()).resolve()
