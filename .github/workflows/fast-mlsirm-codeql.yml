@@ -17,7 +17,7 @@ jobs:
     name: Analyze (actions)
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -45,7 +45,7 @@ jobs:
     name: Analyze (python)
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write

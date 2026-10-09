@@ -17,7 +17,7 @@ jobs:
     name: Hourly PR queue governance evidence
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 10
     steps:
       - name: Check out reviewed source

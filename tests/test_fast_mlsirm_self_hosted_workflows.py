@@ -11,12 +11,13 @@ def workflow_text(name: str) -> str:
 
 
 def test_fast_mlsirm_reusable_workflows_keep_isolated_runner_and_gate_contracts():
+    """Require every reusable fast-mlsirm job to use the isolated runner boundary."""
     for name in ("ci", "codeql", "statistical-studies", "hourly-pr-governance", "pypi-gap-guard"):
         text = workflow_text(f"fast-mlsirm-{name}.yml")
         assert "workflow_call:" in text
         assert "ubuntu-latest" not in text and "runs-on: ubuntu" not in text
         assert "group: CWL CI isolated" in text
-        assert "labels: [self-hosted, Linux, X64]" in text
+        assert "labels: [self-hosted, linux, x64, cwlab-ci-isolated]" in text
         assert f"group: central-fast-mlsirm-{name}-" in text
     ci = workflow_text("fast-mlsirm-ci.yml")
     assert 'python-version: ["3.12", "3.14"]' in ci

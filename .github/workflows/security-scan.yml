@@ -71,7 +71,9 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -126,7 +128,9 @@ jobs:
   osv-scan:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     permissions:
       actions: read
@@ -339,6 +343,10 @@ jobs:
           echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
         if: always()
+        # The reporter and SARIF upload above preserve the security verdict.
+        # Debug retention quota is observability only and must not turn a clean
+        # comparison into a failed security gate.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: osv-scan-debug
@@ -352,7 +360,9 @@ jobs:
   dependency-review:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       pull-requests: read
@@ -387,6 +397,23 @@ jobs:
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable: exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \
@@ -436,7 +463,9 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -526,7 +555,9 @@ jobs:
   trivy-fs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -553,6 +584,10 @@ jobs:
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
+          # Runner groups can schedule onto different hosts. Reinstall the
+          # pinned binary instead of trusting a cache entry whose path or
+          # executable bit belongs to a previous runner.
+          cache: false
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
@@ -633,7 +668,9 @@ jobs:
   scorecard:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/security-scan.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:

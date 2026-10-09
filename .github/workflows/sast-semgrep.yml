@@ -50,7 +50,9 @@ jobs:
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
     if: github.event.action != 'closed'
-    runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/fast-mlsirm') && fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/sast-semgrep.yml@refs/heads/main' && '{"group":"CWL MCP remediation","labels":["self-hosted","Linux","X64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","Linux","X64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       pull-requests: read

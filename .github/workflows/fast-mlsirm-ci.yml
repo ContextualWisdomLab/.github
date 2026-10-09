@@ -22,7 +22,7 @@ jobs:
     name: python (${{ matrix.python-version }})
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +52,7 @@ jobs:
     if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')) }}
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     steps:
       - name: Require every CPython matrix leg
         run: |
@@ -64,7 +64,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -93,7 +93,7 @@ jobs:
     # remains in the scheduled/manual workflow.
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 240
     env:
       WGPU_BACKEND: vulkan
@@ -191,7 +191,7 @@ jobs:
     # ~60s-per-target budget. Longer campaigns can be run nightly if desired.
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -242,7 +242,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     runs-on:
       group: CWL CI isolated
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

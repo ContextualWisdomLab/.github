@@ -1147,22 +1147,21 @@ def test_codeql_moved_head_requires_forward_ancestry(tmp_path: Path) -> None:
         assert enforce.returncode != 0
 
 
-def test_codeql_control_routing_preserves_three_runner_trust_levels() -> None:
-    """Route trusted main, isolated product PRs, and other consumers separately."""
+def test_codeql_control_routing_keeps_pr_workflows_hosted() -> None:
+    """Only the trusted main revision may request the restricted control group."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    selectors = [line.strip() for line in workflow.splitlines() if line.strip().startswith("runs-on:")]
+    selectors = [line.strip() for line in workflow.splitlines() if line.startswith("      group:")]
     trusted = "ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main"
     assert len(selectors) == 3
     for selector in selectors:
         assert f"fromJSON(github.workflow_ref == '{trusted}' && " in selector
-        assert '"group":"CWL central control"' in selector
-        assert '"labels":["self-hosted","linux","x64"]' in selector
-        assert "github.repository == 'ContextualWisdomLab/.github'" in selector
-        assert "github.repository == 'ContextualWisdomLab/fast-mlsirm'" in selector
-        assert '"group":"CWL CI isolated"' in selector
-        assert '"labels":["self-hosted","Linux","X64"]' in selector
-        assert "'\"ubuntu-24.04\"'" in selector
-        assert '"group":"CWL MCP remediation"' not in selector
+        choices = re.findall(r"'([^']*)'", selector)
+        assert choices[0] == trusted
+        assert json.loads(choices[1]) == {"group": "CWL central control", "labels": ["self-hosted", "linux", "x64"]}
+        assert json.loads(choices[2]) == {
+            "group": "CWL CI isolated",
+            "labels": ["self-hosted", "linux", "x64", "cwlab-ci-isolated"],
+        }
 
 
 def test_codeql_pr_rejects_invalid_required_run_time(tmp_path: Path) -> None:

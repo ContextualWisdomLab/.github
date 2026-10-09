@@ -30,7 +30,9 @@ permissions:
 
 jobs:
   aggregate-sbom-inventory:
-    runs-on: ${{ github.repository == 'ContextualWisdomLab/.github' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: write
       id-token: write

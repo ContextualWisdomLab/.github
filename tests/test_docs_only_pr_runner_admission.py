@@ -17,8 +17,8 @@ the ruleset excludes -- see
 `docs/doctoring/required-workflow-path-filter-boundary.md`.
 
 See also `tests/test_required_security_runner_image_contract.py` and
-`tests/test_required_review_runner_image_contract.py`, which pin each gate's
-supported hosted fallback and trusted self-hosted routing boundary.
+`tests/test_required_review_runner_image_contract.py`, which pin the
+`CWL CI isolated` group and isolation-label counts these gate jobs add.
 """
 
 from __future__ import annotations
@@ -93,7 +93,8 @@ def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
         normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith(("if:", "runs-on:"))
+            line for line in block.splitlines()
+            if not line.strip().startswith(("if:", "runs-on:", "group:", "labels:"))
         )
         normalized_blocks.add(normalized)
     assert len(normalized_blocks) == 1, (
@@ -135,23 +136,13 @@ def test_gate_jobs_use_supported_runner_allocation():
         if filename in ("opencode-review.yml", "strix.yml"):
             assert '"group":"CWL central control"' in block, filename
             assert f"github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/{filename}@refs/heads/main'" in block, filename
-            assert "fromJSON('[\"ubuntu-24.04\"]')" in block, filename
+            assert 'fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')' in block, filename
         elif filename == "noema-review.yml":
             assert "endsWith(github.workflow_ref, '@refs/heads/main')" in block, filename
-            assert "fromJSON('[\"ubuntu-24.04\"]')" in block, filename
-        elif filename == "security-scan.yml":
-            assert "github.repository == 'ContextualWisdomLab/.github'" in block
-            assert "github.repository == 'ContextualWisdomLab/fast-mlsirm'" in block
-            assert (
-                "github.workflow_ref == "
-                "'ContextualWisdomLab/.github/.github/workflows/"
-                "security-scan.yml@refs/heads/main'"
-            ) in block
-            assert '"group":"CWL MCP remediation"' in block
-            assert '"group":"CWL CI isolated"' in block
-            assert "fromJSON('[\"ubuntu-24.04\"]')" in block
+            assert 'fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')' in block, filename
         else:
-            raise AssertionError(f"unclassified runner contract: {filename}")
+            assert "group: CWL CI isolated" in block, filename
+            assert "labels: [self-hosted, linux, x64, cwlab-ci-isolated]" in block, filename
         assert "runs-on: ubuntu-latest" not in block, filename
 
 
@@ -261,17 +252,8 @@ def test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level():
     assert "changed-scope:" not in workflow
     assert "needs: changed-scope" not in workflow
     assert "needs.changed-scope" not in workflow
-    assert workflow.count("runs-on:") == 1
-    assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.repository == 'ContextualWisdomLab/fast-mlsirm'" in workflow
-    assert (
-        "github.workflow_ref == "
-        "'ContextualWisdomLab/.github/.github/workflows/"
-        "sast-semgrep.yml@refs/heads/main'"
-    ) in workflow
-    assert '"group":"CWL MCP remediation"' in workflow
-    assert '"group":"CWL CI isolated"' in workflow
-    assert "fromJSON('[\"ubuntu-24.04\"]')" in workflow
+    assert workflow.count("group: CWL CI isolated") == 1
+    assert workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]") == 1
 
     semgrep = _top_level_job_block(workflow, "semgrep")
     assert not re.search(r"(?m)^    needs:", semgrep)
