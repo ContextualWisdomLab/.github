@@ -1581,6 +1581,8 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(mon
     resolution instead goes through the sandboxed-``cwd``-relative path this
     fix adds, not a PATH search.
     """
+    # Model the guest home independently of the host scratch directory.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "synthetic-home")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
@@ -1613,6 +1615,8 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypa
     ``shutil.which`` to ``None`` here proves resolution instead falls
     through to the cwd-anchored ``PATH`` search this fix adds.
     """
+    # Model the guest home independently of the host scratch directory.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "synthetic-home")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
@@ -1646,6 +1650,8 @@ def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_moun
     that does not exist inside the sandbox, where only ``SANDBOX_MOUNT`` is
     bound, so the command would fail to launch there unchanged.
     """
+    # Model the guest home independently of the host scratch directory.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "synthetic-home")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
@@ -1706,6 +1712,8 @@ def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypat
 
 def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
     """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
+    # Model the guest home independently of the host scratch directory.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "synthetic-home")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
@@ -1726,6 +1734,8 @@ def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_pat
 
 def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
     """An explicit absolute path outside the workspace and bind roots is still rejected."""
+    # Model the guest home independently of the host scratch directory.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "synthetic-home")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
