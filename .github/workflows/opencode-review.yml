@@ -43,7 +43,7 @@ jobs:
     # queue wait between two single-digit-second jobs. See
     # docs/doctoring/actions-capacity-root-cause-20260917.md for the
     # underlying measurement methodology.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       pull-requests: read
@@ -308,8 +308,8 @@ jobs:
     # every PR event including docs/changelog-only diffs; this closes that
     # gap using the identical classifier. Fails OPEN: an unreadable, empty,
     # or truncated file list reviews everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
+    if: (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -363,7 +363,7 @@ jobs:
     name: coverage-source-tree
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - run: >-
           echo "PR-head source and coverage execution are delegated to the
@@ -383,7 +383,7 @@ jobs:
     # through coverage-source-tree, so an unadmitted head still skips it.
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - run: >-
           echo "This required-workflow job preserves the stable branch-protection
@@ -402,7 +402,7 @@ jobs:
     # directly by this job's own `if:` below, not inherited through that edge.
     needs: [required-workflow-bootstrap, changed-scope]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       contents: read
       pull-requests: read
@@ -605,21 +605,32 @@ jobs:
               ]
             | (last // {}) as $review
             | ($review.body // "" | ascii_downcase) as $body
-            | if $review.state == "CHANGES_REQUESTED" then
+            # A review written by the model-unavailable fallback (deterministic
+            # blockers or a fallback approval) is not a model verdict. Counting
+            # its CHANGES_REQUESTED made this required check green while no model
+            # had reviewed anything; it now surfaces as MODEL_OUTPUT_UNAVAILABLE.
+            | ([
+                "deterministic current-head evidence",
+                "deterministic fallback approval",
+                "model-unavailable evidence fallback",
+                "did not emit a usable current-head control block",
+                "scope: `unsupported`",
+                "model-pool outcome: `unknown`"
+              ] | any(. as $marker | $body | contains($marker))) as $fallback
+            | if ($review.state == "CHANGES_REQUESTED" or $review.state == "APPROVED") and $fallback then
+                "MODEL_OUTPUT_UNAVAILABLE"
+              elif $review.state == "CHANGES_REQUESTED" then
                 "CHANGES_REQUESTED"
-              elif $review.state == "APPROVED"
-                and ($body | contains("deterministic current-head evidence") | not)
-                and ($body | contains("deterministic fallback approval") | not)
-                and ($body | contains("model-unavailable evidence fallback") | not)
-                and ($body | contains("did not emit a usable current-head control block") | not)
-                and ($body | contains("scope: `unsupported`") | not)
-                and ($body | contains("model-pool outcome: `unknown`") | not)
-              then
+              elif $review.state == "APPROVED" then
                 "APPROVED"
               else
                 empty
               end
           ')"
+          if [ "$verdict" = "MODEL_OUTPUT_UNAVAILABLE" ]; then
+            echo "::error title=MODEL_OUTPUT_UNAVAILABLE::The latest opencode-agent review on the current head came from the model-unavailable evidence fallback, not from a model verdict. The required OpenCode review stays unsatisfied until a model-backed APPROVED or CHANGES_REQUESTED review lands on this head."
+            exit 1
+          fi
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
             exit 1
@@ -640,7 +651,7 @@ jobs:
     # head no longer matches the live one. The target job also revalidates the
     # live PR before dispatch and verdict admission.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     permissions:
       actions: write
       contents: read

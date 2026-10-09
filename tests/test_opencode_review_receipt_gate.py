@@ -342,3 +342,32 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )(),
     )
     assert receipt.load_reviews("-")[0]["commit_id"] == receipt.AFIPC_230_HEAD
+
+
+def test_fallback_changes_requested_is_not_a_receipt_so_review_retries() -> None:
+    """RED on main: a fallback CHANGES_REQUESTED counted as a receipt and suppressed the retry wake.
+
+    With the model pool exhausted, the fallback posts deterministic blocker
+    reviews. Treating them as a formal receipt stopped the scheduler from ever
+    retrying a real model review on that head.
+    """
+    fallback = review(
+        commit=receipt.AFIPC_230_HEAD,
+        state="CHANGES_REQUESTED",
+        body=(
+            "## Pull request overview\n\nOpenCode could not approve from deterministic current-head "
+            "evidence because GitHub Checks have failed.\n\n- Root cause: The model-unavailable "
+            "evidence fallback is allowed only when peer GitHub Checks are complete and clean."
+        ),
+    )
+    found, reason = receipt.evaluate_receipts([fallback], receipt.AFIPC_230_HEAD)
+    assert found is None
+    assert "fallback" in reason
+    real = review(
+        commit=receipt.AFIPC_230_HEAD,
+        state="CHANGES_REQUESTED",
+        body="## Verdict\nRequest changes: the race is unguarded.",
+        review_id=2,
+    )
+    found, _reason = receipt.evaluate_receipts([fallback, real], receipt.AFIPC_230_HEAD)
+    assert found is not None
