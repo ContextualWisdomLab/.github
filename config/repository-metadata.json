@@ -359,6 +359,12 @@
       "deepwiki": true,
       "pages": true
     },
+    "Orgmetra": {
+      "description": "Evidence-centered HRIS for the full employment lifecycle. Orgmetra is the ContextualWisdomLab system of record for people, employment, organizations, jobs, positions, assignments, candidate-to-worker linkage, performance criteria, compensation, and evidence-backed talent decisions.",
+      "topics": ["api","employment-lifecycle","hris","human-resources","postgresql","workforce-management","contextualwisdomlab"],
+      "deepwiki": false,
+      "pages": false
+    },
     "mhtml-etl-gateway": {
       "description": "Enterprise MHTML ingestion gateway that converts browser, SAP ALV, and Excel Web Archive exports into governed PostgreSQL data assets.",
       "topics": [
