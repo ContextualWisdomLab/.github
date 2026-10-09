@@ -952,6 +952,17 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/life-os/"
+    },
+    "hyosung-itx-slogan-brief": {
+      "description": "Hyosung ITX slogan research brief and deliverable",
+      "topics": [
+        "brief",
+        "hyosung",
+        "marketing",
+        "slogan"
+      ],
+      "deepwiki": false,
+      "pages": false
     }
   }
 }
