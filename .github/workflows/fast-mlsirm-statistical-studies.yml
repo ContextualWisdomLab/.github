@@ -1,0 +1,170 @@
+name: Statistical Studies
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Secret boundary: this evidence workflow intentionally consumes no secret
+# inputs. If a future study needs credentials, pass them only through an
+# explicitly reviewed `${{ secrets.NAME }}` value in `env`; never hardcode,
+# interpolate into command arguments, or print a credential.
+
+concurrency:
+  group: central-fast-mlsirm-statistical-studies-statistical-studies-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rust-ignored:
+    name: Ignored Rust studies shard ${{ matrix.shard }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    # Large Monte Carlo recovery tests are real evidence, not a reason to
+    # silently discard a shard after the helper's default 30-minute bound.
+    timeout-minutes: 180
+    env:
+      FAST_MLSIRM_STATISTICAL_TEST_TIMEOUT_SECONDS: "7200"
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - name: Run target-qualified ignored Rust shard
+        run: >-
+          python scripts/run_ignored_rust_shard.py
+          --shard ${{ matrix.shard }}
+          --shards 12
+          --skip mlsirm-core/test/literature_true_parameter_recovery::kang_jeon_2025_minimum_cell_recovers_true_parameters
+          --skip mlsirm-core/test/literature_true_parameter_recovery::gpu_recovery_matches_cpu_on_paper_design
+          --skip mlsirm-core/test/higher_order_mc_recovery::higher_order_dina_recovery_respects_monte_carlo_tolerance
+          --skip mlsirm-core/lib/mlsirm_core::grm::tests::mc_grm_recovery_500
+
+  rust-pyo3-ignored:
+    name: Ignored PyO3 studies
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - run: cargo test --locked --release --manifest-path crates/fast-mlsirm-py/Cargo.toml -- --ignored --test-threads=1 --nocapture
+
+  rust-recovery:
+    name: Literature CPU recovery studies
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - name: Run Kang-Jeon paper-design recovery
+        run: |
+          set -euo pipefail
+          # cargo test --exact exits 0 when the filter matches no test, so
+          # require exactly one executed passing test (fail-closed, #1869).
+          cargo test --locked --release -p mlsirm-core \
+            --test literature_true_parameter_recovery \
+            kang_jeon_2025_minimum_cell_recovers_true_parameters \
+            -- --ignored --exact --nocapture 2>&1 | tee kang-jeon-recovery.log
+          grep -q "test result: ok. 1 passed" kang-jeon-recovery.log
+      - name: Run higher-order DINA Monte Carlo recovery
+        run: |
+          set -euo pipefail
+          # cargo test --exact exits 0 when the filter matches no test, so
+          # require exactly one executed passing test (fail-closed, #1869).
+          cargo test --locked --release -p mlsirm-core \
+            --test higher_order_mc_recovery \
+            higher_order_dina_recovery_respects_monte_carlo_tolerance \
+            -- --ignored --exact --nocapture 2>&1 | tee higher-order-dina-recovery.log
+          grep -q "test result: ok. 1 passed" higher-order-dina-recovery.log
+
+  grm-recovery:
+    name: GRM 500-rep recovery study
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - name: Run multidimensional GRM Monte Carlo recovery
+        run: |
+          set -euo pipefail
+          cargo test --locked --release -p mlsirm-core --lib \
+            grm::tests::mc_grm_recovery_500 \
+            -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee grm-recovery-study.log
+          # cargo test --exact exits 0 when the filter matches no test, so
+          # require exactly one executed passing test (fail-closed, #1869).
+          grep -q "test result: ok. 1 passed" grm-recovery-study.log
+      - name: Publish GRM recovery study log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: grm-recovery-study-${{ github.run_id }}
+          path: grm-recovery-study.log
+          if-no-files-found: error
+          retention-days: 90
+
+  gpu-recovery:
+    name: Literature GPU recovery parity
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 90
+    env:
+      WGPU_BACKEND: vulkan
+      XDG_RUNTIME_DIR: /tmp/fast-mlsirm-xdg-runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - name: Install software Vulkan adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers vulkan-tools
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          LVP_ICD="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
+          test -n "$LVP_ICD"
+          echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
+      - run: vulkaninfo --summary
+      - name: Run paper-design GPU recovery parity
+        run: |
+          set -euo pipefail
+          # cargo test --exact exits 0 when the filter matches no test, so
+          # require exactly one executed passing test (fail-closed, #1869).
+          cargo test --locked --release -p mlsirm-core \
+            --test literature_true_parameter_recovery \
+            gpu_recovery_matches_cpu_on_paper_design \
+            -- --ignored --exact --nocapture 2>&1 | tee gpu-recovery-parity.log
+          grep -q "test result: ok. 1 passed" gpu-recovery-parity.log

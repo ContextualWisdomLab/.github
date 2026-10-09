@@ -1,0 +1,166 @@
+name: PyPI Gap Guard
+
+# Idempotent recovery: when a GitHub Release exists for a canonical vX.Y.Z tag
+# whose project version matches pyproject.toml at that tag, but the version is
+# absent from PyPI, dispatch the local publish-pypi.yml control plane with the
+# same provenance inputs as release-tag (release_tag, release_commit from the
+# tag, control_plane_commit = default-branch HEAD). Never retargets tags.
+# See docs/orchestration/release-publish-contract.md and ADR-0029.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: central-fast-mlsirm-pypi-gap-guard-pypi-gap-guard
+  cancel-in-progress: false
+
+jobs:
+  recover-missing-pypi:
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout default-branch control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve control-plane commit and PyPI inventory
+        id: inventory
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_HINT: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          CONTROL_PLANE_COMMIT="$(git rev-parse HEAD)"
+          if ! printf '%s' "$CONTROL_PLANE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "default-branch HEAD is unavailable for package publication dispatch" >&2
+            exit 1
+          fi
+          echo "control_plane_commit=$CONTROL_PLANE_COMMIT" >> "$GITHUB_OUTPUT"
+
+          pypi_json="$(mktemp)"
+          cleanup() {
+            rm -f "$pypi_json"
+          }
+          trap cleanup EXIT
+
+          # Prefer the public PyPI JSON API over GitHub API spam for package
+          # version inventory.
+          curl --silent --show-error --fail \
+            --header "Accept: application/json" \
+            --output "$pypi_json" \
+            "https://pypi.org/pypi/fast-mlsirm/json"
+
+          python3 - "$pypi_json" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          releases = payload.get("releases") or {}
+          versions = sorted(str(name) for name in releases.keys())
+          Path("pypi_versions.txt").write_text(
+              "\n".join(versions) + ("\n" if versions else ""),
+              encoding="utf-8",
+          )
+          print(f"loaded {len(versions)} PyPI versions for fast-mlsirm")
+          PY
+
+          candidate_tags=()
+          if [ "$EVENT_NAME" = "release" ] && [ -n "${RELEASE_TAG_HINT:-}" ]; then
+            candidate_tags+=("$RELEASE_TAG_HINT")
+          else
+            # gh release list is scoped to this repository and avoids a broad
+            # REST pagination loop for every org repo.
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              candidate_tags+=("$tag")
+            done < <(
+              gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                --json tagName \
+                --jq '.[].tagName'
+            )
+          fi
+
+          : > gap_tags.txt
+          for tag in "${candidate_tags[@]}"; do
+            if ! printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "skipping non-canonical release tag: $tag"
+              continue
+            fi
+            version="${tag#v}"
+            if grep -Fxq "$version" pypi_versions.txt; then
+              echo "PyPI already has $version; skipping $tag"
+              continue
+            fi
+            printf '%s\n' "$tag" >> gap_tags.txt
+          done
+
+          if [ ! -s gap_tags.txt ]; then
+            echo "no PyPI gaps detected"
+            echo "gap_count=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "gap_count=$(wc -l < gap_tags.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+            echo "detected gaps:"
+            cat gap_tags.txt
+          fi
+
+      - name: Dispatch publish-pypi for each missing version
+        if: steps.inventory.outputs.gap_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CONTROL_PLANE_COMMIT: ${{ steps.inventory.outputs.control_plane_commit }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r release_tag; do
+            [ -n "$release_tag" ] || continue
+            if ! release_commit="$(git rev-parse "$release_tag^{commit}" 2>/dev/null)"; then
+              echo "release tag $release_tag is unavailable for provenance verification" >&2
+              exit 1
+            fi
+            if ! printf '%s' "$release_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "release commit for $release_tag is not a canonical SHA-1" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$release_commit" "$CONTROL_PLANE_COMMIT"; then
+              echo "release commit for $release_tag must be an ancestor of default-branch HEAD" >&2
+              exit 1
+            fi
+
+            project_version="$(
+              git show "$release_commit:pyproject.toml" | python3 -c '
+          import sys
+          import tomllib
+
+          project = tomllib.loads(sys.stdin.read())["project"]
+          print(project["version"])
+          '
+            )"
+            expected_tag="v$project_version"
+            if [ "$release_tag" != "$expected_tag" ]; then
+              echo "tag $release_tag does not match pyproject version $project_version at $release_commit" >&2
+              exit 1
+            fi
+
+            echo "dispatching publish-pypi.yml for $release_tag @ $release_commit (control plane $CONTROL_PLANE_COMMIT)"
+            gh workflow run publish-pypi.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$DEFAULT_BRANCH" \
+              -f release_tag="$release_tag" \
+              -f release_commit="$release_commit" \
+              -f control_plane_commit="$CONTROL_PLANE_COMMIT"
+          done < gap_tags.txt
