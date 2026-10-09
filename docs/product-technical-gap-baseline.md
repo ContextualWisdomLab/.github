@@ -1,11 +1,114 @@
 # Product and Technical Gap Baseline
 
+## 2026-10-09 reusable R matrix conservation
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#2565@6e924f32a2dbaa0950709c6d8f1391fc1058ef43` printed `STOP` for unsupported R platform legs but returned exit 0 whenever at least one Ubuntu leg remained; the workflow then expanded only the filtered output, so a required macOS, Windows, ARM, or unknown check could disappear while the reusable workflow passed | RED changed the existing executable contract to require the mixed Ubuntu+macOS+Windows+ARM matrix to fail; exact-parent execution failed because the script returned 0 and emitted only Ubuntu. The inline workflow copy had identical behavior | **PRD:** requested required checks are conserved or the request fails; partial silent execution is forbidden. **TRD/RCA:** reject the entire matrix on the first unsupported leg and return the original rows only when every row is admitted; keep the owner script byte-equivalent to the workflow inline copy. **Context Map:** central `.github` owns reusable R admission; product callers consume the released contract. **Flow:** `caller matrix → validate every row → all admitted → fixed isolated Linux/x64 execution`, otherwise `STOP / nonzero`. DB/UI/ERD changes are N/A | **Proposed / focused RED→GREEN complete; full exact-tree verification, hosted exact-head Checks, isolated-capacity canary, and qualifying independent approval remain required** |
+
+## 2026-10-07 security scanner runner isolation
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#2565@3b35d3d427d17f71472d3bf52ba179338011c17a` restored the pinned Trivy binary cache on one self-hosted runner but could not execute `trivy`, while the completed OSV comparison was reclassified as failed only because optional debug-artifact storage quota was exhausted | Security run `37242578328`; Trivy job `112314054734` logged cache hit followed by `entrypoint.sh: line 88: trivy: command not found` (exit 127). OSV job `112314054619` found no PR-introduced issue and uploaded SARIF before `Upload OSV debug artifacts` failed with `Artifact storage quota has been hit` | **PRD:** a buyer-visible security verdict must represent scanner findings, not runner-local cache state or optional retention quota. **TRD/RCA:** disable `trivy-action` binary caching across the heterogeneous isolated runner group and make only OSV debug retention non-blocking; the base/head reporter and SARIF path remain fail-closed. **Context Map:** central `.github` owns security workflow execution; product repositories consume the released required-workflow contract. **Flow:** `exact head checkout → pinned scanner install → finding gate → SARIF → optional debug retention`. DB/UI/ERD changes are N/A. RED `cc42969b…` failed 2/2 contracts; GREEN `26f993c0…` passes focused tests normally and under `GITHUB_ACTIONS=true`, plus 5,488 passed, 10 skipped, 40 subtests repository-wide | **Proposed / source and contract repair published; fresh exact-head hosted security evidence, isolated-capacity canary, unresolved-thread zero, and qualifying independent approval required** |
+
+## 2026-10-03 isolated self-hosted runner authority boundary
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#2565@d6ba56d04e22476b2ea41bfe7bb26e2cbc98f98f` routed ordinary jobs and non-main fallbacks by the mutable `cwlab-ci-isolated` label alone, although the PR's own doctoring stated that a generic label does not attest separation; GitHub does not validate OS/architecture label truth, so a privileged or persistent runner with matching labels and repository access could receive untrusted work | RED contract `test_isolated_label_is_scoped_to_dedicated_runner_group` failed first at `.github/workflows/actions-queue-health.yml`; the reviewed tree contained 63 affected `runs-on` declarations across direct, conditional, CodeQL and R-matrix selectors | At the central `.github` owner, require both the dedicated `CWL CI isolated` runner group and existing labels for every isolated selector; preserve trusted-main groups and repository predicates; update exact workflow oracles and rollout doctoring; keep Draft/HOLD until the group, access policy, disposable capacity, cleanup proof, canary and exact-head Checks exist | **Proposed / local RED→GREEN complete; operator capacity, exact-head hosted Checks and qualifying independent approval required** |
+| `.github#2565@cd49a60f1299fb8f7984de8d8ba223db673f7b84` wrapped the reusable R runner JSON in unescaped literal braces inside GitHub `format()`, so expression evaluation treated `"group"` as a replacement field and failed before any matrix job could request a runner; the prior test asserted that defective source literal instead of rendering it | RED `f9211898d83f039cdf7ff82c8f93c72c9c10dceb` added a behavior contract that renders and parses the exact template for Linux, Windows, macOS and an unsupported OS; focused result was 1 failed / 7 passed with `KeyError: '"group"'`. GREEN `7fc1e2e8ad5091adff6c56b501e93d1d4ac2f211` doubles only the outer JSON braces and passes 8/8 normally and with `GITHUB_ACTIONS=true` | Preserve `{0}`/`{1}` substitutions and the original matrix OS label, render one valid group-scoped selector for every supported/unsupported branch, and keep the PR Draft/HOLD until the independent runner-group prerequisites and hosted exact-head gates are satisfied | **Proposed / local RED→GREEN complete; no runner capacity or merge authority claimed** |
+| `.github#2565@f0f7ed988fba5d94eda6513f35d171f23c4bd9a5` inserted caller-controlled `matrix.config.os` inside a quoted JSON string; a quote-bearing label could add duplicate `group` and `labels` members whose last values replaced the fixed isolation boundary | Exact-head RED updated the source contract to require an unquoted `{1}` JSON value plus `toJSON(matrix.config.os)`; before source repair the focused result was 2 failed / 6 passed, after repair 8/8 passed. The behavioral matrix includes benign Linux/Windows/macOS/unsupported labels, a duplicate-key injection string, and backslash/newline data. Full warning-fatal verification is 5,439 passed, 10 skipped, 40 subtests with 18,830/18,830 statements and 7,684/7,684 branches covered. Exact-head public-doc coverage initially exposed two inherited Maturin helper gaps; adding their public contracts restored 100%, and compileall/diff checks pass | **PRD:** untrusted reusable-workflow input must remain data and cannot select privileged capacity. **TRD/RCA:** serialize the OS label exactly once at the GitHub expression boundary, then parse one selector with fixed group and mandatory labels. **Context Map:** central `.github` owns runner admission; callers supply labels through the released workflow contract only. **Flow:** `r_matrix JSON → matrix.config.os → toJSON → format value slot → fromJSON → fixed runner group`. DB/UI/ERD changes are N/A. Require hosted exact-head security/quality Checks, isolated capacity canary, cleanup proof, and qualifying approval | **Proposed / local RED→GREEN and full verification complete; hosted/operator gates pending** |
+
+## 2026-10-01 Maturin response-lifecycle coverage closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| `.github#1653@5cd141ec2c33b631d164af936cd1c9de70e4c9a4` passed all 5,314 tests but failed the complete branch gate because the canonical Maturin downloader left five error-path statements and two branches unexecuted; the owner workflow omitted both verifier paths and stacked PR bases | Trusted uv Materializer run `36811202519`, job `110206427182`; `verify_release_maturin_tool_assets.py` 95%, missing lines 104 and 106-112 plus branch 114→116; no owner run at #2530 predecessor `8cf2ea5f73976d47b2267fb52ac28284323404b7` because its base was #2531 rather than `main` | Repair canonical successor `.github#2530`: exercise non-200 and opener-raised `HTTPError` closure, replace the impossible nullable-response finalizer with one unconditional response-owned close scope, add source/test and stacked-PR trigger contracts to the complete gate while retaining protected-main push scope, preserve all network and fail-closed boundaries, then ordinary-merge the accepted owner head into #1653 | **Proposed / hosted RED reproduced; focused verifier coverage GREEN locally; path and stacked-admission contracts RED→GREEN; exact-head hosted full-suite, security, CodeQL, and independent approval required** |
+
+## 2026-10-01 bounded Maturin release downloader SAST closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The canonical Maturin asset verifier replaced a suppressed dynamic `urlopen` call with direct `HTTPSConnection`, but Semgrep's low-confidence certificate-validation audit still rejects every use of that low-level API | `.github#2531@e33d97d022e1c1a26b35d51f9fa4b695fe969547`; SAST run `36802256836`; job `110178968784`; rule `python.lang.security.audit.httpsconnection-detected.httpsconnection-detected` | At source-repair head `eede925e71e0f1526560a305f5219a13c6631227`, replace the low-level connection with a standard-library opener whose redirect handler admits one credential-free HTTPS hop only from the fixed GitHub release path to the exact release-assets host; preserve bounded reads and terminal response closure; prohibit scanner suppressions | **Proposed / RED scanner-contract reproduction and 31 tests plus 4 subtests GREEN locally; source-repair exact-head Security, Python Security, SAST, and runtime-quality GREEN; terminal CodeQL and independent approval required** |
+
+## 2026-10-01 gap baseline source integrity
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| A connector display truncation was committed as the baseline source, removing 3,270 lines of PRD/TRD/UML, Gap-register, APA 7th, and live-inventory evidence | Repository Metadata Reconcile run `36777030872`; job `110097412873`; exact broken head `.github#2530@61a3f2ebbf6adf9c237a647552ccffeb52b00f47`; RED `c8d41f52962814d080a1c4947acbff2f3f9bb81e` | Restore the last complete 3,703-line source blob, reapply only the intended first-patched dependency-floor row, and reject future connector truncation banners in the repository quality gate | **Proposed / local RED→GREEN complete; exact-head hosted Metadata and independent approval required** |
+
+## 2026-10-01 Noema document-reader transitive security baseline
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The generated Noema document-reader lock selected `fast-uri` 3.1.7 and `ip-address` 10.7.0 after CVE-2026-86472, CVE-2026-101911, and CVE-2026-101912 were published | Security Scan run `36773087489`; Trivy job `110084194330`; exact predecessor `.github#2530@a99784219305d1b6e14cf76f0acea30c5ee45e21` | At the central `.github` owner, regenerate only the two transitive entries to `fast-uri` 3.1.8 and the first patched `ip-address` 10.7.1 release, scan every hoisted or nested lock entry in a regression contract, reproduce with `npm ci`, and require a zero-vulnerability npm audit | **Proposed / local RED→GREEN and audit complete; exact-head hosted security and independent approval required** |
+
+## 2026-10-01 shared Strix LiteLLM credential-exfiltration closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix hash lock selected LiteLLM 1.94.1, which is affected by CVE-2026-84377 / GHSA-3cv6-jpf6-8222 and can expose configured provider credentials through authenticated routing overrides | Failing predecessor `.github#2531@516471fbe7d4e93a50c7bbba20402447f06f8d8b`, Python Security run `36799069276`, job `110169140365`; repaired exact head `fe879f7b7f48f729f757e03851bf61149470ccb5`, Python Security run `36800615364`, Security Scan run `36800615435`, SAST run `36800615456`, and runtime-quality run `36800615444` | Preserve stacked #2545's Noema document-reader transitive repair, add a direct `litellm==1.94.3` source floor, regenerate the complete hash lock, bind source and lock with a RED-to-GREEN regression, and require authenticated CodeQL verdict evidence plus independent approval | **Proposed / dependency, security, SAST, and runtime-quality Checks GREEN; CodeQL run `36800615319` fail-closed pending authenticated verdicts; independent approval required** |
+
+## 2026-10-01 trusted review archive transient transport
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| Required Noema resolved the correct immutable trusted source but a single GitHub archive API HTTP 502 exhausted materialization before model setup | `.github` run `36760921156`, job `110043067331`; protected source `37b10243cec3d160ecc9c1be75c71428b160a703`; combined successor predecessor `.github#2530@5b3a76ea71d7ae2fa9b1719f4f82df8d52e98082` | At the central `.github` owner, add bounded native transport retries to Noema, OpenCode, and merge-scheduler trusted archive downloads; prove the actual commands against a deterministic 502→200 server without changing exact-SHA, credential, extraction, or fail-closed contracts | **Proposed / local RED→GREEN complete; exact-head hosted Checks and independent approval required** |
+
+## 2026-10-01 PyJWT recursion denial-of-service closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| The shared Strix source and hash lock retained PyJWT 2.14.0 after GHSA-42vr-xj54-vc7v / CVE-2026-101918 disclosed an unauthenticated recursion DoS | Security Scan run `36741151937`; dependency-review job `109975641239`; OSV job `109975641271`; dependent `.github#2540@612d8e77cf13eba84782a22587a72d3ffb4b6c6e`; canonical owner PR #2531 predecessor `dde3ea7876ceb1569db717975cc74f44cc8d18f9` | In canonical owner PR #2531, advance source and lock to 2.15.0 without unrelated package movement, preserve exact source/lock parity, and merge-forward dependent branches only after owner acceptance | **Proposed / exact-head Checks and independent approval required** |
+
+## 2026-10-01 shared urllib3 security closure
+
+| Gap | Exact evidence | Action | Status |
+|---|---|---|---|
+| pip-audit and Strix locks retained urllib3 2.7.0 after CVE-2026-97687 and CVE-2026-97689 were published | Python Security run `36733279716`, job `109949358063`; exact predecessor `d1aa3659fca527a6c7330151f3ab4df3d7578391` | In canonical owner PR #2531, pin urllib3 2.8.0 in both source inputs, regenerate both hash locks without unrelated version movement, and bind all four files with one contract | **Proposed / exact-head Checks and independent approval required** |
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-09-30 central coverage owner stack delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-CENTRAL-COVERAGE-OWNER-01 | **Proposed — complete local integration GREEN; hosted exact-head acceptance pending** | Current coverage owner `.github#2521@61fb469a…`, parser/security/response integration successor `.github#2530@2510618f…`, GitHub API response-lifecycle owner `.github#2532@9d3ec75d…`를 ordinary two-parent merge로 보존했다. 첫 integrated warning-fatal run은 `5196 passed, 6 skipped` 뒤 queue/Strix/release prescreen/release dependency의 실제 미실행 분기 90개와 partial branch 29개를 드러냈다. Dummy/live-CLI tests를 bounded behavior contracts로 교체하고, exact Git blob·Cargo development lock·runtime receipt·final fanout cap·Python 3.10 TOML fallback을 검증했으며, 앞선 필수조건 때문에 도달 불가능했던 prescreener postcondition만 제거했다. 두 live head를 재수집·일반 병합한 combined successor는 `5291 passed, 5 skipped, 40 subtests passed`, owned production `18729/18729` statements 및 `7642/7642` branches, Docstring 100%, warning 0이다. | Canonical owner는 중앙 `ContextualWisdomLab/.github`이며 source delta는 ordinary merge ancestry로만 통합한다. #2530과 #2521의 live head 이동을 재수집해 force 없이 merge했고 새 integrated tree 전체를 재검증했다. 게시된 #2530 exact head의 hosted security/quality Checks 및 qualifying independent approval을 새로 확인한다. queued/skipped/pending을 성공으로 간주하지 않고 #2521/#2530/#2532를 단순 Close하지 않는다. [RCA와 검증 근거](doctoring/central-coverage-owner-stack-2521.md). |
+
+### 2026-09-30 full-suite parser-lock incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-QUALITY-FULL-SUITE-PARSER-LOCK-01 | **Proposed — `.github#2530` combined successor preserves live parser, security, response-lifecycle, and coverage heads; hosted acceptance pending** | Protected `main@37b10243…`의 common quality lock만 설치하는 전체 suite가 `defusedxml`을 찾지 못해 collection error 13건으로 중단됐고, 같은 suite의 신규 workflow 계약은 `yaml`을 import한다. Concurrent-head 재검증 뒤 live #2530 `2510618f…`와 live #2521 `61fb469a…`를 Force Push·rebase 없이 ordinary merge했다. 이 ancestry는 security prerequisite #2531 `d1aa3659…`, response-lifecycle prerequisite #2532 `9d3ec75d…`, parser lock, coverage 수리를 함께 보존한다. 잠금을 직접 설치하는 모든 workflow는 생성 lock, 두 source input, compiler 변경을 추적하며 선택형 runtime quality도 실제 consumer suite를 실행한다. Review-repair owner는 launcher runtime 두 suite를 직접 실행·계측한다. Combined local evidence는 Python 3.14 warnings-fatal 5,291 passed, 5 skipped, 40 subtests, production 18,729/18,729 statements·7,642/7,642 branches, Docstring 100%다. 이 행은 live Project #1 상태나 merge authorization을 주장하지 않는다. | Canonical owner는 중앙 `.github`의 source requirement, 생성 hash lock, compiler, 직접 소비 quality workflows다. 새 combined exact head의 hosted Checks, 미해결 thread 0, qualifying independent approval을 다시 수집해야 ordinary protected merge할 수 있다. #2531/#2532/#2521은 protected successor merge와 complete carryover를 확인하기 전 닫지 않는다. |
+| CONTROL-REPOSITORY-BRANCH-COVERAGE-01 | **Proposed — `.github#2521`의 전체 유효 delta를 `.github#2530` combined successor가 ordinary merge로 승계; exact-head hosted acceptance pending** | `.github#2521`는 production exclusion을 제거해 전역 100% 주장을 정직하게 RED로 되돌렸다. 네 잔여 소유자인 `opencode_queue_priority`, `strix_unverified_dependency`, `prescreen_release_runtime_archives`, `release_dependency_gate`의 실제 분기를 test-first로 모두 실행했고, launcher production omission도 제거했다. `.github#2530`의 parser lock 없이는 전체 suite collection이 실패하고, parser-lock PR은 이 coverage gap 때문에 전역 gate가 실패하는 순환 선행조건이었다. predecessor의 current head `61fb469a…`까지 successor ancestry에 보존하며 predecessor는 successor의 보호 병합과 tree 동등성을 확인하기 전 닫지 않는다. | Canonical owner는 중앙 `.github`의 production CI modules와 complete repository gate다. coverage 제외·pragma·threshold 하향·샘플 축소는 허용하지 않는다. refreshed combined successor의 complete warnings-fatal suite, 100% statement/branch report, hosted Checks, independent approval, ordinary protected merge를 새 exact head에서 완료해야 한다. |
+
+### 2026-09-30 공유 보안 기준 exact-head delta
+
+이 delta는 아래 2026-08-26 인벤토리를 덮어쓰지 않는다. 2026-09-30 재수집한
+보호 `main`은 `37b10243cec3d160ecc9c1be75c71428b160a703`이고, live API의 첫
+페이지에는 열린 PR 50개가 있었다. 페이지 전체를 조직의 총 PR 수로 추론하지 않는다.
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SHARED-SECURITY-LOCK-01 | **Source repair in progress — release HOLD** | `.github#1026@6f645a73502e159d5a229805afa34868ad9bb851`의 Security Scan run `36495499815`는 공통 Rust fixture의 PyO3 `0.22.6`에서 GHSA-36hh-v3qg-5jq4와 GHSA-chgr-c6px-7xpp를 검출했고, Python Security run `36495499871`은 공통 Strix hash lock의 PyJWT `2.13.0`에서 CVE-2026-102274를 검출했다. 두 파일은 #1026 변경 범위 밖이며 보호 `main`에도 동일하게 남아 있었다. RED commit `cd84d887`는 PyO3 `0.29.2`와 PyJWT `2.14.0` source/lock parity를 요구한다. | 중앙 `.github`가 공통 fixture와 Strix lock을 소유한다. [RCA와 검증 계약](doctoring/shared-security-baseline-pyjwt-pyo3-20260930.md)에 따라 owner PR의 exact-head Checks와 독립 승인, ordinary protected merge, immutable consumer source pin 갱신, 그리고 #1026의 비강제 main merge-forward가 순서대로 필요하다. 어떤 실패도 #1026 전용 패치나 bypass로 처리하지 않는다. |
+
+### 2026-09-30 GitHub API response lifecycle incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-GITHUB-API-HTTP-ERROR-CLOSE-01 | **Proposed — protected-main RED reproduced; source repair under hosted exact-head verification** | 보호된 `.github/main@37b10243cec3d160ecc9c1be75c71428b160a703`의 Python 3.14.7 `tests/test_github_api_url_boundary.py -W error`가 실제 CodeQL/Strix opener의 synthetic 302 여덟 경우에서 `ResourceWarning: Implicitly cleaning up <HTTPError 302>`로 `8 failed, 26 passed`였다. 첫 repair의 warning-fatal full suite가 동일 defect를 Noema/Pingora/preflight/Pages/sandbox readiness에서 추가로 드러냈다. | Canonical owner는 중앙 `.github`이다. 각 caller가 기존 bounded status/telemetry와 fail-closed mapping을 보존한 뒤 file-like error response를 명시적으로 닫는다. `5161 passed, 10 skipped, 40 subtests passed`로 complete warning-fatal local tree가 GREEN이다. [RCA와 acceptance](doctoring/github-api-http-error-response-lifecycle.md)를 따라 exact-head hosted security, independent review, ordinary protected merge를 완료한 뒤 `.github#2040`과 review-transport stack이 새 protected head를 정상 병합해 downstream 증거를 재생성해야 한다. |
+
+### 2026-10-03 Dependency Review transport-completion delta
+
+| Gap ID / 상태 | PRD / TRD / Context Map / evidence / next gate |
+|---|---|
+| `CONTROL-DEPENDENCY-REVIEW-TRANSPORT-EXIT-01` — **Complete owner carryover integrated into `.github#2565`; Proposed/HOLD pending exact-head hosted evidence and independent approval** | **PRD:** 구매자는 불완전한 dependency comparison이 보안 gate를 통과하지 않음을 보장받아야 한다. **TRD/RCA:** reusable preflight가 curl의 nonzero 종료를 `|| true`로 숨기고 출력된 HTTP `200`만 검사해 partial transfer에도 `available=true`를 발행할 수 있었다. **Context Map:** 중앙 `.github` Dependency Review admission owner가 thin callers 앞에서 exact base/head와 authenticated transport completion을 소유하며, bundled Security Scan은 같은 identity/transport invariant를 적용한다. **실행 흐름:** `exact identity validation → authenticated curl → curl exit == 0 AND HTTP 200 → available=true → pinned Dependency Review`; DB/UI/ERD 변화는 N/A다. **RED→GREEN:** #1725 RED `fe9d1933…`의 fake curl `HTTP 200 + exit 18` 회귀는 defect head에서 실패했다. #2565 published ordinary two-parent merge `650bc6e35409d52d24fec890c2ab74063794e9b8` (tree `9522f0b9c96247b3412e147bc6f89fd2595c0776`)가 #1725 exact `229027280e8bce6cc4f13e722b2b0c280a1ac17d`의 source/tests/ADR/doctoring/CHANGELOG/Gap delta를 runner-group stack에 보존했고, 결합 focused suite는 일반 및 `GITHUB_ACTIONS=true`에서 각각 53/53, warning-fatal 전체 suite는 5,437 passed, 10 skipped, 40 subtests다. Review에서 발견된 ADR-0025/0032 충돌은 security decision을 ADR-0034로, owned CodeQL decision을 ADR-0033으로 이동하고 numeric identity uniqueness 계약을 추가해 제거했다. **다음 gate:** fresh exact-head hosted security/review Checks, unresolved thread 0, qualifying independent approval, runner-group/capacity/cleanup canary, ordinary protected merge가 필요하다. |
 
 ### 2026-09-19 exact-head incident delta
 

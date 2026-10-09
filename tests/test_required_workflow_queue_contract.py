@@ -1862,6 +1862,24 @@ def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
     assert "wait-for-processing: false" in upload_step
 
 
+def test_osv_debug_artifact_quota_does_not_fail_the_scanner_gate() -> None:
+    """Keep optional debug evidence from overriding a completed OSV gate."""
+    workflow = workflow_text("security-scan.yml")
+    upload_step = workflow_step(workflow, "Upload OSV debug artifacts")
+
+    assert "actions/upload-artifact" in upload_step
+    assert "continue-on-error: true" in upload_step
+
+
+def test_trivy_scan_does_not_restore_runner_specific_binary_cache() -> None:
+    """Install the pinned Trivy binary on each heterogeneous runner."""
+    workflow = workflow_text("security-scan.yml")
+    scan_step = workflow_step(workflow, "Trivy filesystem scan")
+
+    assert "aquasecurity/trivy-action" in scan_step
+    assert "cache: false" in scan_step
+
+
 def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
     """Scanner hard gates must run even when GitHub code-scanning upload is busy."""
     cases = (

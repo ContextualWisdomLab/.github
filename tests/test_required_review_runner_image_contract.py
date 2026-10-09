@@ -17,14 +17,10 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
     """Keep required review jobs off the observed starved floating image."""
 
     def assert_explicit_supported_image(self, path: Path) -> None:
-        """Require every job runner declaration to pin Ubuntu 24.04."""
-        runs_on = {
-            line.strip()
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip().startswith("runs-on:")
-        }
-        self.assertTrue(runs_on)
-        self.assertEqual(runs_on, {"runs-on: ubuntu-24.04"})
+        """Require every ordinary job to use isolated self-hosted Linux runners."""
+        workflow = path.read_text(encoding="utf-8")
+        self.assertIn("group: CWL CI isolated", workflow)
+        self.assertIn("labels: [self-hosted, linux, x64, cwlab-ci-isolated]", workflow)
 
     def test_strix_uses_explicit_supported_image(self) -> None:
         """Route trusted metadata to control while preserving the scan image."""
@@ -36,25 +32,26 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
             self.assertIn("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main'", block)
             self.assertIn("github.repository == 'ContextualWisdomLab/.github'", block)
             self.assertIn("github.repository == 'ContextualWisdomLab/fast-mlsirm'", block)
-            self.assertIn("fromJSON('[\"ubuntu-24.04\"]')", block)
+            self.assertIn('fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')', block)
             self.assertNotIn("actions/checkout", block)
         scan = workflow.split("\n  strix:\n", 1)[1].split("\n  publish-manual-pr-evidence-status:\n", 1)[0]
-        self.assertIn("runs-on: ubuntu-24.04", scan)
+        self.assertIn("group: CWL CI isolated", scan)
+        self.assertIn("labels: [self-hosted, linux, x64, cwlab-ci-isolated]", scan)
         self.assertNotIn("cwlab-control", scan)
 
     def test_opencode_review_uses_explicit_supported_image(self) -> None:
         """Keep metadata-only OpenCode admission on the trusted control pool."""
-        workflow = OPENCODE_REVIEW.read_text(encoding="utf-8")
+        workflow = "\n".join(line for line in OPENCODE_REVIEW.read_text(encoding="utf-8").splitlines() if not line.strip().startswith("labels:"))
         self.assertEqual(workflow.count('"group":"CWL central control"'), 6)
         self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 6)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("actions/checkout", workflow)
         self.assertEqual(workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main'"), 6)
-        self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 6)
+        self.assertEqual(workflow.count('fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')'), 6)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Keep trusted metadata jobs separate from the model review pool."""
-        workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
+        workflow = "\n".join(line for line in NOEMA_REVIEW.read_text(encoding="utf-8").splitlines() if not line.strip().startswith("labels:"))
         self.assertEqual(workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main'"), 5)
         self.assertNotIn("endsWith(github.workflow_ref", workflow)
         self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 1)
@@ -62,7 +59,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         for repository in ("cwl-telemetry", "naruon", "fast-mlsirm", "late-life-anxiety-reanalysis"):
             self.assertEqual(workflow.count(f"github.repository == 'ContextualWisdomLab/{repository}'"), 5)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
-        self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
+        self.assertEqual(workflow.count('fromJSON(\'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\')'), 5)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
         self.assertEqual(workflow.count('"cwlab-control"'), 4)
         for name in ("admit-current-head", "changed-scope", "cancel-closed-pr-runs", "continue-noema-transport"):
@@ -97,8 +94,8 @@ if __name__ == "__main__":
 
 def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_hosted() -> None:
     """Separate short metadata work from model work without granting PR runner access."""
-    workflow = Path(".github/workflows/codeql-pr.yml").read_text()
+    workflow = "\n".join(line for line in Path(".github/workflows/codeql-pr.yml").read_text().splitlines() if not line.strip().startswith("labels:"))
     assert workflow.count('"group":"CWL central control"') == 3
     assert workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'") == 3
-    assert workflow.count("|| '\"ubuntu-24.04\"'") == 3
+    assert workflow.count("|| '{\"group\":\"CWL CI isolated\",\"labels\":[\"self-hosted\",\"linux\",\"x64\",\"cwlab-ci-isolated\"]}'") == 3
     assert '"group":"CWL MCP remediation"' not in workflow
