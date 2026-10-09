@@ -865,6 +865,14 @@ jobs:
           python-version: "3.12"
           update-environment: false
 
+      - name: Prepare contextual-orchestrator closure without provider credentials
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --prepare
+
       - name: Provision contextual-orchestrator Strix sidecar
         id: strix_sidecar
         if: steps.gate.outputs.enabled == 'true'

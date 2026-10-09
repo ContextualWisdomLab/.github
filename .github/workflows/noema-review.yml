@@ -853,6 +853,14 @@ jobs:
           python-version: "3.12"
           update-environment: false
 
+      - name: Prepare contextual-orchestrator closure without provider credentials
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
+        env:
+          SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --prepare
+
       - name: Provision contextual-orchestrator review sidecar
         id: noema_sidecar
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'

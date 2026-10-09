@@ -513,6 +513,11 @@ jobs:
           test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
           printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
 
+      - name: Prepare contextual-orchestrator closure without provider credentials
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          bash trusted-gate/scripts/ci/contextual_orchestrator_review_sidecar.sh --prepare
+
       - name: Require every Strix provider credential before the Strix stage starts
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}

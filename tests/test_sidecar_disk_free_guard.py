@@ -26,17 +26,23 @@ def _run(tmp_path: Path, available_kib: int) -> subprocess.CompletedProcess[str]
         encoding="utf-8",
     )
     (fake_bin / "chmod").chmod(0o755)
+    # The assertions stop at the vendoring boundary; keep the test offline and
+    # deterministic after that point.
+    (fake_bin / "git").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (fake_bin / "git").chmod(0o755)
     env = {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path / "runner-temp"),
         "GITHUB_WORKSPACE": str(tmp_path / "workspace"),
-        "BYTEZ_API_KEY": "placeholder",
-        "ORCHESTRATOR_TOKEN": "placeholder-token",
-        "ORCHESTRATOR_GIT_URL": str(tmp_path / "no-such-repo"),
     }
     (tmp_path / "runner-temp").mkdir()
     return subprocess.run(
-        ["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=False, timeout=60
+        ["bash", str(SCRIPT), "--prepare"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
     )
 
 

@@ -50,6 +50,28 @@ def test_unreleased_external_mode_fails_before_provider_secret_bootstrap(tmp_pat
     assert not output_file.exists()
 
 
+def test_external_mode_rejects_sidecar_prepare_phase(tmp_path):
+    """Do not confuse token-only admission with local sidecar preparation."""
+    output_file = tmp_path / "github-env"
+    command_result = subprocess.run(
+        ["bash", "scripts/ci/contextual_orchestrator_review_sidecar.sh", "--prepare"],
+        env={
+            "PATH": os.environ["PATH"],
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_ENV": str(output_file),
+            "CONTEXTUAL_ORCHESTRATOR_GATEWAY_MODE": "external",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = command_result.stdout + command_result.stderr
+    assert command_result.returncode == 1
+    assert "external gateway mode does not support sidecar preparation" in output
+    assert "released_contract_unavailable" not in output
+    assert not output_file.exists()
+
+
 @pytest.mark.parametrize(
     "base_url",
     [

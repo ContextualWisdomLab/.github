@@ -1,6 +1,10 @@
 name: Orchestrator free sidecar
 description: Provision the immutable contextual-orchestrator orchestrator/free gateway for a model-backed workflow.
 inputs:
+  mode:
+    description: Run prepare in a separate uncredentialed action step, then launch with provider credentials.
+    required: false
+    default: "launch"
   gateway_mode:
     description: Bootstrap mode; external remains blocked until a released CO adapter is registered.
     required: false
@@ -45,6 +49,7 @@ runs:
     - name: Provision contextual-orchestrator orchestrator/free
       shell: bash --noprofile --norc -e -o pipefail {0}
       env:
+        SIDECAR_MODE: ${{ inputs.mode }}
         SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
         CONTEXTUAL_ORCHESTRATOR_GATEWAY_MODE: ${{ inputs.gateway_mode }}
         CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ inputs.gateway_base_url }}
@@ -61,4 +66,8 @@ runs:
           echo "::error::Immutable central contextual-orchestrator sidecar source is missing or symlinked."
           exit 1
         fi
-        bash "$sidecar"
+        case "$SIDECAR_MODE" in
+          prepare) bash "$sidecar" --prepare ;;
+          launch) bash "$sidecar" ;;
+          *) echo "::error::Unsupported sidecar mode."; exit 1 ;;
+        esac

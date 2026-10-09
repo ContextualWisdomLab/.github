@@ -309,7 +309,7 @@ install_gated() {
 		exit 2
 	fi
 	"${PIP[@]}" "${PIP_TARGET_ARGS[@]}" install \
-		--require-hashes --only-binary=:all: --no-index \
+		--require-hashes --only-binary=:all: --no-index --no-deps \
 		--find-links "$DOWNLOAD_ROOT" \
 		-r "$bound_requirements"
 }
