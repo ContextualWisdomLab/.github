@@ -396,9 +396,11 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
+    # Pull-request merge-tree tests run only on the clean-per-job isolated pool.
+    # Keep metadata and review publication on their separate trusted jobs.
     runs-on:
-      group: CWL central OpenCode
-      labels: [self-hosted, linux, x64]
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,

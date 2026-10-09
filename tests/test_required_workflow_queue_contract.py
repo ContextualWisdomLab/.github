@@ -25,7 +25,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 2),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
