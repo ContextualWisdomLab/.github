@@ -125,6 +125,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         ".github": ("org-profile", "ci-cd"),
         "BizPlanningWizard": ("business-planning", "productivity"),
         "litellm": ("llm-gateway", "openai-compatible"),
+        "hyosung-itx-slogan-brief": ("slogan", "marketing"),
         "opencode": ("coding-agent", "developer-tools"),
         "orca": ("ai-orchestration", "git-worktrees"),
     }
