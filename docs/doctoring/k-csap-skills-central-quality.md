@@ -8,11 +8,11 @@
 
 독립 재리뷰는 동일 workflow/test 해시에서 `PASS_WITH_ACTIVATION_LIMITATIONS`를 반환했다. 부모가 report SHA-256 `923b518cf61b072d3fb8ca7e03e5a1825faaca3c248942dd3048d2fbc2a2a378` 및 두 파일 해시를 직접 대조했다. 리뷰의 focused pytest 21개, custom-label actionlint exit 0, 별도 harmless cleanup probe 11/11은 로컬 계약 증거다. 초기 FAIL report는 역사 기록으로 보존한다. setup-uv 도구 상태는 private cleanup 범위 밖이며 외부 action 내부 cleanup, immutable download 무결성, 실제 원격 실행/App 승인은 미검증이다.
 
-현재 수리본은 job-level `if`를 runner 배정 전 gate로 추가하고, repo-scoped `k-csap-isolated` label을 사용한다. 기존 step admission은 checkout 전 방어층으로 유지했다. exact head, protected master ref, 일회용 source path, Python 3.11.14 및 uv/private venv/cache를 좁은 테스트로 검증했다. 초안 FAIL을 역사 기록으로 유지하며 수리본의 독립 재리뷰는 로컬 소스 한정 조건부 통과다. 수리 과정의 위임 writer 2회는 provider transport 실패로 결과 없이 종료했으며 부모가 테스트 RED를 확인하고 직접 수리했다. 수정본 로컬 `pytest` 21개 통과, scratch custom-label actionlint와 `git diff --check` exit 0; workflow SHA-256 `9c4cc914b57f919da06f434527670d34597ac4a8c1fc4c24008ce36440fdc5c9`, test SHA-256 `f053b9e139ddf3c2e566ce7966df1988af2a467d9627813404a2ee119da03f05`. 이는 실 runner에서의 실행/격리를 입증하지 않는다.
+현재 수리본은 job-level `if`를 runner 배정 전 gate로 추가하고, repo-scoped `k-csap-isolated` label을 사용한다. 기존 step admission은 checkout 전 방어층으로 유지했다. exact head, protected master ref, 일회용 source path, Python 3.11.14 및 uv/private venv/cache를 좁은 테스트로 검증했다. 초안 FAIL을 역사 기록으로 유지하며 수리본의 독립 재리뷰는 로컬 소스 한정 조건부 통과다. 수리 과정의 위임 writer 2회는 provider transport 실패로 결과 없이 종료했으며 부모가 테스트 RED를 확인하고 직접 수리했다. 수정본 로컬 `pytest` 21개 통과, scratch custom-label actionlint와 `git diff --check` exit 0; workflow SHA-256 `9c4cc914b57f919da06f434527670d34597ac4a8c1fc4c24008ce36440fdc5c9`, 최종 test SHA-256 `64ae572dfee0063e85ec4850969c02018105aceeb237d20abb1dedc7fe68d2c9`, 최종 staged patch SHA-256 `03a8a6260ae18aa887aab3151dcf8848c0fbe2f3c28cd47b6808699bf579968e`다. 이는 실 runner에서의 실행/격리를 입증하지 않는다.
 
 ## 리뷰 사실관계 구분
 
-리뷰는 “checkout도 admission 전에 실행된다”고 기록했으나 frozen YAML은 첫 step admission, 다음 step checkout 순서다. 이 서술은 현재 파일로 지지되지 않는다. 반면 job runner 배정은 첫 step보다 앞서므로 **step admission만으로 배정 이전 신뢰 경계가 생기지 않는다는 지적은 유효하다.** 원본 FAIL을 삭제하거나 PASS로 덮어쓰지 않는다. 다음 리뷰에서 이 두 결론을 구분한다.
+리뷰는 “checkout도 admission 전에 실행된다”고 기록했으나 frozen YAML은 첫 step admission, 다음 step checkout 순서다. 이 서술은 현재 파일로 지지되지 않는다. 반면 job runner 배정은 첫 step보다 앞서므로 **step admission만으로 배정 이전 신뢰 경계가 생기지 않는다는 지적은 유효하다.** 원본 FAIL을 삭제하거나 PASS로 덮어쓰지 않는다. 완료한 재리뷰 `923b518c…`에서 이 두 결론을 구분했다.
 
 PR exact head 검증은 기존 PR #30의 exact-head 증거 계약을 이어받은 의도다. GitHub merge candidate를 검증했다는 주장은 하지 않는다. push/manual 호출은 protected master로 제한하는 수리 계약이다.
 
@@ -33,12 +33,13 @@ PR exact head 검증은 기존 PR #30의 exact-head 증거 계약을 이어받�
 
 ## 재현 가능한 테스트 환경
 
-새 전용 테스트 lock `requirements-k-csap-quality-tests-hashes.txt`는 `requirements-k-csap-quality-tests.in`에서 uv 0.12.5의 실제 compile로 생성했다. 공유 manifest/lock은 수정하지 않았다. private scratch CPython 3.11.16 환경에서 hash-required binary-only sync로 pytest 9.1.1, PyYAML 6.0.3 및 4개 전이 의존성을 설치하고 21개 계약 테스트를 실행해 통과했다. YAML 텍스트에서 기대값을 합성하는 대안 parser는 폐기했으며 실제 PyYAML로 구조를 읽는다. `subprocess.run(check=False)`를 명시하여 실패 exit 검증을 유지했다. 이 테스트 파일 delta는 별도 재검토 대상이다. runtime workflow의 Python pin은 3.11.14로 유지되어, 이 실행은 workflow 원격 runtime 실행 증거가 아니다.
+새 전용 테스트 lock `requirements-k-csap-quality-tests-hashes.txt`는 `requirements-k-csap-quality-tests.in`에서 uv 0.12.5의 실제 compile로 생성했다. 공유 manifest/lock은 수정하지 않았다. private scratch CPython 3.11.16 환경에서 hash-required binary-only sync로 pytest 9.1.1, PyYAML 6.0.3 및 4개 전이 의존성을 설치하고 21개 계약 테스트를 실행해 통과했다. YAML 텍스트에서 기대값을 합성하는 대안 parser는 폐기했으며 실제 PyYAML로 구조를 읽는다. `subprocess.run(check=False)`를 명시하여 실패 exit 검증을 유지했다. 최종 delta 재리뷰 report SHA-256 `0d36a3d66c8d6ae435128cfaeda8d0926b3fa0721a50ddc3c7b489e4d157095d`가 이 테스트/lock/문서 범위를 조건부 통과로 바인딩했다. runtime workflow의 Python pin은 3.11.14로 유지되어, 이 실행은 workflow 원격 runtime 실행 증거가 아니다.
 
 ## 다음 gate
 
-1. 수리 writer의 실제 테스트 결과, 파일 해시, 수정 중단을 확인한다.
-2. 최종 해시에서 독립 재리뷰를 수행한다.
-3. 중앙 callee를 출판하고 immutable commit을 확보한다. 소비자 caller에 가짜 SHA나 mutable branch를 넣지 않는다.
+1. 로컬 소스와 최종 delta 독립 검토 완료. 운영 제한은 미수락이다.
+2. 중앙 Draft PR #2615를 출판했다. 초도 head는 `9996a21600b3751491842de20ca4c87e1cc257a8`이며 아직 병합하지 않았다.
+3. 실제 required checks와 formal App 검토를 확인하고 제한을 해결한 뒤 일반 병합으로 callee를 보호 브랜치에 출판한다. 소비자 caller에 가짜 SHA나 mutable branch를 넣지 않는다.
 4. caller·runner ACL·capacity를 승인된 경계에서 연결하고 run ID와 job.runner_name을 검증한다.
 5. 실제 Noema/OpenCode auto inference 및 조건부 App 승인을 별도 확인한다. 단독 개발자에게 가상의 다른 인간 리뷰어를 요구하지 않는다.
+6. 현재 head에서 확인한 두 실패는 별개다. CodeQL `Analyze (javascript-typescript)`는 billing account lock 때문에 시작하지 않았다. Noema는 Draft라 model inference를 skip한 뒤 Artifact storage quota로 upload에 실패했다. GraphQL annotations로 원인을 확인했으며 REST log 조회 quota 403은 별도 조회 실패다. `coverage-evidence`/`coverage-source-tree` SUCCESS와 `opencode-review` SKIPPED는 실 모델 승인 증거가 아니다. 필요한 check 실패 및 운영 제한 해결 전 Draft를 유지한다.
