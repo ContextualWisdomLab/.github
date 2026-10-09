@@ -1367,6 +1367,29 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    (
+        ("docstring coverage: 100%", ""),
+        (
+            "coverage: first performance: slow coverage: final "
+            "docstring coverage: 100%",
+            " final ",
+        ),
+        (
+            "coverage: retained docstring coverage: 100% "
+            "docstring coverage: 99%",
+            " retained ",
+        ),
+    ),
+)
+def test_label_section_selects_last_real_coverage_label(
+    text: str, expected: str
+) -> None:
+    """Ignore embedded docstring labels while selecting the last coverage section."""
+    assert norm.label_section(text, "coverage:") == expected
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
