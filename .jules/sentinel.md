@@ -51,7 +51,3 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
-## 2026-10-08 - Bound Dynamic URL Inputs
-**Vulnerability:** Dynamic URL input can create SSRF, redirect, or local-resource access when its scheme, authority, or path is not bounded.
-**Learning:** `build_opener().open()` may satisfy a scanner rule, but the default opener still permits redirects and multiple URL schemes; it is not an SSRF boundary. The Maturin verifier is safe because `verify_assets` admits five literal filenames before `_download` combines one with a fixed HTTPS origin and tag.
-**Prevention:** Validate every dynamic scheme, host, and path or filename against explicit allowlists before either `urlopen()` or `build_opener().open()`. Treat opener substitution as scanner compatibility only, never as input validation.

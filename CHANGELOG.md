@@ -1,11 +1,3 @@
-### Maturin download evidence distinguishes scanner compatibility from SSRF controls
-
-- Correct the security guidance: `build_opener().open()` does not restrict URL
-  schemes, authorities, paths, or redirects. The existing release verifier's
-  security boundary is its five-name admission contract plus fixed GitHub HTTPS
-  origin and immutable release tag; the opener substitution is only scanner
-  compatibility. No network boundary or accepted asset set is widened.
-
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
