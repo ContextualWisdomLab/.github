@@ -40,6 +40,7 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG_HINT: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
@@ -85,14 +86,15 @@ jobs:
           else
             # gh release list is scoped to this repository and avoids a broad
             # REST pagination loop for every org repo.
-            while IFS= read -r tag; do
-              [ -n "$tag" ] || continue
-              candidate_tags+=("$tag")
-            done < <(
+            release_tags="$(
               gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
                 --json tagName \
                 --jq '.[].tagName'
-            )
+            )"
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              candidate_tags+=("$tag")
+            done <<< "$release_tags"
           fi
 
           : > gap_tags.txt

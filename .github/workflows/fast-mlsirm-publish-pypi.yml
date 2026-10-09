@@ -382,6 +382,16 @@ jobs:
           name: repro-digest-sdist
           path: repro-digest
 
+  publication-disabled:
+    name: wheel legs are disabled; this release was not published
+    needs: [sdist]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64]
+    timeout-minutes: 1
+    steps:
+      - run: exit 1
+
   wheels:
     # Disabled until self-hosted macOS, Windows and ARM release legs are available.
     # Keep the full release matrix contract; downstream publication remains skipped.
@@ -1081,7 +1091,12 @@ jobs:
       distribution_set_artifact_digest: ${{ needs.reproducibility-record.outputs.distribution_set_artifact_digest }}
       wheel_filename: ${{ needs.reproducibility-record.outputs.selected_wheel_filename }}
       sdist_filename: ${{ needs.reproducibility-record.outputs.selected_sdist_filename }}
-    secrets: inherit
+    secrets:
+      BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
   # R5b/R5c: nothing is tagged, released or published until the exact thirteen
   # files match both the reproducibility record and a successful same-run
