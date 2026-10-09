@@ -1375,6 +1375,10 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
+    assert (
+        norm.label_section("coverage: first docstring coverage: second", "coverage:")
+        == " first "
+    )
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
@@ -2878,3 +2882,18 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     """Malformed, unsafe, or unverifiable model evidence remains unchanged."""
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
+
+def test_label_section_ignores_partial_token_boundaries() -> None:
+    """It explicitly ignores partial tokens like `undercoverage:`."""
+    from scripts.ci.opencode_review_normalize_output import label_section
+
+    # This would falsely match and return " bad match" if not boundary checked
+    text = "coverage: good match\nundercoverage: bad match"
+    assert label_section(text, "coverage:") == " good match\nundercoverage: bad match"
+
+def test_label_section_ignores_non_alphanumeric_prefixes() -> None:
+    """It strictly catches prefixes like `_coverage:` or `-coverage:`."""
+    from scripts.ci.opencode_review_normalize_output import label_section
+
+    text = "coverage: good match\n_coverage: bad match"
+    assert label_section(text, "coverage:") == " good match\n_coverage: bad match"
