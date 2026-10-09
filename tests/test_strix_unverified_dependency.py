@@ -98,3 +98,30 @@ def test_cli_exit_status_and_message(tmp_path: Path) -> None:
     assert "lodash" in result.stderr and "unverified" in result.stderr
     (repo / "yarn.lock").write_text('lodash@^4.17.20:\n  version "4.17.20"\n')
     assert subprocess.run([sys.executable, str(HELPER), str(report), str(repo)], check=False).returncode == 1
+
+
+def test_manifest_enumeration_and_cli_in_process(tmp_path, monkeypatch, capsys):
+    """Excluded, oversized, linked, and nonmanifest files cannot supply dependency evidence."""
+    import runpy
+    import pytest
+    from scripts.ci import strix_unverified_dependency as classifier
+    repo = _rust_python_repo(tmp_path / "repo")
+    (repo / "requirements-extra.in").write_text("requests\n")
+    (repo / "notes.txt").write_text("lodash\n")
+    skipped = repo / "node_modules"
+    skipped.mkdir()
+    (skipped / "package.json").write_text('{"dependencies":{"lodash":"4"}}')
+    (repo / "requirements-linked.txt").symlink_to(repo / "notes.txt")
+    (repo / "requirements-large.txt").write_text("lodash" * 10)
+    monkeypatch.setattr(classifier, "MAX_MANIFEST_BYTES", 45)
+    report = tmp_path / "report.md"
+    report.write_text("**Package:** lodash\n")
+    assert classifier.main(["classifier"]) == 2
+    assert classifier.main(["classifier", str(report), str(repo)]) == 0
+    assert "unverified" in capsys.readouterr().err
+    (repo / "requirements-extra.in").write_text("lodash\n")
+    assert classifier.main(["classifier", str(report), str(repo)]) == 1
+    monkeypatch.setattr(sys, "argv", ["classifier", str(report), str(repo)])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(str(HELPER), run_name="__main__")
+    assert result.value.code == 1
