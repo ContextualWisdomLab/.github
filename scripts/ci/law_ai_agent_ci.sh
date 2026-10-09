@@ -151,20 +151,48 @@ run_ci() {
   uv run --locked ruff check .
   uv run --locked ruff format --check .
   uv run --locked mypy
-  # Fixtures need committed SQL001/002 before alphabetical suite collection.
+  # Fixtures need the complete archived migration inventory before suite collection.
+  # Retain source evidence outside the checkout for the independent installed smoke.
   # Use the consumer's real test_only approval, not the broader development CLI path.
-  uv run --locked python - <<'PY'
+  uv run --locked python - "$scratch/source-migrations.json" <<'PY'
 """Commit the verified migrations to the fresh, approved test-only database."""
+from hashlib import sha256
+import json
 import os
+from pathlib import Path
+import re
 import sys
 from law_ai_agent.postgres import PostgresStore, connect
-assert sys.version_info[:2] == tuple(map(int, os.environ["LAW_CI_PYTHON_VERSION"].split(".")))
+if sys.version_info[:2] != tuple(map(int, os.environ["LAW_CI_PYTHON_VERSION"].split("."))):
+    raise SystemExit("law-ci: Python version mismatch")
+# This path belongs to git archive's exact source, not an installed import fallback.
+resources = Path("src/law_ai_agent/migrations")
+inventory = []
+versions = set()
+for resource in sorted(resources.iterdir(), key=lambda path: path.name):
+    match = re.fullmatch(r"([0-9]{3})_[a-z][a-z0-9]*(?:_[a-z0-9]+)*\.sql", resource.name)
+    if not match or not resource.is_file() or resource.is_symlink():
+        raise SystemExit("law-ci: source migration inventory invalid")
+    version = int(match[1])
+    script = resource.read_text()
+    if version == 0 or version in versions or not script.strip():
+        raise SystemExit("law-ci: source migration inventory invalid")
+    versions.add(version)
+    # Preserve PostgresStore.migrate's read_text()/script.encode() checksum semantics.
+    inventory.append({"name": resource.name, "version": version,
+                      "checksum": sha256(script.encode()).hexdigest()})
+if not inventory:
+    raise SystemExit("law-ci: source migration inventory invalid")
 with connect(os.environ["LAW_AGENT_TEST_DATABASE_URL"], test_only=True) as connection:
     PostgresStore(connection).migrate()
     connection.commit()
-    assert [r["version"] for r in connection.execute(
-        "SELECT version FROM law_agent.migration ORDER BY version"
-    )] == [1, 2]
+    actual = [{"version": row["version"], "checksum": row["checksum"]}
+              for row in connection.execute(
+                  "SELECT version, checksum FROM law_agent.migration ORDER BY version")]
+    expected = [{"version": row["version"], "checksum": row["checksum"]} for row in inventory]
+    if actual != expected:
+        raise SystemExit("law-ci: database migration inventory mismatch")
+Path(sys.argv[1]).write_text(json.dumps(inventory))
 PY
   uv run --locked pytest --cov --cov-fail-under=90 --cov-report=term-missing --junitxml="$scratch/junit.xml"
   bash "$SELF" verify-junit "$scratch/junit.xml"
@@ -177,15 +205,26 @@ PY
   uv venv --python "$LAW_CI_PYTHON_VERSION" "$scratch/installed"
   UV_NO_CACHE=0 uv pip install --offline --python "$scratch/installed/bin/python" "$scratch/out/"*.whl
   cd "$scratch/outside"
-  "$scratch/installed/bin/python" -I - <<'PY'
-"""Load both packaged migration resources outside the source checkout."""
+  "$scratch/installed/bin/python" -I - "$scratch/source-migrations.json" <<'PY'
+"""Verify packaged migration resources outside the source checkout."""
+from hashlib import sha256
 from importlib.resources import files
+import json
 from pathlib import Path
 import sys
 import law_ai_agent
-assert Path(law_ai_agent.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-for migration in ("001_initial.sql", "002_revision_membership.sql"):
-    assert files("law_ai_agent").joinpath("migrations", migration).read_text().strip()
+if not Path(law_ai_agent.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()):
+    raise SystemExit("law-ci: installed package prefix mismatch")
+expected = json.loads(Path(sys.argv[1]).read_text())
+resources = sorted(files("law_ai_agent").joinpath("migrations").iterdir(), key=lambda path: path.name)
+if not expected or [resource.name for resource in resources] != [row["name"] for row in expected]:
+    raise SystemExit("law-ci: installed migration inventory mismatch")
+for resource, row in zip(resources, expected):
+    if not resource.is_file():
+        raise SystemExit("law-ci: installed migration inventory mismatch")
+    script = resource.read_text()
+    if not script.strip() or sha256(script.encode()).hexdigest() != row["checksum"]:
+        raise SystemExit("law-ci: installed migration inventory mismatch")
 PY
   "$scratch/installed/bin/python" -I -m law_ai_agent --help > "$scratch/installed-help.log"
   printf '%s\n' 'law-ci: quality, zero-skip database and installed artifact gates passed'

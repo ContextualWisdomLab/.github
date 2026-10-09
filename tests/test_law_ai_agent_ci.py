@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import textwrap
 from pathlib import Path
 import subprocess
 import sys
@@ -133,6 +136,167 @@ def test_run_rejects_mismatched_checkout_before_creating_cluster(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def embedded_migration_block(installed=False):
+    """Extract the real heredoc, not a reimplementation of its acceptance logic."""
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY", HELPER.read_text(), re.S)
+    marker = 'outside the source checkout' if installed else 'fresh, approved test-only database'
+    return next(block for block in blocks if marker in block)
+
+
+def migration_fixture(tmp_path, count=5):
+    """Make archived SQL resources and independent product-semantics ledger rows."""
+    source = tmp_path / 'source'
+    package = source / 'src/law_ai_agent'
+    resources = package / 'migrations'
+    resources.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    for version in reversed(range(1, count + 1)):
+        name = {1: '001_initial.sql', 2: '002_revision_membership.sql'}.get(
+            version, f'{version:03}_step.sql')
+        # CRLF and non-ASCII catch raw-byte hashing in place of read_text().encode().
+        (resources / name).write_bytes(
+            f'-- 단계 {version}\r\nSELECT {version};\r\n'.encode())
+    rows = [{'version': int(path.name.split('_')[0]),
+             'checksum': hashlib.sha256(path.read_text().encode()).hexdigest()}
+            for path in sorted(resources.iterdir())]
+    manifest = tmp_path / 'source-migrations.json'
+    return source, resources, rows, manifest
+
+
+def run_migration_block(source, rows, manifest, *, optimized=False):
+    """Run production preflight with only its package/connection boundary synthetic."""
+    package = source / 'src/law_ai_agent'
+    trace = source / 'trace.json'
+    (package / 'postgres.py').write_text(textwrap.dedent('''\
+        import json
+        from pathlib import Path
+        class Connection:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def commit(self):
+                record('commit')
+            def execute(self, query):
+                record(query)
+                rows = json.loads(Path('rows.json').read_text())
+                if 'checksum' not in query:
+                    return [{'version': row['version']} for row in rows]
+                return rows
+        def record(event):
+            path = Path('trace.json')
+            events = json.loads(path.read_text()) if path.exists() else []
+            path.write_text(json.dumps(events + [event]))
+        def connect(url, *, test_only):
+            if test_only is not True:
+                raise ValueError('test_only boundary lost')
+            record('test_only')
+            return Connection()
+        class PostgresStore:
+            def __init__(self, connection):
+                self.connection = connection
+            def migrate(self):
+                record('migrate')
+        '''))
+    (source / 'rows.json').write_text(json.dumps(rows))
+    wrapper = ('import sys; sys.path.insert(0, "src"); ' +
+               f'exec(compile({embedded_migration_block()!r}, "<preflight>", "exec"))')
+    env = {**os.environ, 'LAW_CI_PYTHON_VERSION': f'{sys.version_info.major}.{sys.version_info.minor}',
+           'LAW_AGENT_TEST_DATABASE_URL': 'synthetic-only'}
+    command = [sys.executable, *(['-O'] if optimized else []), '-I', '-c', wrapper, str(manifest)]
+    result = subprocess.run(command, cwd=source, env=env, capture_output=True, text=True)
+    return result, trace
+
+
+@pytest.mark.parametrize('count', [2, 5])
+def test_preflight_accepts_complete_source_inventory(tmp_path, count):
+    """Accept evolving inventories and retain sorted source names/checksums."""
+    source, resources, rows, manifest = migration_fixture(tmp_path, count)
+    result, trace = run_migration_block(source, rows, manifest)
+    assert result.returncode == 0, result.stderr
+    assert manifest.is_file(), 'source migration manifest was not retained'
+    assert json.loads(manifest.read_text()) == [
+        {'name': path.name, **row} for path, row in zip(sorted(resources.iterdir()), rows)]
+    assert json.loads(trace.read_text())[:3] == ['test_only', 'migrate', 'commit']
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'extra', 'checksum'])
+@pytest.mark.parametrize('optimized', [False, True])
+def test_preflight_rejects_nonexact_database_inventory(tmp_path, mutation, optimized):
+    """Every database version and content digest must match, even under -O."""
+    source, _, rows, manifest = migration_fixture(tmp_path, 2)
+    if mutation == 'missing':
+        rows.pop()
+    elif mutation == 'extra':
+        rows.append({'version': 3, 'checksum': 'a' * 64})
+    else:
+        rows[0]['checksum'] = 'a' * 64
+    result, _ = run_migration_block(source, rows, manifest, optimized=optimized)
+    assert result.returncode != 0, 'nonexact database inventory accepted'
+    assert 'database migration inventory mismatch' in result.stderr
+
+
+def run_installed_block(tmp_path, count=5, mutation=None, optimized=False):
+    """Execute installed smoke with source manifest and separate installed resources."""
+    source, resources, rows, manifest = migration_fixture(tmp_path, count)
+    manifest.write_text(json.dumps([{'name': path.name, **row}
+                                    for path, row in zip(sorted(resources.iterdir()), rows)]))
+    site = tmp_path / 'installed' / 'lib' / 'site-packages'
+    package = site / 'law_ai_agent'
+    installed = package / 'migrations'
+    installed.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    for path in resources.iterdir():
+        (installed / path.name).write_bytes(path.read_bytes())
+    if mutation == 'missing':
+        (installed / '001_initial.sql').unlink()
+    elif mutation == 'extra':
+        (installed / '999_extra.sql').write_text('SELECT 999;')
+    elif mutation == 'checksum':
+        (installed / '001_initial.sql').write_text('SELECT -1;')
+    # -I excludes cwd, and this shim redirects imports only to an installed-like prefix.
+    wrapper = ('import sys; sys.prefix = ' + repr(str(site.parent.parent)) +
+               '; sys.path.insert(0, ' + repr(str(site)) + '); ' +
+               f'exec(compile({embedded_migration_block(installed=True)!r}, "<installed>", "exec"))')
+    return subprocess.run([sys.executable, *(['-O'] if optimized else []), '-I', '-c',
+                           wrapper, str(manifest)], cwd=tmp_path, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('count', [2, 5])
+def test_installed_smoke_matches_retained_source_manifest(tmp_path, count):
+    """Two and five independently installed resources match archived checksums."""
+    result = run_installed_block(tmp_path, count)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'extra', 'checksum'])
+@pytest.mark.parametrize('optimized', [False, True])
+def test_installed_smoke_rejects_divergence_from_source(tmp_path, mutation, optimized):
+    """The installed resource set cannot self-attest or bypass checks under -O."""
+    result = run_installed_block(tmp_path, mutation=mutation, optimized=optimized)
+    assert result.returncode != 0, 'nonexact installed inventory accepted'
+    assert 'installed migration inventory mismatch' in result.stderr
+
+
+@pytest.mark.parametrize('name', ['bad.sql', '001_a.txt', '000_zero.sql', '001_duplicate.sql'])
+def test_preflight_rejects_invalid_source_migration_names(tmp_path, name):
+    """Only uniquely numbered nonempty SQL migration resources are admissible."""
+    source, resources, rows, manifest = migration_fixture(tmp_path, 2)
+    (resources / name).write_text('SELECT 1;')
+    result, _ = run_migration_block(source, rows, manifest)
+    assert result.returncode != 0
+    assert 'source migration inventory invalid' in result.stderr
+
+
+def test_preflight_rejects_empty_source_migration(tmp_path):
+    """An empty SQL file cannot be certified by a ledger row."""
+    source, resources, rows, manifest = migration_fixture(tmp_path, 2)
+    (resources / '001_initial.sql').write_text('  \n')
+    result, _ = run_migration_block(source, rows, manifest)
+    assert result.returncode != 0
+    assert 'source migration inventory invalid' in result.stderr
+
+
 def test_run_preserves_native_db_quality_and_artifact_contracts():
     """Bind the real execution path to locked isolated tooling and mandatory gates."""
     text = HELPER.read_text()
@@ -142,7 +306,7 @@ def test_run_preserves_native_db_quality_and_artifact_contracts():
         'LAW_AGENT_TEST_DATABASE_URL=', 'uv sync --locked', 'ruff check .',
         'ruff format --check .', 'mypy', 'pytest --cov', '--cov-fail-under=90',
         '--junitxml=', 'uv build --out-dir', '--no-create-gitignore', 'uv pip install --offline',
-        '-I -', '001_initial.sql', '002_revision_membership.sql',
+        '-I -', 'source-migrations.json', 'SELECT version, checksum',
         'test_only=True', 'git -C', 'archive', 'BASH_SOURCE',
     ):
         assert contract in text
