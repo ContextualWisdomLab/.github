@@ -16,3 +16,13 @@ def test_fast_mlsirm_reusable_workflows_keep_isolated_runner_and_gate_contracts(
     assert 'test "${{ needs.python-matrix.result }}" = "success"' in ci
     assert "cargo test --locked --workspace" in ci
     assert "cargo test --locked --manifest-path crates/fast-mlsirm-py/Cargo.toml" in ci
+
+
+def test_noema_uses_litellm_auto_for_public_reviews_and_keeps_private_sidecar():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / ".github" / "workflows" / "noema-review.yml").read_text()
+    assert "https://litellm.poinnetworks.net/v1/chat/completions" in text
+    assert 'export NOEMA_LLM_MODEL="auto"' in text
+    assert "secrets.LLM_GATEWAY_API_KEY" in text
+    assert "Private targets retain the verified ZDR sidecar route." in text
+    assert "steps.llm_gateway.outputs.enabled != 'true'" in text
