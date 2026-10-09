@@ -62,10 +62,22 @@ PY
 
 # Remove only this lane's private scratch cluster; failed stop leaves evidence for retry.
 cleanup_root() {
-  local root="$1" pg_bin="$2"
+  local root="$1" pg_bin="$2" cluster="$1/data/private/postgres/cluster"
   validate_owned_root "$root" || return 1
-  if [[ -f "$root/data/private/postgres/cluster/postmaster.pid" ]]; then
-    "$pg_bin/pg_ctl" -D "$root/data/private/postgres/cluster" -m fast -w stop || return 1
+  if [[ -e "$cluster" && ! -d "$cluster" ]]; then
+    printf '%s\n' 'law-ci: PostgreSQL cluster path is not a directory; scratch retained' >&2
+    return 1
+  fi
+  if [[ -d "$cluster" ]]; then
+    if [[ ! -f "$cluster/postmaster.pid" ]]; then
+      printf '%s\n' 'law-ci: PostgreSQL cluster PID metadata is missing; shutdown is inconclusive; scratch retained' >&2
+      return 1
+    fi
+    "$pg_bin/pg_ctl" -D "$cluster" -m fast -w stop || return 1
+    if [[ -e "$cluster/postmaster.pid" ]]; then
+      printf '%s\n' 'law-ci: PostgreSQL stop returned success but PID metadata remains; scratch retained' >&2
+      return 1
+    fi
   fi
   rm -rf -- "$root"
 }

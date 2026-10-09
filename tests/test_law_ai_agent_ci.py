@@ -154,6 +154,33 @@ def test_cleanup_absent_cluster_is_idempotent(tmp_path):
     assert helper('cleanup', env={**os.environ, 'RUNNER_TEMP': str(tmp_path)}).returncode == 0
 
 
+def test_cleanup_preserves_cluster_when_pid_metadata_is_missing(tmp_path):
+    """Missing PostgreSQL PID metadata is inconclusive, not a clean stop."""
+    runner = tmp_path / 'runner'
+    runner.mkdir(mode=0o700)
+    root = runner / 'lawci.keep'
+    cluster = root / 'data/private/postgres/cluster'
+    cluster.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    marker = runner / 'law-ci-state-3.14'
+    marker.write_text(str(root) + '\n')
+    marker.chmod(0o600)
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    pg = tools / 'pg_config'
+    pg.write_text('#!/bin/bash\nprintf "%s\n" "$SYNTHETIC_TOOLS"\n')
+    pg.chmod(0o700)
+    env = {**os.environ, 'RUNNER_TEMP': str(runner),
+           'SYNTHETIC_TOOLS': str(tools),
+           'PATH': str(tools) + os.pathsep + os.environ['PATH']}
+    result = helper('cleanup', env=env)
+    assert result.returncode != 0
+    assert 'PID metadata is missing; shutdown is inconclusive' in result.stderr
+    assert cluster.is_dir()
+    assert root.is_dir()
+    assert marker.is_file()
+
+
 def short_temp_root():
     """Select a canonical base leaving room for both private temporary roots."""
     base = Path(tempfile.gettempdir()).resolve()
@@ -229,7 +256,7 @@ def test_synthetic_child_failure_and_cleanup_are_not_success(tmp_path, stop_fail
         'uv': '#!/bin/bash\nif [[ "$1" == --version ]]; then printf "uv 0.12.5 synthetic-only\\n"; else exit 37; fi\n',
         'pg_config': '#!/bin/bash\nprintf "%s\\n" "$SYNTHETIC_TOOLS"\n',
         'initdb': '#!/bin/bash\nmkdir -p "$2"\n',
-        'pg_ctl': '#!/bin/bash\nif [[ "$*" == *start* ]]; then touch "$2/postmaster.pid"; else printf "stop\\n" >> "$SYNTHETIC_TRACE"; exit "$SYNTHETIC_STOP_EXIT"; fi\n',
+        'pg_ctl': '#!/bin/bash\nif [[ "$*" == *start* ]]; then touch "$2/postmaster.pid"; else printf "stop\\n" >> "$SYNTHETIC_TRACE"; if [[ "$SYNTHETIC_STOP_EXIT" == 0 ]]; then rm -f "$2/postmaster.pid"; fi; exit "$SYNTHETIC_STOP_EXIT"; fi\n',
         'createdb': '#!/bin/bash\nexit 0\n',
         'psql': '#!/bin/bash\nexit 0\n',
     }
