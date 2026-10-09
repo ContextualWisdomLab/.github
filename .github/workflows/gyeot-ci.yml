@@ -1,0 +1,184 @@
+name: Gyeot CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Two-stage publication: publish/review the helpers first, then replace this
+# sentinel with their immutable central commit. Never infer it from the caller.
+env:
+  GYEOT_HELPER_COMMIT: UNPUBLISHED_GYEOT_HELPER_COMMIT
+
+# Concurrency belongs only to the product caller.
+jobs:
+  verify:
+    runs-on:
+      group: CWL Gyeot CI
+      labels: [self-hosted, Linux, X64, gyeot-ci]
+    timeout-minutes: 30
+    steps:
+      - name: Admit trusted source
+        id: source_admission
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_REPOSITORY" != "ContextualWisdomLab/gyeot" ]]; then
+            printf '%s\n' 'Unsupported caller repository; validation was not executed.' >&2
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ "$SOURCE_REPOSITORY" != "ContextualWisdomLab/gyeot" ]]; then
+                printf '%s\n' 'Unsupported fork source; validation was not executed.' >&2
+                exit 1
+              fi
+              ;;
+            push|workflow_dispatch) ;;
+            *) printf '%s\n' 'Unsupported workflow event.' >&2; exit 1 ;;
+          esac
+      - name: Checkout admitted product source
+        id: source_checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/gyeot
+          ref: ${{ github.sha }}
+          path: source
+          persist-credentials: false
+      - name: Require published immutable helper snapshot
+        id: helper_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$GYEOT_HELPER_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'Central Gyeot helpers are not published/pinned; CI is unavailable.' >&2
+            exit 1
+          fi
+      - name: Checkout immutable central helpers
+        id: central_checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ env.GYEOT_HELPER_COMMIT }}
+          path: central
+          persist-credentials: false
+          sparse-checkout: scripts/ci/
+      - name: Verify fixed helper checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C central rev-parse HEAD)" = "$GYEOT_HELPER_COMMIT"
+          origin="$(git -C central remote get-url origin)"
+          case "$origin" in
+            https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
+            *) printf '%s\n' 'Foreign helper repository.' >&2; exit 1 ;;
+          esac
+          git -C central diff --exit-code HEAD -- scripts/ci/
+          for helper in gyeot_verify_app.sh gyeot_verify_server.sh gyeot_verify_export.sh gyeot_check_export.cjs; do
+            test -f "central/scripts/ci/$helper"
+            test ! -L "central/scripts/ci/$helper"
+          done
+      - name: Setup Node 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - name: Verify app
+        id: app_verification
+        shell: bash
+        env:
+          GYEOT_SOURCE_ROOT: ${{ github.workspace }}/source
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash central/scripts/ci/gyeot_verify_app.sh "$GYEOT_SOURCE_ROOT"
+      - name: Upload current-source coverage
+        if: always() && steps.source_admission.outcome == 'success' && steps.source_checkout.outcome == 'success' && steps.central_checkout.outcome == 'success' && steps.app_verification.outputs.coverage_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: source/coverage/
+          if-no-files-found: error
+  server-verify:
+    runs-on:
+      group: CWL Gyeot CI
+      labels: [self-hosted, Linux, X64, gyeot-ci]
+    timeout-minutes: 30
+    steps:
+      - name: Admit trusted source
+        id: source_admission
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_REPOSITORY" != "ContextualWisdomLab/gyeot" ]]; then
+            printf '%s\n' 'Unsupported caller repository; validation was not executed.' >&2
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ "$SOURCE_REPOSITORY" != "ContextualWisdomLab/gyeot" ]]; then
+                printf '%s\n' 'Unsupported fork source; validation was not executed.' >&2
+                exit 1
+              fi
+              ;;
+            push|workflow_dispatch) ;;
+            *) printf '%s\n' 'Unsupported workflow event.' >&2; exit 1 ;;
+          esac
+      - name: Checkout admitted product source
+        id: source_checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/gyeot
+          ref: ${{ github.sha }}
+          path: source
+          persist-credentials: false
+      - name: Require published immutable helper snapshot
+        id: helper_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$GYEOT_HELPER_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'Central Gyeot helpers are not published/pinned; CI is unavailable.' >&2
+            exit 1
+          fi
+      - name: Checkout immutable central helpers
+        id: central_checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ env.GYEOT_HELPER_COMMIT }}
+          path: central
+          persist-credentials: false
+          sparse-checkout: scripts/ci/
+      - name: Verify fixed helper checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C central rev-parse HEAD)" = "$GYEOT_HELPER_COMMIT"
+          origin="$(git -C central remote get-url origin)"
+          case "$origin" in
+            https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
+            *) printf '%s\n' 'Foreign helper repository.' >&2; exit 1 ;;
+          esac
+          git -C central diff --exit-code HEAD -- scripts/ci/
+          for helper in gyeot_verify_app.sh gyeot_verify_server.sh gyeot_verify_export.sh gyeot_check_export.cjs; do
+            test -f "central/scripts/ci/$helper"
+            test ! -L "central/scripts/ci/$helper"
+          done
+      - name: Setup Node 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - name: Verify server
+        id: server_verification
+        shell: bash
+        env:
+          GYEOT_SOURCE_ROOT: ${{ github.workspace }}/source
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash central/scripts/ci/gyeot_verify_server.sh "$GYEOT_SOURCE_ROOT"
