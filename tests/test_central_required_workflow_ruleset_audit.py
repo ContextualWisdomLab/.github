@@ -561,7 +561,8 @@ def test_ruleset_audit_requires_dedicated_write_credential() -> None:
     )
     assert 'if [ "$RULESET_WRITE_CREDENTIAL_AVAILABLE" = "false" ]; then' in ruleset_step
     assert "requires CWL_RULESET_AUDIT_TOKEN with ruleset write access" in ruleset_step
-    assert "github.token" not in ruleset_step
+    assert "|| github.token" not in ruleset_step
+    assert "GH_TOKEN: ${{ github.token }}" not in ruleset_step
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN "
         "|| secrets.OPENCODE_APPROVE_TOKEN || '' }}" in coverage_step
