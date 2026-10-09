@@ -61,7 +61,11 @@ permissions:
 
 jobs:
   build-distribution:
-    runs-on: ubuntu-latest
+    # Caller-controlled build backends run only on the disposable isolated pool.
+    # Never fall back to a GitHub-hosted runner for untrusted package code.
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 10
     steps:
       - name: Check out the calling repository
@@ -127,7 +131,11 @@ jobs:
   package-description-boundary:
     needs: build-distribution
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    # The trusted inspector also stays on the isolated pool. Missing capacity
+    # must remain an incomplete check, never a hosted fallback or silent pass.
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 10
     steps:
       - name: Reject a failed input producer

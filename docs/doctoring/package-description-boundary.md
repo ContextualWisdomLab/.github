@@ -167,3 +167,18 @@ metadata descriptions must be identical or the gate fails closed. Published Mark
 links using GitHub's `blob/main`, `tree/main`, `master`, or `develop` forms are
 blocking `mutable-release-link` findings; release tags and exact commits remain
 valid.
+
+## Runner boundary
+
+Both jobs in `.github/workflows/package-description-boundary.yml` now require
+`CWL CI isolated` with `self-hosted`, `linux`, `x64`, and
+`cwlab-ci-isolated` labels. The producer executes caller-controlled packaging
+code; the inspector executes the trusted central gate. Neither job has a
+GitHub-hosted fallback. Missing isolated capacity therefore remains incomplete
+hosted evidence and cannot become a silent pass.
+
+This is a package-gate slice of the broader all-workflow migration owned by
+`ContextualWisdomLab/.github#2565`. It does not provision runners, widen group
+access, or prove disposable cleanup. A real caller can be accepted only after
+operator-provided group access, isolated capacity, cleanup canary, and fresh
+exact-head terminal checks.
