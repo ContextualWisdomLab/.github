@@ -303,7 +303,7 @@ jobs:
     # every PR event including docs/changelog-only diffs; this closes that
     # gap using the identical classifier. Fails OPEN: an unreadable, empty,
     # or truncated file list reviews everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+    if: (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
     permissions:
