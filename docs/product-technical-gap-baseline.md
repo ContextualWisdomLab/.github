@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-09 large-PR OpenCode admission delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-LIVE-METADATA-01 | **Source repaired under canonical owner PR #2283 at `c1aa50dd1580474c2ffc83ce1987b2d83d33d899`; protected integration and large-PR consumer revalidation pending** | Metadata writer #2110 exact head `f762923d65e8fb66750cc2f4026f088b01c971b1`, run `37886778473`, job `113678430291` passed trusted-source and Pingora policy steps, then the live-head admission GET of the complete PR payload failed with HTTP 422 “too many files changed.” RED contract `f87a94ff69b626c1fa04abf5c7a06017689ff1b9` rejects that unbounded read; repair `c1aa50d…` selects only GraphQL `headRefOid state`. | Canonical owner is central `.github/.github/workflows/opencode-review.yml`, not the metadata manifest. #2283 remains Draft, 332 commits behind current `main`, and overlaps #2336’s valid fallback-verdict delta in the workflow and regression test. Ordinary non-force restacking must carry both deltas; then unchanged large metadata PR #2110 must obtain a fresh exact-head admission result before this Gap can become complete. Blind rerun, full-payload fallback, PR closure, or gate weakening is not completion. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
