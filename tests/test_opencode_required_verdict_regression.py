@@ -54,10 +54,19 @@ def admission_script() -> str:
 
 
 def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
-    """A delayed old synchronize event is retired by live-head admission."""
+    """A delayed old synchronize event is retired from bounded live metadata."""
+    calls = tmp_path / "gh-calls"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
-        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$FAKE_GH_CALLS"
+if [[ "$*" != api\\ graphql* ]]; then
+  echo "unbounded pull-request REST read rejected" >&2
+  exit 91
+fi
+printf '%s' '{"data":{"repository":{"pullRequest":{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"OPEN"}}}}'
+""",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -69,6 +78,7 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "GH_TOKEN": "synthetic-token",
             "GITHUB_OUTPUT": str(output),
+            "FAKE_GH_CALLS": str(calls),
             "TARGET_REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "7",
             "EXPECTED_HEAD_SHA": HEAD,
@@ -81,6 +91,10 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
     assert result.returncode == 0, result.stderr
     assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
     assert "retired a stale event" in result.stdout
+    invocation = calls.read_text(encoding="utf-8")
+    assert invocation.startswith("api graphql ")
+    assert "headRefOid state" in invocation
+    assert "repos/ContextualWisdomLab/example/pulls/7" not in invocation
 
 
 def test_opencode_dispatch_groups_exact_heads_before_pr_scoped_review() -> None:
