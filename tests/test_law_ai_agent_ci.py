@@ -278,6 +278,40 @@ def test_installed_smoke_rejects_divergence_from_source(tmp_path, mutation, opti
     assert 'installed migration inventory mismatch' in result.stderr
 
 
+@pytest.mark.parametrize('optimized', [False, True])
+def test_preflight_imports_product_only_after_valid_source_admission(tmp_path, optimized):
+    """A valid source still imports the product and performs the test-only migration."""
+    source, _, rows, manifest = migration_fixture(tmp_path, 5)
+    imported = source / 'product-imported'
+    (source / 'src/law_ai_agent/__init__.py').write_text(
+        'from pathlib import Path\nPath("product-imported").write_text("imported")\n')
+    result, trace = run_migration_block(source, rows, manifest, optimized=optimized)
+    assert result.returncode == 0, result.stderr
+    assert imported.read_text() == 'imported'
+    assert manifest.is_file()
+    assert json.loads(trace.read_text())[:3] == ['test_only', 'migrate', 'commit']
+
+
+@pytest.mark.parametrize('component', ['src', 'src/law_ai_agent', 'src/law_ai_agent/migrations'])
+@pytest.mark.parametrize('optimized', [False, True])
+def test_preflight_rejects_linked_source_migration_ancestors(tmp_path, component, optimized):
+    """An archived directory link cannot supply migration evidence from outside source."""
+    source, _, rows, manifest = migration_fixture(tmp_path, 5)
+    imported = source / 'product-imported'
+    (source / 'src/law_ai_agent/__init__.py').write_text(
+        'from pathlib import Path\nPath("product-imported").write_text("imported")\n')
+    path = source / component
+    outside = tmp_path / ('outside-' + path.name)
+    path.rename(outside)
+    path.symlink_to(outside, target_is_directory=True)
+    result, trace = run_migration_block(source, rows, manifest, optimized=optimized)
+    assert result.returncode != 0, 'linked migration ancestor accepted'
+    assert 'source migration inventory invalid' in result.stderr
+    assert not manifest.exists()
+    assert not imported.exists(), 'product imported before source admission'
+    assert not trace.exists(), 'database access started before source admission'
+
+
 @pytest.mark.parametrize('name', ['bad.sql', '001_a.txt', '000_zero.sql', '001_duplicate.sql'])
 def test_preflight_rejects_invalid_source_migration_names(tmp_path, name):
     """Only uniquely numbered nonempty SQL migration resources are admissible."""

@@ -162,11 +162,13 @@ import os
 from pathlib import Path
 import re
 import sys
-from law_ai_agent.postgres import PostgresStore, connect
 if sys.version_info[:2] != tuple(map(int, os.environ["LAW_CI_PYTHON_VERSION"].split("."))):
     raise SystemExit("law-ci: Python version mismatch")
-# This path belongs to git archive's exact source, not an installed import fallback.
-resources = Path("src/law_ai_agent/migrations")
+# Check lexical ancestors before traversal or importing the archived product package.
+resources = Path("src/law_ai_agent/migrations").absolute()
+for component in reversed((resources, *resources.parents)):
+    if component.is_symlink() or not component.is_dir():
+        raise SystemExit("law-ci: source migration inventory invalid")
 inventory = []
 versions = set()
 for resource in sorted(resources.iterdir(), key=lambda path: path.name):
@@ -183,6 +185,7 @@ for resource in sorted(resources.iterdir(), key=lambda path: path.name):
                       "checksum": sha256(script.encode()).hexdigest()})
 if not inventory:
     raise SystemExit("law-ci: source migration inventory invalid")
+from law_ai_agent.postgres import PostgresStore, connect
 with connect(os.environ["LAW_AGENT_TEST_DATABASE_URL"], test_only=True) as connection:
     PostgresStore(connection).migrate()
     connection.commit()
