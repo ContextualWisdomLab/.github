@@ -30,6 +30,7 @@ REVIEWER_TOKEN = (
 GATED_MODEL_STEPS = (
     "Provision pinned Node.js for Noema document review",
     "Set up lock-compatible sidecar Python",
+    "Admit existing personal LiteLLM auto route",
     "Provision contextual-orchestrator review sidecar",
     "Provision local reviewed HWP document reader",
     "Prepare Noema model verdict",
@@ -84,7 +85,25 @@ def test_model_heavy_steps_are_gated_on_the_live_draft_output() -> None:
     workflow = workflow_text("noema-review.yml")
     for name in GATED_MODEL_STEPS:
         step = workflow_step(workflow, name)
-        assert f"if: env.PR_NUMBER != '' && {DRAFT_GATE}\n" in step, name
+        expected = f"env.PR_NUMBER != '' && {DRAFT_GATE}"
+        if name == "Provision contextual-orchestrator review sidecar":
+            expected += " && steps.personal_route.outputs.selected != 'true'"
+        condition = next(line.strip()[4:] for line in step.splitlines()
+                         if line.strip().startswith("if: "))
+        assert condition == expected, name
+        # Evaluate every supported conjunction, so draft=true denies both routes;
+        # additional OR terms or omitted guards fail the exact contract above.
+        for pr in ("", "2565"):
+            for draft in ("true", "false", ""):
+                for personal in ("true", "false", ""):
+                    terms = {"env.PR_NUMBER != ''": bool(pr),
+                             DRAFT_GATE: draft != "true",
+                             "steps.personal_route.outputs.selected != 'true'": personal != "true"}
+                    admitted = all(terms[term] for term in condition.split(" && "))
+                    wanted = bool(pr) and draft != "true"
+                    if name == "Provision contextual-orchestrator review sidecar":
+                        wanted = wanted and personal != "true"
+                    assert admitted == wanted, (name, pr, draft, personal)
 
 
 def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> None:

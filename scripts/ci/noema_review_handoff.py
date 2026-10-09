@@ -195,7 +195,7 @@ def dispatch_noema(
     *,
     runner: GhRunner = run_gh,
 ) -> None:
-    """Dispatch the target repository's default-branch Noema workflow."""
+    """Dispatch the central handler while retaining the exact consumer identity."""
     payload = {
         "event_type": "noema-review",
         "client_payload": {
@@ -205,7 +205,7 @@ def dispatch_noema(
         },
     }
     runner(
-        ["api", "-X", "POST", f"repos/{repo}/dispatches", "--input", "-"],
+        ["api", "-X", "POST", "repos/ContextualWisdomLab/.github/dispatches", "--input", "-"],
         json.dumps(payload),
     )
 
