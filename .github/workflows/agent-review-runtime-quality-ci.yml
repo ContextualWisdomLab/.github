@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
+      - "scripts/ci/codeql_ghas_configuration_identity.py"
+      - "tests/test_codeql_ghas_configuration_identity.py"
+      - "tests/test_codeql_ghas_analyses_pagination.py"
+      - "tests/test_github_api_url_boundary.py"
       - ".github/workflows/noema-review.yml"
       - ".github/actions/noema-review/two_phase.py"
       - "tests/test_noema_reviewer_token_lifetime.py"
@@ -63,6 +67,8 @@ on:
       - "scripts/ci/contextual_orchestrator_review_sidecar.sh"
       - "tests/test_zdr_policy.py"
       - "tests/test_contextual_orchestrator_review_policy.py"
+      - "tests/test_contextual_orchestrator_review_launcher.py"
+      - "tests/test_review_preflight_concurrency.py"
       - "tests/test_contextual_orchestrator_review_sidecar_contract.py"
       - "tests/test_sidecar_disk_free_guard.py"
       - "tests/test_hourly_review_repair_callers.py"
@@ -116,9 +122,11 @@ on:
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
       - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
+      - "requirements-opencode-review-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
       - "requirements-noema-document-ci.txt"
       - "requirements-noema-document-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
 
 # PR validation only: a new head cancels only an older run of this workflow
 # for the same repository and pull request.
@@ -132,7 +140,9 @@ permissions:
 jobs:
   agent_review_runtime_quality:
     name: agent-review-runtime-quality
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -173,6 +183,7 @@ jobs:
           review_repair_suite=false
           commercial_readiness_suite=false
           exact_artifact_suite=false
+          ghas_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
@@ -184,6 +195,14 @@ jobs:
                 review_repair_suite=true
                 commercial_readiness_suite=true
                 exact_artifact_suite=true
+                ghas_suite=true
+                ;;
+              scripts/ci/codeql_ghas_configuration_identity.py|\
+              tests/test_codeql_ghas_configuration_identity.py|\
+              tests/test_codeql_ghas_analyses_pagination.py|\
+              tests/test_github_api_url_boundary.py|\
+              tests/test_agent_review_runtime_quality_consolidation.py)
+                ghas_suite=true
                 ;;
               tests/test_pr_review_autofix_nvidia_nim_contract.py)
                 opencode_suite=true
@@ -237,11 +256,13 @@ jobs:
               tests/test_strix_quality_timeout_fixture_budget.py)
                 strix_suite=true
                 ;;
-              requirements-opencode-review-ci-hashes.txt)
+              requirements-opencode-review-ci.txt|\
+              requirements-opencode-review-ci-hashes.txt|\
+              requirements-noema-document-ci.txt|\
+              scripts/ci/compile_opencode_review_lock.sh)
                 noema_suite=true
                 opencode_suite=true
                 ;;
-              requirements-noema-document-ci.txt|\
               requirements-noema-document-ci-hashes.txt)
                 noema_suite=true
                 ;;
@@ -267,6 +288,8 @@ jobs:
               scripts/ci/contextual_orchestrator_review_sidecar.sh|\
               tests/test_zdr_policy.py|\
               tests/test_contextual_orchestrator_review_policy.py|\
+              tests/test_contextual_orchestrator_review_launcher.py|\
+              tests/test_review_preflight_concurrency.py|\
               tests/test_contextual_orchestrator_review_sidecar_contract.py|\
               tests/test_sidecar_disk_free_guard.py|\
               tests/test_hourly_review_repair_callers.py|\
@@ -336,6 +359,7 @@ jobs:
             echo "review_repair=$review_repair_suite"
             echo "commercial_readiness=$commercial_readiness_suite"
             echo "exact_artifact=$exact_artifact_suite"
+            echo "ghas=$ghas_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -444,11 +468,14 @@ jobs:
             --cov=scripts.ci.pr_review_autofix_context \
             --cov=scripts.ci.zdr_policy \
             --cov=scripts.ci.contextual_orchestrator_review_policy \
+            --cov=scripts.ci.contextual_orchestrator_review_launcher \
             --cov-branch \
             --cov-fail-under=100 \
             tests/test_pr_review_conflict_scope.py \
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_launcher.py \
+            tests/test_review_preflight_concurrency.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_sidecar_disk_free_guard.py \
             tests/test_hourly_review_repair_callers.py \
@@ -488,6 +515,8 @@ jobs:
             scripts/ci/contextual_orchestrator_review_launcher.py \
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_launcher.py \
+            tests/test_review_preflight_concurrency.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_sidecar_disk_free_guard.py \
             tests/test_hourly_review_repair_callers.py \
@@ -567,6 +596,21 @@ jobs:
             tests/test_exact_artifact_sbom_review_regressions.py \
             tests/test_verify_exact_artifact_sbom_handoff.py \
             tests/test_exact_artifact_quality_single_runner.py
+
+      - name: Verify GHAS identity, pagination, and API boundary contracts
+        if: steps.affected_suites.outputs.ghas == 'true'
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_analyses_pagination.py \
+            tests/test_github_api_url_boundary.py
+          python -m compileall -q \
+            scripts/ci/codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_configuration_identity.py \
+            tests/test_codeql_ghas_analyses_pagination.py \
+            tests/test_github_api_url_boundary.py
 
       - name: Verify consolidated workflow contract
         run: |

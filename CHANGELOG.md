@@ -6,6 +6,142 @@
   evidence instead of invoking `pg_ctl` through an untrusted descendant path.
   Contracts cover all five descendant boundaries in normal and Actions-mode
   execution. Hosted exact-head Checks and independent review remain required.
+### Security scanner setup no longer inherits runner-local failures
+
+- Disable `trivy-action`'s binary cache on the heterogeneous `CWL CI isolated`
+  runner group. Exact run `37242578328`, job `112314054734`, restored a
+  `trivy-binary-v0.70.0-Linux-X64` cache entry but then failed before scanning
+  with `trivy: command not found`; installing the pinned binary per job removes
+  that runner-local path and executable-bit dependency.
+- Treat the always-run OSV debug artifact upload as observability rather than a
+  security verdict. Exact job `112314054619` completed the base/head comparison,
+  reported no PR-introduced finding, and uploaded SARIF before GitHub artifact
+  quota exhaustion failed the debug upload. The scanner and SARIF gates remain
+  unchanged and fail closed; only that optional retention step is non-blocking.
+- RED `cc42969ba8ed4abeb1819412c146af2a9dadae8f` adds both workflow contracts;
+  GREEN `26f993c0bbe88d50bf81473e31d179ad7b317657` passes 5,488 tests, 10 skips,
+  and 40 subtests. PR #2565 remains Draft/HOLD for fresh hosted evidence,
+  isolated-capacity canary, and qualifying independent approval.
+
+### Isolated CI routing gains a runner-group authority boundary
+
+- Reject the complete reusable R matrix when any requested leg is not one of
+  the admitted Linux/x64 image aliases. A required macOS, Windows, ARM, or
+  unknown leg can no longer disappear while the remaining Ubuntu leg reports
+  success; callers must request only executable legs or receive a failed
+  admission job.
+- Serialize the caller-controlled R matrix OS label with GitHub `toJSON()`
+  before inserting it into the group-scoped runner selector. Quotes,
+  backslashes, newlines, and duplicate `group`/`labels` text remain one
+  data label and cannot replace the fixed `CWL CI isolated` authority
+  boundary. The executable workflow contract covers benign and hostile values.
+  The integrated Maturin verifier now also documents its archive extraction and
+  command entry point, restoring the repository's 100% public-doc gate.
+- Scope every ordinary and non-main self-hosted fallback through the dedicated
+  `CWL CI isolated` runner group as well as the existing platform/isolation
+  labels. A durable regression rejects label-only isolated selectors, while
+  workflow-specific contracts preserve dynamic matrix and trusted-main routing.
+  The reusable R matrix selector now escapes its literal JSON braces for
+  GitHub's `format()` expression, so Linux, Windows, macOS and unsupported OS
+  labels render a valid group-scoped `runs-on` object instead of failing before
+  runner admission.
+  The change remains Draft/HOLD until operators provision the group, restrict
+  its repository access, demonstrate disposable cleanup, and return exact-head
+  canary and required-Check evidence.
+
+### Maturin download failures close every transport response
+
+- Refactor the bounded Maturin asset downloader so successful and rejected
+  responses share one unconditional close path while `HTTPError` keeps its own
+  explicit close path. A new regression exercises a non-200 response and an
+  opener-raised HTTP error. This removes an impossible optional-response branch
+  without changing hosts, redirects, byte limits, hashes, or fail-closed error
+  mapping; the focused suite is 17 passed with 100% statement and branch
+  coverage. The trusted full-suite workflow now also tracks the verifier source
+  and its focused test, so a future lifecycle change cannot omit the repository
+  coverage gate that detected this regression. The pull-request trigger admits
+  stacked canonical-owner bases as well as `main`; the protected-branch push
+  trigger remains restricted to `main`.
+
+### Shared Strix lock advances beyond the PyJWT recursion DoS
+
+- Advance the explicit Strix source pin and generated hash lock from PyJWT
+  `2.14.0` to `2.15.0`, closing GHSA-42vr-xj54-vc7v / CVE-2026-101918. Exact Security
+  Scan run `36741151937` found the advisory in dependent PR #2540; the
+  canonical owner repair stays in #2531. A source/lock contract, deterministic
+  lock regeneration, and pip-audit evidence keep the dependent branch free of a
+  leaf workaround and prevent a return to `2.14.0`. Exact-head hosted security
+  Checks, independent approval, ordinary protected integration, and immutable
+  consumer-pin advancement remain required before release admission.
+
+### Shared urllib3 locks close proxy and streaming CVEs
+
+- Pin urllib3 2.8.0 as an explicit source input in both the pip-audit and
+  Strix security-tooling closures, regenerate their hash locks without unrelated
+  version movement, and add a four-file parity contract. This closes
+  CVE-2026-97687 and CVE-2026-97689 found by exact-head Python Security while
+  preserving hash checking and the existing Strix cryptography override.
+
+### Full-suite parser locks and honest branch coverage converge
+
+- Consolidated the complete valid ancestry of `.github#2521` into `.github#2530`
+  with ordinary two-parent merges so the parser-lock and repository-coverage
+  gates no longer wait on one another. Behavior-level tests exercise the final
+  branches in the OpenCode queue, Strix dependency classifier, release runtime
+  prescreener, and release dependency gate without exclusions, pragmas,
+  threshold reductions, or sample shrinking. Direct consumers of the common
+  generated lock now also track both source requirements and the canonical
+  compiler. `.github#2532`'s warning-fatal HTTP response-lifecycle repair is
+  carried in the same successor so the complete suite can regenerate one
+  exact-head receipt. Protected hosted Checks and qualifying independent review
+  remain mandatory before ordinary merge; predecessors remain open until
+  merged-tree equivalence is proven. The combined Python 3.14 warnings-fatal
+  suite passes 5,291 tests with 5 optional skips and 40 subtests; all 18,729
+  production statements and 7,642 branches are covered, and production
+  Docstring coverage is 100%. The durable review-repair owner also triggers,
+  executes, compiles, and measures both launcher runtime suites at 100%.
+  Exact Git blobs, Cargo development locks, runtime receipts, final fanout caps,
+  and the Python 3.10 TOML fallback are covered as explicit trust boundaries;
+  one unreachable postcondition was removed only after prior fail-closed
+  validation made that state mechanically impossible.
+
+### Full-suite quality environments install their collection parsers
+
+- The common OpenCode quality input now owns the existing hash-pinned
+  `defusedxml` document parser and `PyYAML` workflow parser used during complete
+  repository test collection. Its Python 3.14/Linux lock was regenerated by
+  the repository compiler without manual hash edits. Local verification
+  reproduced the lock byte-for-byte, installed the common and Noema locks
+  together, imported both parsers, and passed 73 focused contracts with two
+  optional skips. Hosted exact-head Checks and qualifying independent review
+  remain required before protected merge.
+
+### Shared security fixtures use patched PyJWT and PyO3 releases
+
+- The Strix hash lock now takes PyJWT `2.14.0` as an explicit source input,
+  closing CVE-2026-102274 without hiding the dependency in the cryptography-only
+  override file. The offline Rust coverage fixture advances from PyO3 `0.22.6`
+  to `0.29.2`, beyond the `0.29.0` fixes for GHSA-36hh-v3qg-5jq4 and
+  GHSA-chgr-c6px-7xpp. Source/lock parity tests prevent either generated lock
+  from silently returning to the vulnerable versions. Protected integration,
+  immutable consumer-pin advancement, and fresh exact-head hosted security
+  Checks remain required before release admission.
+### Dependency Review requires a completed authenticated comparison
+
+- The reusable Dependency Review preflight now requires both curl exit zero
+  and HTTP 200 before publishing `available=true`. A regression reproduces a
+  partial transfer that prints `200` but exits 18, preserving the fail-closed
+  gate. The bundled Security Scan already enforced both signals and remains
+  unchanged. `.github#2565` now preserves the complete `.github#1725` owner
+  delta through published ordinary two-parent merge
+  `650bc6e35409d52d24fec890c2ab74063794e9b8` (tree
+  `9522f0b9c96247b3412e147bc6f89fd2595c0776`) while retaining its isolated
+  runner-group selectors. The merged-tree focused contract is 53/53 and the
+  warning-fatal full suite is 5,437 passed, 10 skipped, 40 subtests. Both PRs remain
+  Proposed until exact-head hosted Checks and qualifying independent review are
+  complete. The carried security decision is ADR-0034, the concurrent owned
+  CodeQL decision is ADR-0033, and a repository-wide executable contract now
+  rejects duplicate numeric ADR identities.
 
 ### Intel macOS native archives are bound to x86_64 bytes
 
