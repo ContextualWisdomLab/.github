@@ -32,11 +32,8 @@ jobs:
         with:
           upload: never
           output: codeql-results/actions
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: codeql-diagnostic-actions-${{ github.sha }}
-          path: codeql-results/actions/*.sarif
-          if-no-files-found: error
+      - name: Keep CodeQL diagnostics local to the job
+        run: test -s codeql-results/actions/actions.sarif
 
   analyze-python:
     # Python remains a no-upload diagnostic for explicit operator runs;
@@ -60,8 +57,5 @@ jobs:
         with:
           upload: never
           output: codeql-results/python
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: codeql-diagnostic-python-${{ github.sha }}
-          path: codeql-results/python/*.sarif
-          if-no-files-found: error
+      - name: Keep CodeQL diagnostics local to the job
+        run: test -s codeql-results/python/python.sarif
