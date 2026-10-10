@@ -163,8 +163,8 @@ fi
     assert "/actions/runs/105/cancel" not in calls
 
 
-def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
-    """Require reviewer credentials and the sidecar; the public NIM hardcode is gone."""
+def test_noema_review_credentials_and_model_routing_fail_closed() -> None:
+    """Keep private reviews on the sidecar and require auto LiteLLM for public reviews."""
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
@@ -221,14 +221,114 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "      contents: read" in review_job
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
-        "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
+        "contextual-orchestrator ZDR sidecar must be provisioned before private Noema review."
         in workflow
     )
+    assert "Public Noema review requires the configured auto model and LiteLLM key." in workflow
+    assert "Noema review refuses unknown target visibility." in workflow
+    assert "LLM_GATEWAY_MODEL: ${{ vars.LLM_GATEWAY_MODEL }}" in prepare
+    assert 'LLM_GATEWAY_API_KEY: ${{ steps.target_visibility.outputs.require_zdr == \'false\' && secrets.LLM_GATEWAY_API_KEY || \'\' }}' in prepare
+    assert 'export NOEMA_LLM_MODEL="$LLM_GATEWAY_MODEL"' in prepare
+    assert 'export NOEMA_LLM_API_URL="https://litellm.poinnetworks.net/v1/chat/completions"' in prepare
+    assert 'export NOEMA_LLM_VIA_ORCHESTRATOR=0' in prepare
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+
+
+def test_noema_prepare_routes_visibility_and_fails_closed(tmp_path: Path) -> None:
+    """Execute the workflow's exact Prepare step without calling a model endpoint."""
+    bash = shutil.which("bash") or "/bin/bash"
+    workflow = workflow_text("noema-review.yml")
+    script = textwrap.dedent(
+        workflow_step(workflow, "Prepare Noema model verdict").split("        run: |\n", 1)[1]
+    )
+    python = shutil.which("python3")
+    assert python is not None
+
+    def run_case(name: str, visibility: str, model: str, key: str):
+        case = tmp_path / name
+        workspace = case / "workspace"
+        bin_dir = case / "bin"
+        runner_temp = case / "runner-temp"
+        (workspace / "scripts/ci").mkdir(parents=True)
+        bin_dir.mkdir(parents=True)
+        runner_temp.mkdir()
+        capture = case / "prepared-env.bin"
+        github_output = case / "github-output"
+        token_loader = workspace / "scripts/ci/load_contextual_orchestrator_token.sh"
+        token_loader.write_text(
+            "export CONTEXTUAL_ORCHESTRATOR_TOKEN=synthetic-private-token\n",
+            encoding="utf-8",
+        )
+        fake_python = bin_dir / "python3"
+        fake_python.write_text(
+            f"#!{python}\n"
+            "import json, os, sys\n"
+            "names = ('NOEMA_LLM_API_URL', 'NOEMA_LLM_MODEL', 'NOEMA_LLM_API_KEY', 'NOEMA_LLM_VIA_ORCHESTRATOR')\n"
+            "with open(os.environ['NOEMA_CAPTURE'], 'w', encoding='utf-8') as f:\n"
+            "    json.dump({'env': {name: os.environ.get(name) for name in names}, 'argv': sys.argv[1:]}, f)\n",
+            encoding="utf-8",
+        )
+        fake_python.chmod(0o755)
+        result = subprocess.run(  # noqa: S603, S607
+            [bash, "-c", script],
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                "GITHUB_WORKSPACE": str(workspace),
+                "RUNNER_TEMP": str(runner_temp),
+                "GITHUB_OUTPUT": str(github_output),
+                "NOEMA_CAPTURE": str(capture),
+                "PR_NUMBER": "7",
+                "GH_TOKEN": "synthetic-review-token",
+                "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+                "EXPECTED_HEAD_SHA": "a" * 40,
+                "REQUIRE_ZDR": visibility,
+                "CONTEXTUAL_ORCHESTRATOR_BASE_URL": "https://private-sidecar.example",
+                "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(case / "sidecar-token"),
+                "LLM_GATEWAY_MODEL": model,
+                "LLM_GATEWAY_API_KEY": key,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result, json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else None
+
+    public_key = "synthetic-public-key"
+    public, public_capture = run_case("public", "false", "auto", public_key)
+    assert public.returncode == 0
+    assert public_capture["env"] == {
+        "NOEMA_LLM_API_URL": "https://litellm.poinnetworks.net/v1/chat/completions",
+        "NOEMA_LLM_MODEL": "auto",
+        "NOEMA_LLM_API_KEY": public_key,
+        "NOEMA_LLM_VIA_ORCHESTRATOR": "0",
+    }
+    assert "--prepare-verdict-file" in public_capture["argv"]
+    assert f"::add-mask::{public_key}" in public.stdout
+
+    private, private_capture = run_case("private", "true", "unused", "")
+    assert private.returncode == 0
+    assert private_capture["env"] == {
+        "NOEMA_LLM_API_URL": "https://private-sidecar.example/v1/chat/completions",
+        "NOEMA_LLM_MODEL": "orchestrator/free",
+        "NOEMA_LLM_API_KEY": "synthetic-private-token",
+        "NOEMA_LLM_VIA_ORCHESTRATOR": "1",
+    }
+    assert "synthetic-private-token" not in private.stdout
+
+    for name, visibility, model, key, error in (
+        ("unknown", "unknown", "auto", public_key, "refuses unknown target visibility"),
+        ("keymissing", "false", "auto", "", "requires the configured auto model and LiteLLM key"),
+        ("modelnotauto", "false", "gpt-4.1", public_key, "requires the configured auto model and LiteLLM key"),
+    ):
+        result, capture = run_case(name, visibility, model, key)
+        assert result.returncode != 0
+        assert capture is None
+        assert error in result.stdout
 
 
 def test_noema_continuation_dispatch_uses_central_handler_and_live_identity(tmp_path: Path) -> None:

@@ -1,11 +1,11 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted, amended 2026-09-02 (see amendment history below — Strix
-  now uses `orchestrator/free`, not the `orchestrator/auto` this header
-  originally recorded)
+- Status: accepted, amended 2026-10-10 (public Noema/OpenCode reviews use the
+  configured LiteLLM `auto` route; private/internal reviews retain ZDR-only
+  `orchestrator/free`)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
+- Decision: Public Noema/OpenCode reviews use the configured PoinNetworks LiteLLM `auto` model with the centrally stored `LLM_GATEWAY_API_KEY`. Private/internal reviews use the **vendored** `contextual-orchestrator` sidecar and only an attested ZDR route from `orchestrator/free`. Unknown visibility fails closed. Strix continues to use the sidecar's `orchestrator/free` pool. **ZDR-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -134,6 +134,13 @@ all five, and auto-optimize routing by cost.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
+- Public Noema/OpenCode review calls use the existing centrally stored
+  `LLM_GATEWAY_API_KEY` only in the model-request step and require
+  `LLM_GATEWAY_MODEL=auto`. The provider credential is never placed in a
+  generated config or available to PR-head build/test processes.
+- Private/internal review content stays on the attested ZDR sidecar. If target
+  visibility cannot be established, neither route is selected and review fails
+  closed.
 - A new central dep (vendored repo pinned to a SHA) must be reviewed when the
   orchestrator upgrades; the pin is centralized in one script and one contract
   test.
@@ -315,3 +322,12 @@ all five, and auto-optimize routing by cost.
   vulnerabilities in the same audit. The earlier byte-identical-lock claim
   describes the superseded proposal, not this amended target. No review
   completion or runtime provider success is inferred from the lock audit.
+
+- **2026-10-10 amendment: public-target automatic model routing.** Noema and
+  OpenCode select the configured PoinNetworks LiteLLM `auto` alias for public
+  repository targets, using the already stored `LLM_GATEWAY_API_KEY` only in
+  trusted model-request steps. Private/internal targets remain on the
+  attested-ZDR `orchestrator/free` sidecar. Both workflows fail closed when
+  visibility is unknown; `LLM_GATEWAY_MODEL` must equal `auto`, and no
+  provider key is copied into generated configuration or PR-head test jobs.
+  Strix and the local OpenCode default are unchanged.
