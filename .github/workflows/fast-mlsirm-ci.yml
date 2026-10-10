@@ -1,0 +1,285 @@
+name: CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keep one active CI run per PR while preserving independent push runs. A
+  # synchronized head cancels its queued/running predecessor instead of
+  # multiplying the hosted-runner backlog with stale evidence.
+  group: central-fast-mlsirm-ci-${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Matrix legs report as "python (3.12)" / "python (3.14)". Branch protection
+  # still requires the exact check context name `python`, so a thin aggregate
+  # job below re-exports matrix success under that name.
+  python-matrix:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
+    name: python (${{ matrix.python-version }})
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Rust toolchain is required so the maturin build compiles the primary
+      # numeric core (fast_mlsirm._core) during the editable install; the
+      # Rust<->NumPy parity gate then exercises the Rust path.
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - run: python -m pip install --require-hashes -r requirements/ci.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - name: Verify Rust core is the resolved default backend
+        run: python -c "import fast_mlsirm._core as c; from fast_mlsirm.backend import resolve_backend; from fast_mlsirm import FitConfig; assert hasattr(c, 'neg_loglik_and_grad'); assert resolve_backend(FitConfig().backend) == 'rust'; print('rust primary OK')"
+      - run: pytest
+
+  python:
+    name: python
+    needs: python-matrix
+    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')) }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    steps:
+      - name: Require every CPython matrix leg
+        run: |
+          echo "python-matrix result=${{ needs.python-matrix.result }}"
+          test "${{ needs.python-matrix.result }}" = "success"
+
+
+  rust:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      # Ordinary Rust tests include the deterministic equation and bounded
+      # recovery-contract sentinels. Exhaustive ignored studies run in the
+      # scheduled Statistical Studies workflow rather than on every PR.
+      # --locked fails the job when a Cargo.lock would have to change to build.
+      # crates/fast-mlsirm-py is excluded from the root workspace and carries its
+      # own lock, so without this a dependency added there resolves fresh at build
+      # time and the committed lock the security gate scans silently falls behind
+      # the graph that actually ships.
+      - run: cargo test --locked --workspace
+      - run: cargo test --locked --manifest-path crates/fast-mlsirm-py/Cargo.toml
+
+  gpu-smoke:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
+    # Exact GPU and study-precision nodes below own every corresponding
+    # non-execution allowlist entry. The full paper-design recovery study
+    # remains in the scheduled/manual workflow.
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 240
+    env:
+      WGPU_BACKEND: vulkan
+      XDG_RUNTIME_DIR: /tmp/fast-mlsirm-xdg-runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - name: Install software Vulkan adapter
+        run: |
+          # The hosted runner's mirror+file registry can keep selecting a
+          # black-holed Azure mirror even after apt falls back for InRelease.
+          # Use a job-local source file pinned to canonical Ubuntu archives so
+          # package payloads do not re-enter that broken mirror selection path.
+          . /etc/os-release
+          test -n "${VERSION_CODENAME:-}"
+          cat > /tmp/fast-mlsirm-ubuntu.sources <<EOF
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports
+          Components: main restricted universe multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: ${VERSION_CODENAME}-security
+          Components: main restricted universe multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          timeout 120s sudo apt-get \
+            -o Dir::Etc::sourcelist=/tmp/fast-mlsirm-ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=10 \
+            -o Acquire::https::Timeout=10 \
+            -o DPkg::Lock::Timeout=30 \
+            update
+          timeout 180s sudo apt-get \
+            -o Dir::Etc::sourcelist=/tmp/fast-mlsirm-ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=10 \
+            -o Acquire::https::Timeout=10 \
+            -o DPkg::Lock::Timeout=30 \
+            install --yes mesa-vulkan-drivers vulkan-tools
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          LVP_ICD="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
+          test -n "$LVP_ICD"
+          echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
+      - name: Prove Vulkan compute adapter availability
+        run: vulkaninfo --summary
+      - run: python -m pip install --require-hashes -r requirements/ci.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - name: Run exact GPU and study-precision evidence without a skip
+        env:
+          STAGE5_HIGH_Q: "1"
+          STAGE5_HIGH_Q_BOOTSTRAP_REPS: "2"
+        run: |
+          pytest -q --junitxml=gpu-junit.xml \
+            tests/test_marginal_parity.py::test_marginal_gpu_agrees_with_cpu_loosely \
+            tests/test_bifactor_gpu_high_q.py::test_bifactor_gpu_parity_q121 \
+            tests/test_bifactor_gpu_high_q.py::test_bifactor_gpu_parity_q241 \
+            tests/test_bifactor_gpu_high_q.py::test_bifactor_gpu_parity_q481 \
+            tests/test_bifactor_gpu_high_q.py::test_bifactor_gpu_parity_q241_wide_items_metal_workgroups \
+            tests/test_bifactor_gpu_high_q.py::test_bifactor_cpu_q121_vs_q241_agree \
+            tests/test_bifactor_bootstrap_benchmark.py::test_joint_bootstrap_cpu_vs_gpu_wall_time_q121
+      - name: Reject skipped GPU evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          root = ElementTree.parse(Path("gpu-junit.xml")).getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+          tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+          if tests < 1:
+              raise SystemExit("GPU evidence did not execute a test")
+          if skipped != 0:
+              raise SystemExit(f"GPU evidence contained {skipped} skipped test(s)")
+          PY
+
+  fuzz:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
+    # Short, bounded coverage-guided fuzzing so PR cost stays low. The
+    # property-based Hypothesis tests already run in the `python` job (via the
+    # dev extra); this job adds the Atheris coverage-guided harnesses with a
+    # ~60s-per-target budget. Longer campaigns can be run nightly if desired.
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      # pip is version-pinned so the toolchain used to resolve the fuzz extras
+      # is reproducible (OpenSSF Scorecard pinned-dependencies hardening).
+      - run: python -m pip install --upgrade "pip==26.1.2"
+      # The property checks below use pytest from the dev extra; fuzz alone
+      # provides Atheris and Hypothesis, but not the pytest command.
+      # Editable/local installs cannot use --require-hashes.
+      - run: python -m pip install -e '.[dev,fuzz]'
+      - name: Run Hypothesis input properties without a skip
+        run: pytest tests/test_fuzz_properties.py -q --junitxml=fuzz-properties-junit.xml
+      - name: Reject skipped Hypothesis evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          root = ElementTree.parse(Path("fuzz-properties-junit.xml")).getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+          tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+          if tests < 1:
+              raise SystemExit("Hypothesis evidence did not execute a test")
+          if skipped != 0:
+              raise SystemExit(
+                  f"Hypothesis evidence contained {skipped} skipped test(s)"
+              )
+          PY
+      - name: Fuzz load_factor_csv (CSV parser)
+        run: |
+          python fuzz/atheris/fuzz_load_factor_csv.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/load_factor_csv
+      - name: Fuzz render_diagnostics_report (JSON -> HTML)
+        run: |
+          python fuzz/atheris/fuzz_render_report.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/render_report
+      - name: Fuzz config validators
+        run: |
+          python fuzz/atheris/fuzz_config.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/config
+
+  package:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.1
+      - run: python -m pip install --require-hashes -r requirements/package.txt
+      - run: python -m build --no-isolation
+      - run: python -m pip install --no-index --no-deps --force-reinstall dist/*.whl
+      - run: python -c "import fast_mlsirm, fast_mlsirm._core as core; print(fast_mlsirm.__version__, hasattr(core, 'neg_loglik_and_grad'))"
+      - name: Run release acceptance smoke
+        run: |
+          python scripts/release_acceptance.py --out release-acceptance --require-rust --persons 12 --dims 1 --items-per-dim 2 --latent-dim 1 --latent-dims 1,2 --folds 2 --max-iter 1 --n-restarts 1
+          python - <<'PY'
+          import json
+
+          with open("release-acceptance/acceptance_summary.json", encoding="utf-8") as fh:
+              summary = json.load(fh)
+          assert summary["status"] == "ok"
+          PY
+      - name: Run enterprise sales readiness gate
+        run: |
+          python scripts/sales_readiness.py \
+            --acceptance release-acceptance/acceptance_summary.json \
+            --dist dist \
+            --require-rust \
+            --require-20b-product \
+            --check-import \
+            --out release-acceptance/sales_readiness_manifest.json
+          python - <<'PY'
+          import json
+
+          with open("release-acceptance/sales_readiness_manifest.json", encoding="utf-8") as fh:
+              manifest = json.load(fh)
+          assert manifest["status"] == "ok"
+          PY
