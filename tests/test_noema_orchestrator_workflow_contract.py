@@ -10,6 +10,13 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from tests.test_noema_draft_admission_before_sidecar import (
+    EXPECTED_UPLOAD_CONDITION,
+    _parsed_noema_job,
+    _sidecar_upload_is_fail_closed,
+)
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
@@ -460,10 +467,20 @@ def test_noema_private_admission_uses_existing_metadata_credentials(
         case = tmp_path / str(index)
         case.mkdir()
         values = {"github.token": "workflow-only", **credentials}
+        # This fixture targets private-example, not the App-only k-csap path.
+        # Validate the branch guard before evaluating its legacy OR chain.
+        guarded = re.fullmatch(
+            r"env\.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' "
+            r"&& steps\.noema_metadata_app_token\.outputs\.token \|\| "
+            r"\(env\.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' "
+            r"&& \((.*?)\)\) \|\| ''",
+            expression,
+        )
+        assert guarded is not None
         token = next(
             (
                 values.get(term.strip(), "")
-                for term in expression.split("||")
+                for term in guarded.group(1).split("||")
                 if values.get(term.strip(), "")
             ),
             "",
@@ -506,14 +523,8 @@ def test_noema_private_admission_uses_existing_metadata_credentials(
             workflow, "Reject a stale trigger before credential or model setup"
         )
         guard_expression = re.search(r"GH_TOKEN: \$\{\{ (.*?) \}\}", guard).group(1)
-        guard_token = next(
-            (
-                values.get(term.strip(), "")
-                for term in guard_expression.split("||")
-                if values.get(term.strip(), "")
-            ),
-            "",
-        )
+        assert guard_expression == expression
+        guard_token = token
         guard_result = subprocess.run(
             [
                 shutil.which("bash") or "/bin/bash",
@@ -700,30 +711,166 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
 
 
 def test_noema_review_retains_sanitized_sidecar_evidence_after_any_outcome() -> None:
-    """Retain existing sanitized evidence on success, failure and cancellation.
+    """Only current non-Draft terminal producers retain the two sanitized paths.
 
-    Upload only after provisioning was attempted. Diagnostic upload failure
-    must not replace a valid verdict or a model failure with a storage error.
+    Forced runner shutdown may still prevent upload. This local contract does
+    not prove hosted retention, inference, or a qualifying App-owned approval.
     """
     workflow = workflow_text("noema-review.yml")
     name = "Upload contextual-orchestrator sidecar evidence"
-    step = workflow_step(workflow, name)
-    assert "steps.noema_sidecar.outcome != 'skipped'" in step
-    assert "steps.noema_sidecar.outcome != ''" in step
-    assert "continue-on-error: true" in step
+    uploads = [
+        step for step in _parsed_noema_job(workflow)["steps"]
+        if str(step.get("uses", "")).casefold().startswith("actions/upload-artifact@")
+    ]
+    assert len(uploads) == 1
+    step = uploads[0]
+    assert _sidecar_upload_is_fail_closed(workflow)
+    assert step["if"] == EXPECTED_UPLOAD_CONDITION
     strix_pin = re.search(
         r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
     ).group(1)
-    assert f"actions/upload-artifact@{strix_pin}" in step
-    assert "name: noema-sidecar-evidence" in step
-    assert "strix_runs/contextual-orchestrator-sidecar.stderr.log" in step
-    assert "strix_runs/contextual-orchestrator-preflight.json" in step
-    assert "if-no-files-found: ignore" in step
-    assert "retention-days: 5" in step
+    assert step["uses"] == f"actions/upload-artifact@{strix_pin}"
+    assert step["with"] == {
+        "name": "noema-sidecar-evidence",
+        "path": "strix_runs/contextual-orchestrator-sidecar.stderr.log\n"
+                "strix_runs/contextual-orchestrator-preflight.json\n",
+        "if-no-files-found": "ignore",
+        "retention-days": "5",
+    }
     prepare = workflow.index("      - name: Prepare Noema model verdict\n")
     upload = workflow.index(f"      - name: {name}\n")
     refresh = workflow.index(
         "      - name: Refresh repository-scoped Noema GitHub App token for publication\n"
     )
     assert prepare < upload < refresh
-    assert workflow.count("actions/upload-artifact@") == 1
+
+
+OWNED_EVIDENCE = (
+    "contextual-orchestrator-preflight.json",
+    "contextual-orchestrator-sidecar.stderr.log",
+)
+
+
+def _evidence_lifecycle_steps() -> tuple[dict, dict]:
+    """Read initialization and the real producer by parsed identities, in order."""
+    steps = _parsed_noema_job(workflow_text("noema-review.yml"))["steps"]
+    producer = next(step for step in steps if step.get("id") == "noema_sidecar")
+    # Until initialization exists, execute the defective producer prefix for RED.
+    initializer = next((step for step in steps if step.get("id") == "noema_evidence"), producer)
+    return initializer, producer
+
+
+def _run_evidence_lifecycle(workspace: Path, phase: str, marker: Path) -> subprocess.CompletedProcess[str]:
+    """Execute actual setup/run bodies with a harmless early-failure sidecar."""
+    initializer, producer = _evidence_lifecycle_steps()
+    sidecar = workspace / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(
+        '#!/bin/bash\nset -euo pipefail\nprintf reached >"$PHASE_MARKER"\n'
+        'if [ "$PHASE" = early ]; then exit 23; fi\n'
+        'printf "current sanitized diagnostic\\n" >"$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-sidecar.stderr.log"\n'
+        'printf \'{"contract":"strix-plain-chat-preflight-v2","ready_count":0,"probed_count":1,\n'
+        '"routes":[{"status":"rejected","http_status":429}]}\\n\' '
+        '>"$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"\n'
+        'if [ "$PHASE" = failure ]; then exit 23; fi\n',
+        encoding="utf-8",
+    )
+    bodies = [initializer["run"]] if initializer is producer else [initializer["run"], producer["run"]]
+    env = {**os.environ, "GITHUB_WORKSPACE": str(workspace), "PHASE": phase, "PHASE_MARKER": str(marker)}
+    result = None
+    for body in bodies:
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", body],
+            env=env, capture_output=True, text=True, check=False, timeout=5,
+        )
+        if result.returncode:
+            break  # Actions default success() skips the producer after setup failure.
+    assert result is not None
+    return result
+
+
+def test_evidence_initialization_failure_skips_actual_producer() -> None:
+    """An unsafe setup must not become a terminal producer eligible for upload."""
+    initializer, producer = _evidence_lifecycle_steps()
+    steps = _parsed_noema_job(workflow_text("noema-review.yml"))["steps"]
+    assert initializer.get("id") == "noema_evidence"
+    assert steps.index(initializer) < steps.index(producer)
+    assert initializer["if"] == producer["if"]
+    assert "always()" not in producer["if"]
+    assert "continue-on-error" not in initializer
+    assert "continue-on-error" not in producer
+
+
+@pytest.mark.parametrize("phase", ["early", "failure", "success"])
+def test_evidence_lifecycle_clears_stale_files_before_sidecar(tmp_path: Path, phase: str) -> None:
+    """Repeat actual initialization; preserve sentinels and genuine current diagnostics."""
+    workspace = tmp_path / "workspace"
+    evidence = workspace / "strix_runs"
+    evidence.mkdir(parents=True)
+    sentinel = evidence / "unrelated-sentinel"
+    sentinel.write_text("keep unrelated\n")
+    marker = tmp_path / "producer-reached"
+    for _ in range(2):
+        marker.unlink(missing_ok=True)
+        for name in OWNED_EVIDENCE:
+            (evidence / name).write_text("old evidence\n")
+        result = _run_evidence_lifecycle(workspace, phase, marker)
+        assert marker.read_text() == "reached"
+        assert result.returncode == (0 if phase == "success" else 23), result.stderr
+        assert sentinel.read_text() == "keep unrelated\n"
+        if phase == "early":
+            assert all(not (evidence / name).exists() for name in OWNED_EVIDENCE)
+        else:
+            assert (evidence / OWNED_EVIDENCE[1]).read_text() == "current sanitized diagnostic\n"
+            report = json.loads((evidence / OWNED_EVIDENCE[0]).read_text())
+            assert report["contract"] == "strix-plain-chat-preflight-v2"
+            assert report["routes"][0]["http_status"] == 429
+        assert sorted(p.name for p in evidence.iterdir()) == (
+            ["unrelated-sentinel"] if phase == "early" else sorted((*OWNED_EVIDENCE, "unrelated-sentinel"))
+        )
+
+
+@pytest.mark.parametrize("alias", ["linked-parent", "linked-workspace", "linked-evidence", "dotdot",
+                                  "symlink-preflight", "symlink-stderr", "hardlink-preflight", "hardlink-stderr",
+                                  "directory-preflight", "directory-stderr"])
+def test_evidence_initialization_rejects_path_aliases_without_deletion(tmp_path: Path, alias: str) -> None:
+    """Reject aliases before deleting either owned file or reaching the sidecar."""
+    actual = tmp_path / "real/workspace"
+    evidence = actual / "strix_runs"
+    evidence.mkdir(parents=True)
+    sentinel = tmp_path / "unrelated-sentinel"
+    sentinel.write_text("keep outside\n")
+    for name in OWNED_EVIDENCE:
+        (evidence / name).write_text("old evidence\n")
+    workspace = actual
+    if alias == "linked-parent":
+        (tmp_path / "alias").symlink_to(actual.parent, target_is_directory=True)
+        workspace = tmp_path / "alias/workspace"
+    elif alias == "linked-workspace":
+        workspace = tmp_path / "alias"
+        workspace.symlink_to(actual, target_is_directory=True)
+    elif alias == "linked-evidence":
+        evidence.rename(actual / "outside")
+        evidence.symlink_to(actual / "outside", target_is_directory=True)
+    elif alias == "dotdot":
+        (actual / "child").mkdir()
+        workspace = actual / "child/.."
+    else:
+        index = 0 if alias.endswith("preflight") else 1
+        target = evidence / OWNED_EVIDENCE[index]
+        target.unlink()
+        if alias.startswith("symlink"):
+            target.symlink_to(sentinel)
+        elif alias.startswith("hardlink"):
+            target.hardlink_to(sentinel)
+        else:
+            target.mkdir()
+    marker = tmp_path / "producer-reached"
+    result = _run_evidence_lifecycle(workspace, "early", marker)
+    assert result.returncode != 0
+    assert not marker.exists(), result.stderr
+    assert sentinel.read_text() == "keep outside\n"
+    assert all((evidence / name).exists() for name in OWNED_EVIDENCE)
+    for path in evidence.iterdir():
+        if path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1:
+            assert path.read_text() == "old evidence\n"
