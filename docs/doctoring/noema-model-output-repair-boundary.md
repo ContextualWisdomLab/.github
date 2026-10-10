@@ -21,7 +21,7 @@ Three `timeout --kill-after=20 900` commands remain in `opencode-review-dispatch
 1. Model-produced JSON, envelope, schema, and semantic-contract failures remain fail-closed and are not consumer-source findings.
 2. Every provider attempt reports a phase such as connecting, reading, decoding, or validating, its elapsed duration, a stable failure category, and the served model if known. Provider status classes such as 413, 429, 500, and 502 are retained as categories without copying provider secrets or raw model output.
 3. The triggering pull-request head is checked before model work and again before publication. A push to the same PR makes the old head obsolete; the old run must not publish a verdict or spend a second repair call.
-4. All model traffic for required review remains on contextual-orchestrator `orchestrator/free` and is subject to its discovery, capability, failover, and privacy policy.
+4. Private/internal model traffic for required review remains on contextual-orchestrator `orchestrator/free` and is subject to its discovery, capability, failover, and ZDR policy. Public Noema/OpenCode targets use the configured LiteLLM `auto` route and centrally stored API key.
 5. A workflow shell timeout is evidence about that shell command only. It must never be used as evidence that the gateway or provider ended inference.
 
 ## Verification
