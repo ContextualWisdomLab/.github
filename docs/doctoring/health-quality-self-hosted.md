@@ -23,6 +23,16 @@ PyYAML entry는 기존 `requirements-bandit-ci-hashes.txt`의 생성된6.0.3 has
 
 기존 CI는 PostgreSQL ignored 시험, 물리 GPU 및 Chromium/Safari를 실행하지 않는다. 이 이관은 해당 미실행 gate를 통과라고 주장하지 않는다. 별도 product acceptance는 필요한 실제 환경에서 유지한다. 이 저장소의 기존3job은 모두 self-hosted이므로 이 파일에 끌 hosted job은0개다. 다른 중앙 workflow의 hosted-only 기능 inventory·중지 여부는 해당 owner가 별도 수행한다.
 
+## 2026-10-10 admission 수리 후보
+
+- PR2600 기준 head는 `076a71caa3947b1ea4e1af099ea06ec3f3ea7eee`다. 현재 두 소스 파일의 미커밋 수리는 원격 실행이나 병합 완료가 아니다.
+- 실제 기존 shell에서 missing PR head SHA, closed PR, `refs/pull/0/merge`를 성공으로 수용하는 RED를 확인했다. 수리 후 같은 저장소의 open PR, 소문자 40자리 head/event SHA와 양수 번호 merge ref를 모두 검사한다. head SHA로 merge 후보를 대신하지 않는다.
+- push/manual은 유효한 branch ref와 event SHA를 검사한다. 모든 shell 검사가 끝난 뒤에만 `expected_sha`와 `admitted=true`를 출력하며 checkout과 실제 HEAD assertion이 같은 출력에 결합된다.
+- runner 배정 전 job 조건은 고정 private repository, gate, 이벤트와 PR 상태·번호·동일 저장소·번호에 맞는 merge ref를 확인한다. 이 조건의 skip은 실행된 quality 증거가 아니다. shell의 엄격한 SHA/ref 검사와 구분한다.
+- 부모의 추가 job guard RED는 기존 prefix/suffix 조건이 정확한 PR 번호 일치를 검사하지 않음을 보여준다. 수리 후 focused **10 tests / 62 subtests passed**, Ruff E9/F/I 및 format, diff-check exit0이다. actionlint 기본 실행은 기존 `cwlab` vocabulary 부재로 exit1이며, 해당 label만 선언한 scratch config 실행은 exit0이다. canonical 공유 vocabulary 수용으로 확대하지 않는다.
+- full repository gate, 현재 head의 self-hosted execution과 qualifying App review는 미완료다. 기존 persistent `health-source` checkout 경계는 이 admission 수리로 해결되지 않는다. startup_failure/account admission도 해결됐다고 주장하지 않는다.
+- 증거: `/Users/seonghobae/.hermes/health-evidence-runs/20261010-2220-central-resume/producer-admission/`. 아래 최초 구현 이력은 역사적 결과로 보존한다.
+
 ## TDD와 검증
 
 - 새 계약 시험을 먼저 실행: 중앙 producer 파일 없음으로3 errors, exit1. 기능 부재 RED다.

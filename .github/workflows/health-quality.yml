@@ -12,6 +12,20 @@ permissions:
 jobs:
   quality:
     name: ${{ inputs.gate }}
+    # Scheduling skips are NOT executed quality evidence; shell admission is stricter.
+    if: >-
+      github.repository == 'ContextualWisdomLab/health-evidence' &&
+      github.event.repository.private == true &&
+      contains(fromJSON('["documentation","rust","pwa"]'), inputs.gate) &&
+      github.sha != '' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.state == 'open' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.sha != '' &&
+        github.event.pull_request.number > 0 &&
+        github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/'))
     runs-on:
       group: CWL health CI
       labels: [self-hosted, Linux, X64, cwlab]
@@ -31,22 +45,46 @@ jobs:
           CALLER_PRIVATE: ${{ github.event.repository.private }}
           CALLER_EVENT: ${{ github.event_name }}
           CALLER_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          CALLER_PR_STATE: ${{ github.event.pull_request.state }}
+          CALLER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CALLER_SHA: ${{ github.sha }}
+          CALLER_REF: ${{ github.ref }}
           HEALTH_GATE: ${{ inputs.gate }}
         run: |
           set -euo pipefail
           [[ "$CALLER_REPOSITORY" == 'ContextualWisdomLab/health-evidence' ]] || exit 1
           [[ "$CALLER_PRIVATE" == 'true' ]] || exit 1
+          [[ "$CALLER_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           case "$CALLER_EVENT" in
-            push|workflow_dispatch) ;;
-            pull_request) [[ "$CALLER_HEAD_REPOSITORY" == "$CALLER_REPOSITORY" ]] || exit 1 ;;
+            push|workflow_dispatch)
+              [[ "$CALLER_REF" == refs/heads/* && "$CALLER_REF" != refs/heads/ ]] || exit 1
+              git check-ref-format "$CALLER_REF" || exit 1
+              ;;
+            pull_request)
+              [[ "$CALLER_HEAD_REPOSITORY" == "$CALLER_REPOSITORY" ]] || exit 1
+              [[ "$CALLER_PR_STATE" == 'open' ]] || exit 1
+              [[ "$CALLER_PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              [[ "$CALLER_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]] || exit 1
+              ;;
             *) exit 1 ;;
           esac
           case "$HEALTH_GATE" in documentation|rust|pwa) ;; *) exit 1 ;; esac
+          # PRs validate head metadata but execute the event's merge candidate.
+          printf 'expected_sha=%s\nadmitted=true\n' "$CALLER_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           path: health-source
-          ref: ${{ github.sha }}
+          ref: ${{ steps.admission.outputs.expected_sha }}
+      - name: Assert admitted checkout identity
+        env:
+          EXPECTED_SHA: ${{ steps.admission.outputs.expected_sha }}
+          ADMITTED: ${{ steps.admission.outputs.admitted }}
+        run: |
+          set -euo pipefail
+          [[ "$ADMITTED" == 'true' ]] || exit 1
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || exit 1
       - name: Verify documentation
         if: inputs.gate == 'documentation'
         run: python3 .github/scripts/verify-docs.py
