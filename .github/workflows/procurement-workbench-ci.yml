@@ -1,0 +1,258 @@
+name: Procurement Workbench CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: quality / Python ${{ matrix.python-version }}
+    runs-on:
+      group: CWL procurement CI
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - name: Admit immutable central definition
+        env:
+          WORKFLOW_JOB_CONTEXT: "${{ toJSON(job) }}"
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import json, os, re, sys
+          try:
+              context = json.loads(os.environ['WORKFLOW_JOB_CONTEXT'])
+          except (ValueError, KeyError):
+              sys.exit('procurement-ci: malformed central context')
+          if type(context) is not dict:
+              sys.exit('procurement-ci: malformed central context')
+          repository = context.get('workflow_repository')
+          sha = context.get('workflow_sha')
+          file = context.get('workflow_file_path')
+          ref = context.get('workflow_ref')
+          if repository != 'ContextualWisdomLab/.github' or file != '.github/workflows/procurement-workbench-ci.yml':
+              sys.exit('procurement-ci: wrong central definition')
+          if type(sha) is not str or not re.fullmatch('[0-9a-f]{40}', sha) or sha == '0' * 40:
+              sys.exit('procurement-ci: malformed central sha')
+          if ref != f'{repository}/{file}@{sha}':
+              sys.exit('procurement-ci: central ref is not immutable')
+          PY
+
+      - name: Admit fixed procurement source
+        id: admit
+        env:
+          CALLER_REPOSITORY: "${{ github.repository }}"
+          EVENT_NAME: "${{ github.event_name }}"
+          EVENT_REF: "${{ github.ref }}"
+          PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
+          PUSH_SHA: "${{ github.sha }}"
+          HEAD_REPOSITORY: "${{ github.event.pull_request.head.repo.full_name }}"
+          BASE_REPOSITORY: "${{ github.event.pull_request.base.repo.full_name }}"
+          PR_NUMBER: "${{ github.event.pull_request.number }}"
+          PUSH_DELETED: "${{ github.event.deleted }}"
+        run: |
+          set -euo pipefail
+          expected_repository="ContextualWisdomLab/procurement-workbench"
+          if [ "$CALLER_REPOSITORY" != "$expected_repository" ]; then
+            echo "procurement-ci: unsupported caller repository" >&2
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            "pull_request")
+              if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || [ "$EVENT_REF" != "refs/pull/$PR_NUMBER/merge" ]; then
+                echo "procurement-ci: malformed pull request ref" >&2
+                exit 1
+              fi
+              if [ "$HEAD_REPOSITORY" != "$expected_repository" ] || [ "$BASE_REPOSITORY" != "$expected_repository" ]; then
+                echo "procurement-ci: fork admission refused" >&2
+                exit 1
+              fi
+              SOURCE_SHA="$PR_HEAD_SHA"
+              ;;
+            "push")
+              if [ "$EVENT_REF" != "refs/heads/master" ] || [ "$PUSH_DELETED" != "false" ]; then
+                echo "procurement-ci: unsupported push ref or deleted push" >&2
+                exit 1
+              fi
+              SOURCE_SHA="$PUSH_SHA"
+              ;;
+            *) echo "procurement-ci: unsupported event" >&2; exit 1 ;;
+          esac
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [ "$SOURCE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "procurement-ci: malformed source sha" >&2
+            exit 1
+          fi
+          printf 'source_sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare isolated job workspace
+        id: prepare
+        env:
+          WORKSPACE_BASE: ${{ github.workspace }}
+          TEMP_BASE: ${{ runner.temp }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import os, pathlib, re, shutil, sys
+          def real_directory(value):
+              path = pathlib.Path(value)
+              if not path.is_absolute() or any(p.is_symlink() for p in (path, *path.parents)) or not path.is_dir() or path != path.resolve():
+                  sys.exit('procurement-ci: unsafe workspace base')
+              return path
+          workspace = real_directory(os.environ['WORKSPACE_BASE'])
+          temp = real_directory(os.environ['TEMP_BASE'])
+          run_id, attempt, version = (os.environ[k] for k in ('RUN_ID', 'RUN_ATTEMPT', 'PYTHON_VERSION'))
+          if not re.fullmatch(r'[1-9][0-9]*', run_id) or not re.fullmatch(r'[1-9][0-9]*', attempt) or version not in ('3.12', '3.14'):
+              sys.exit('procurement-ci: invalid job identity')
+          relative = f'procurement-source-{run_id}-{attempt}-{version}'
+          source = workspace / relative
+          private = temp / f'procurement-private-{run_id}-{attempt}-{version}'
+          created = []
+          try:
+              for path in (source, private):
+                  path.mkdir(mode=0o700)
+                  created.append(path)
+              (private / 'home').mkdir(mode=0o700)
+              values = {'source_relative': relative, 'source_absolute': str(source), 'job_root': str(private)}
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                  for key, value in values.items():
+                      output.write(f'{key}={value}\n')
+          except BaseException:
+              for path in reversed(created):
+                  shutil.rmtree(path)
+              raise
+          PY
+
+      - name: Checkout admitted product source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        env:
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.hooksPath
+          GIT_CONFIG_VALUE_0: /dev/null
+          HOME: ${{ steps.prepare.outputs.job_root }}/home
+        with:
+          persist-credentials: false
+          ref: ${{ steps.admit.outputs.source_sha }}
+          clean: true
+          path: ${{ steps.prepare.outputs.source_relative }}
+
+      - name: Verify admitted checkout
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          EXPECTED_SHA: ${{ steps.admit.outputs.source_sha }}
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -c core.hooksPath=/dev/null -c core.fsmonitor=false rev-parse HEAD)"
+          [ "$actual_sha" = "$EXPECTED_SHA" ] || { echo 'procurement-ci: checkout sha mismatch' >&2; exit 1; }
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          cache-local-path: ${{ steps.prepare.outputs.job_root }}/uv-cache
+          enable-cache: false
+          save-cache: false
+          python-version: ${{ matrix.python-version }}
+          working-directory: ${{ steps.prepare.outputs.source_absolute }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+
+      - name: Verify frozen lockfile
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
+          UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
+        run: |
+          set -euo pipefail
+          unset PYTHONHOME PYTHONPATH
+          uv lock --check
+
+      - name: Install frozen dependencies
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
+          UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
+        run: |
+          set -euo pipefail
+          unset PYTHONHOME PYTHONPATH
+          uv sync --frozen --group dev
+
+      - name: Run full pytest suite
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
+          UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
+          PROCUREMENT_TEST_TEMP: ${{ steps.prepare.outputs.job_root }}/pytest
+        run: |
+          set -euo pipefail
+          unset PYTHONHOME PYTHONPATH
+          uv run pytest -q --basetemp "$PROCUREMENT_TEST_TEMP"
+
+      - name: Run Ruff
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
+          UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
+        run: |
+          set -euo pipefail
+          unset PYTHONHOME PYTHONPATH
+          uv run ruff check .
+
+      - name: Check UI JavaScript syntax
+        working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        run: |
+          set -euo pipefail
+          node --check procurement/ui.js
+
+      - name: Cleanup job-private workspace
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        env:
+          WORKSPACE_BASE: ${{ github.workspace }}
+          TEMP_BASE: ${{ runner.temp }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          CLEANUP_SOURCE: ${{ steps.prepare.outputs.source_absolute }}
+          CLEANUP_PRIVATE: ${{ steps.prepare.outputs.job_root }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import os, pathlib, re, shutil, sys
+          def real_directory(value):
+              path = pathlib.Path(value)
+              if not path.is_absolute() or any(p.is_symlink() for p in (path, *path.parents)) or not path.is_dir() or path != path.resolve():
+                  sys.exit('procurement-ci: unsafe cleanup base')
+              return path
+          workspace = real_directory(os.environ['WORKSPACE_BASE'])
+          temp = real_directory(os.environ['TEMP_BASE'])
+          run_id, attempt, version = (os.environ[k] for k in ('RUN_ID', 'RUN_ATTEMPT', 'PYTHON_VERSION'))
+          if not re.fullmatch(r'[1-9][0-9]*', run_id) or not re.fullmatch(r'[1-9][0-9]*', attempt) or version not in ('3.12', '3.14'):
+              sys.exit('procurement-ci: invalid cleanup identity')
+          expected = (workspace / f'procurement-source-{run_id}-{attempt}-{version}', temp / f'procurement-private-{run_id}-{attempt}-{version}')
+          supplied = (os.environ['CLEANUP_SOURCE'], os.environ['CLEANUP_PRIVATE'])
+          for path, value in zip(expected, supplied):
+              if value != str(path):
+                  sys.exit('procurement-ci: refusing unexpected cleanup path')
+              if path.is_symlink() or not path.is_dir():
+                  sys.exit('procurement-ci: missing or linked cleanup root')
+          for path in expected:
+              shutil.rmtree(path)
+          PY
