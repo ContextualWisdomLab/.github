@@ -139,10 +139,11 @@ def _is_opencode_post_approval_followup(
         and _argument_value(argument_values, "--max-prs") == "1"
         and _argument_value(argument_values, "--review-dispatch-limit") == "0"
         and _argument_value(argument_values, "--merge-mode")
-        == "direct_or_auto"
+        == "disabled"
+        and "--dry-run" in argument_set
         and "--pr-number" in argument_set
         and "--no-trigger-reviews" in argument_set
-        and "--enable-auto-merge" in argument_set
+        and "--no-enable-auto-merge" in argument_set
         and "--no-update-branches" in argument_set
     )
 

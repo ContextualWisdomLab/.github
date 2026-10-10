@@ -53,8 +53,12 @@ jobs:
     # Skip before runner admission when coalescing is off. Do not move this
     # gate back to step scope: that reintroduces multi-hour queue wait for
     # an inert echo under the org concurrent-job ceiling.
-    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
-    runs-on: ubuntu-24.04
+    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true' && github.repository == 'ContextualWisdomLab/.github' && github.event_name == 'schedule' && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review-coalesce-tick.yml@refs/heads/main'
+    # This trusted metadata-only tick runs exclusively from central main and
+    # uses the already-admitted organization review automation pool.
+    runs-on:
+      group: CWL MCP remediation
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 4
     permissions:
       actions: write
@@ -128,6 +132,7 @@ jobs:
               --review-dispatch-limit -1 \
               --branch-update-limit 0 \
               --no-enable-auto-merge \
+              --merge-mode disabled \
               --no-update-branches \
               --trigger-reviews \
               || echo "::warning::Coalesce tick pass failed for ${repo}; continuing with remaining repositories."

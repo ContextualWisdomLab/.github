@@ -8022,7 +8022,10 @@ jobs:
             main|master) project_flow="github-flow" ;;
           esac
 
+          # Publication does not grant merge authority. This follow-up only
+          # assesses the exact head; separately authorized scheduler runs own mutations.
           args=(
+            --dry-run
             --repo "$GH_REPOSITORY"
             --base-branch "$base_branch"
             --max-prs 1
@@ -8031,8 +8034,8 @@ jobs:
             --security-workflow "Strix Security Scan"
             --review-dispatch-limit 0
             --no-trigger-reviews
-            --enable-auto-merge
-            --merge-mode direct_or_auto
+            --no-enable-auto-merge
+            --merge-mode disabled
             --no-update-branches
           )
           if [ -n "${PR_NUMBER:-}" ]; then
