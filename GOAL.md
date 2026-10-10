@@ -1,6 +1,6 @@
 # Goal — K-CSAP 중앙 self-hosted 품질 실행
 
-갱신: 2026-10-09 KST. 사용자 직접 지시를 따른다.
+갱신: 2026-10-10 KST. 사용자 직접 지시를 따른다. 최신 지시는 원격 Startup failure를 만드는 hosted 절차도 전환 대상으로 포함하며, 전환할 수 없으면 비활성화하도록 허용한다. 병합을 위한 실행·독립 App 승인까지 진행할 권한이 있다. 기준 완화·보호 우회·승인 조작은 허용하지 않는다.
 
 ## 결과
 
@@ -74,4 +74,8 @@
 
 ## Hosted-only retirement
 
-K-CSAP 일반 품질 검증은 hosted-only가 아니다. 중앙 self-hosted가 실제 활성화되면 제품의 hosted 실행 경로를 제거한다. group access/runner가 준비되지 않은 동안 old hosted workflow를 먼저 끄고 성공으로 표시하지 않는다. 새 중앙 gate가 실제 실행되지 않으면 unavailable evidence로 남는다.
+K-CSAP 일반 품질 검증은 hosted-only가 아니다. 중앙 self-hosted producer로 교체하며 hosted fallback은 제거한다. 최신 사용자는 Startup failure 경로를 전환할 수 없으면 끄도록 허용했다. disabled producer는 unavailable evidence로 남기며 통과 또는 보안 면제로 표시하지 않는다.
+
+2026-10-10 직접 조치: 중앙 `.github`의 동적 Code Quality 설정을 supported PATCH `state=not-configured`로 비활성화하고 GET readback을 확인했다. self-hosted labeled 모드는 API가 지원하지만 현재 CodeQL group 4의 workflow allowlist는 동적 quality를 허용하지 않는다. 승인된 경로의 활성화 전까지 이 producer를 중지한다. 중앙 advanced `codeql-pr.yml`과 `codeql-scan-dispatch.yml`은 active로 보존했다. 일반 Actions disable API는 동적 workflow에서 422를 반환했으므로 registry `active`만으로 feature 설정을 판단하지 않는다. 과거 실패 check는 삭제하거나 성공으로 바꾸지 않는다.
+
+제품 `k-csap-skills` Code Quality 설정은 GET `not-configured`이며 이 세션은 제품 설정을 수정하지 않았다. kelp가 제품 dynamic 설정의 단일 담당자다. #2565 shared routing 및 #2560/Remora auto/key custody는 유지한다. 다음 실행 단계는 중앙 PR #2615의 actual runner/auto App gate를 기존 경로에서 활성화하고 일반 병합까지 진행하는 것이다.
