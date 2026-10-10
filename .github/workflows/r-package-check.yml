@@ -45,8 +45,8 @@ on:
         description: >-
           JSON array of {os, r, http-user-agent?} objects for
           strategy.matrix.config. Default is a single ubuntu-latest/release
-          leg; override with a JSON array for a multi-OS/multi-R-version
-          matrix.
+          leg. Only ubuntu-latest and ubuntu-24.04 Linux/x64 image aliases
+          execute; other OS/architecture legs are explicitly STOP, not PASS.
         required: false
         type: string
         default: '[{"os": "ubuntu-latest", "r": "release"}]'
@@ -91,14 +91,63 @@ permissions:
   contents: read
 
 jobs:
+  admit-platforms:
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+    outputs:
+      matrix: ${{ steps.admit.outputs.matrix }}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+      - id: admit
+        env:
+          R_MATRIX: ${{ inputs.r_matrix }}
+        shell: bash
+        run: |
+          matrix=$(python - "$R_MATRIX" <<'PY'
+          """Bound the R matrix to supported Linux/x64 image aliases, never runner labels."""
+          import json
+          import sys
+
+
+          def admit(raw):
+              """Reject unsupported matrix legs before any R job can be scheduled."""
+              rows = json.loads(raw)
+              if not isinstance(rows, list) or not 1 <= len(rows) <= 64:
+                  raise ValueError('Expected 1..64 matrix objects')
+              for row in rows:
+                  if not isinstance(row, dict) or not isinstance(row.get('os'), str):
+                      raise ValueError('Expected an OS string in each matrix object')
+                  if not isinstance(row.get('r'), str) or not row['r'].strip():
+                      raise ValueError('Expected a nonempty R version')
+                  if row['os'] in ('ubuntu-latest', 'ubuntu-24.04'):
+                      continue
+                  raise ValueError('STOP unsupported platform leg: ' + repr(row['os']))
+              return rows
+
+
+          if __name__ == '__main__':
+              try:
+                  print(json.dumps(admit(sys.argv[1]), separators=(',', ':')))
+              except (ValueError, TypeError, IndexError) as error:
+                  print(str(error), file=sys.stderr)
+                  sys.exit(1)
+          PY
+          )
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
   R-CMD-check:
-    runs-on: ${{ matrix.config.os }}
+    needs: admit-platforms
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
 
     strategy:
       fail-fast: false
       matrix:
-        config: ${{ fromJSON(inputs.r_matrix) }}
+        config: ${{ fromJSON(needs.admit-platforms.outputs.matrix) }}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}

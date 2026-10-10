@@ -64,10 +64,16 @@ on:
       - "scripts/ci/zdr_policy.py"
       - "scripts/ci/contextual_orchestrator_review_policy.py"
       - "scripts/ci/contextual_orchestrator_review_launcher.py"
+      - "scripts/ci/personal_review_route.py"
       - "scripts/ci/contextual_orchestrator_review_sidecar.sh"
       - "tests/test_zdr_policy.py"
       - "tests/test_contextual_orchestrator_review_policy.py"
       - "tests/test_contextual_orchestrator_review_launcher.py"
+      - "tests/test_review_auto_route.py"
+      - "tests/test_personal_review_route.py"
+      - "tests/test_tokyo_review_consumer.py"
+      - "tests/test_review_auto_cost_admission.py"
+      - "tests/test_review_ai_app_independence.py"
       - "tests/test_review_preflight_concurrency.py"
       - "tests/test_contextual_orchestrator_review_sidecar_contract.py"
       - "tests/test_sidecar_disk_free_guard.py"
@@ -140,7 +146,9 @@ permissions:
 jobs:
   agent_review_runtime_quality:
     name: agent-review-runtime-quality
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -283,10 +291,16 @@ jobs:
               scripts/ci/zdr_policy.py|\
               scripts/ci/contextual_orchestrator_review_policy.py|\
               scripts/ci/contextual_orchestrator_review_launcher.py|\
+              scripts/ci/personal_review_route.py|\
               scripts/ci/contextual_orchestrator_review_sidecar.sh|\
               tests/test_zdr_policy.py|\
               tests/test_contextual_orchestrator_review_policy.py|\
               tests/test_contextual_orchestrator_review_launcher.py|\
+              tests/test_review_auto_route.py|\
+              tests/test_personal_review_route.py|\
+              tests/test_tokyo_review_consumer.py|\
+              tests/test_review_auto_cost_admission.py|\
+              tests/test_review_ai_app_independence.py|\
               tests/test_review_preflight_concurrency.py|\
               tests/test_contextual_orchestrator_review_sidecar_contract.py|\
               tests/test_sidecar_disk_free_guard.py|\
@@ -473,6 +487,11 @@ jobs:
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
             tests/test_contextual_orchestrator_review_launcher.py \
+            tests/test_review_auto_route.py \
+            tests/test_personal_review_route.py \
+            tests/test_tokyo_review_consumer.py \
+            tests/test_review_auto_cost_admission.py \
+            tests/test_review_ai_app_independence.py \
             tests/test_review_preflight_concurrency.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_sidecar_disk_free_guard.py \
@@ -514,6 +533,11 @@ jobs:
             tests/test_zdr_policy.py \
             tests/test_contextual_orchestrator_review_policy.py \
             tests/test_contextual_orchestrator_review_launcher.py \
+            tests/test_review_auto_route.py \
+            tests/test_personal_review_route.py \
+            tests/test_tokyo_review_consumer.py \
+            tests/test_review_auto_cost_admission.py \
+            tests/test_review_ai_app_independence.py \
             tests/test_review_preflight_concurrency.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_sidecar_disk_free_guard.py \

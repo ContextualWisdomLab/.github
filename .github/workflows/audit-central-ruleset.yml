@@ -25,7 +25,9 @@ permissions:
 jobs:
   audit:
     name: Audit organization ruleset 18156473
-    runs-on: ubuntu-latest
+    runs-on:
+      group: ${{ (github.repository == 'ContextualWisdomLab/.github' && github.ref == 'refs/heads/main' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.repository == 'ContextualWisdomLab/.github' && github.ref == 'refs/heads/main' && endsWith(github.workflow_ref, '@refs/heads/main') && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     env:
       GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
     steps:

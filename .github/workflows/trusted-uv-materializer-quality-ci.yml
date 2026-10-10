@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+      - ".github/workflows/company-default-head-trust-gate.yml"
+      - ".github/workflows/company-settlement-validate.yml"
+      - "tests/test_company_default_head_trust_gate.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/verify_release_maturin_tool_assets.py"
       - "tests/conftest.py"
@@ -21,6 +24,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+      - ".github/workflows/company-default-head-trust-gate.yml"
+      - ".github/workflows/company-settlement-validate.yml"
+      - "tests/test_company_default_head_trust_gate.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/verify_release_maturin_tool_assets.py"
       - "tests/conftest.py"
@@ -48,7 +54,9 @@ env:
 jobs:
   minimum-python-contract:
     name: Python 3.10 compatibility contract
-    runs-on: ubuntu-latest
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 10
     steps:
       - name: Harden runner
@@ -94,7 +102,9 @@ jobs:
 
   full-quality-gate:
     name: Python 3.14 full quality gate
-    runs-on: ubuntu-latest
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 20
     steps:
       - name: Harden runner

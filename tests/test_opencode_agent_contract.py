@@ -120,9 +120,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/qwen3.6-plus-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
-    if candidates_text == "contextual-orchestrator/orchestrator/free":
-        assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
-        assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    if candidates_text == "contextual-orchestrator/orchestrator/auto":
+        assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/auto"' in workflow
+        assert 'MODEL: contextual-orchestrator/orchestrator/auto' in workflow
         assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
         return
     assert candidates_text.startswith(conditional_public_candidate)
@@ -2076,7 +2076,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair"
         in workflow
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/auto"' in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
@@ -2113,7 +2113,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
         not in publish_step
     )
-    assert "MODEL: contextual-orchestrator/orchestrator/free" in publish_step
+    assert "MODEL: contextual-orchestrator/orchestrator/auto" in publish_step
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' not in publish_step
     assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" not in publish_step
     assert (
@@ -2192,7 +2192,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/auto"' in workflow
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(
         r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"',
