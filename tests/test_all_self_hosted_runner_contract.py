@@ -114,7 +114,7 @@ def test_isolated_fallback_never_selects_privileged_group() -> None:
                 assert json.loads(match.group(1)) == expected, (
                     path, job_id, 'unsafe fallback', fallback,
                 )
-    assert observed == 22, ('conditional runner fallback coverage', observed)
+    assert observed == 29, ('conditional runner fallback coverage', observed)
 
 
 def test_isolated_label_is_scoped_to_dedicated_runner_group() -> None:
@@ -129,3 +129,55 @@ def test_isolated_label_is_scoped_to_dedicated_runner_group() -> None:
                 block += '\n' + '\n'.join(lines[index + 1:index + 3])
             if 'cwlab-ci-isolated' in block:
                 assert 'CWL CI isolated' in block, (path, block)
+
+
+TRUSTED_MAIN_UNION_SELECTORS = {
+    '.github/workflows/actions-queue-health.yml': {'collect'},
+    '.github/workflows/audit-central-ruleset.yml': {'audit'},
+    '.github/workflows/organization-commercial-readiness-loop.yml': {'coordinate'},
+    '.github/workflows/pr-auto-rebase.yml': {'auto-rebase'},
+    '.github/workflows/repository-metadata-reconcile.yml': {'validate', 'apply'},
+    '.github/workflows/sbom-inventory-scheduler.yml': {'aggregate-sbom-inventory'},
+}
+
+
+def test_trusted_main_union_selectors_preserve_control_and_isolated_fallback() -> None:
+    """Resolve main/head routing conflicts without restoring hosted fallback."""
+    trusted_main = '{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}'
+    isolated_fallback = (
+        '{"group":"CWL CI isolated",'
+        '"labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}'
+    )
+    for workflow_path, job_ids in TRUSTED_MAIN_UNION_SELECTORS.items():
+        workflow = yaml.safe_load(Path(workflow_path).read_text())
+        for job_id in job_ids:
+            mapping = workflow['jobs'][job_id]['runs-on']
+            assert isinstance(mapping, dict), (workflow_path, job_id, mapping)
+            assert set(mapping) == {'group', 'labels'}
+            group = mapping['group']
+            labels = mapping['labels']
+            assert group.endswith(').group }}')
+            assert labels.endswith(').labels }}')
+            assert group.removesuffix(').group }}') == labels.removesuffix(').labels }}')
+            runner = '${{ ' + group[5:].removesuffix(').group }}') + ' }}'
+            expected = (
+                "${{ github.repository == 'ContextualWisdomLab/.github' && "
+                "github.ref == 'refs/heads/main' && "
+                "endsWith(github.workflow_ref, '@refs/heads/main') && "
+                f"fromJSON('{trusted_main}') || fromJSON('{isolated_fallback}') }}" + "}"
+            )
+            assert runner == expected, (workflow_path, job_id, runner)
+            condition = runner[4:].split(' && fromJSON(', 1)[0]
+            for repository in ('ContextualWisdomLab/.github', 'ContextualWisdomLab/example'):
+                for ref in ('refs/heads/main', 'refs/pull/2565/merge', 'refs/heads/candidate'):
+                    for workflow_ref in ('main', 'candidate'):
+                        terms = {
+                            "github.repository == 'ContextualWisdomLab/.github'": repository == 'ContextualWisdomLab/.github',
+                            "github.ref == 'refs/heads/main'": ref == 'refs/heads/main',
+                            "endsWith(github.workflow_ref, '@refs/heads/main')": workflow_ref == 'main',
+                        }
+                        admitted = all(terms[term] for term in condition.split(' && '))
+                        wanted = repository == 'ContextualWisdomLab/.github' and ref == 'refs/heads/main' and workflow_ref == 'main'
+                        assert admitted == wanted, (workflow_path, job_id, repository, ref, workflow_ref)
+            assert 'ubuntu-24.04' not in runner
+            assert 'ubuntu-latest' not in runner

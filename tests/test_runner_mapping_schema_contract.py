@@ -21,4 +21,4 @@ def test_dynamic_group_routing_uses_explicit_yaml_mapping() -> None:
                 assert labels.endswith(').labels }}'), (path, job_id, labels)
                 assert group.removesuffix(').group }}') == labels.removesuffix(').labels }}'), (path, job_id)
                 assert 'CWL CI isolated' in group and 'cwlab-ci-isolated' in labels, (path, job_id)
-    assert observed == 22, observed
+    assert observed == 29, observed

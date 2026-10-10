@@ -156,6 +156,7 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         return 0
     expected_base = _canonical_base(pull_request)
     actor = _reviewer_actor()
+    author = gate.require_distinct_pr_author(pull_request, actor)
     if pull_request.get("isDraft"):
         print("PR is draft; Noema verdict preparation skipped.")
         return 0
@@ -190,6 +191,8 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             "pull_request_number": number,
             "expected_head": expected,
             "expected_base": expected_base,
+            "reviewer_actor": actor,
+            "pull_request_author": author,
             "verdict": verdict,
         },
     )
@@ -250,6 +253,8 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             "pull_request_number",
             "expected_head",
             "expected_base",
+            "reviewer_actor",
+            "pull_request_author",
             "verdict",
         }
         if set(payload) != required_keys:
@@ -277,6 +282,14 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             print("Pull request base advanced after model review; stale prepared verdict was not published.")
             return 0
         actor = _reviewer_actor(allow_refreshed_app=True)
+        author = gate.require_distinct_pr_author(current_pull_request, actor)
+        if payload["pull_request_author"] != author:
+            raise RuntimeError("Noema pull request author changed after verdict preparation")
+        reviewer_actor = payload["reviewer_actor"]
+        if not isinstance(reviewer_actor, str) or not reviewer_actor.strip():
+            raise RuntimeError("Noema prepared reviewer actor is invalid")
+        if reviewer_actor.strip().casefold() != actor.strip().casefold():
+            raise RuntimeError("Noema refreshed reviewer actor differs from verdict preparation")
         if current_pull_request.get("isDraft"):
             print("PR became draft after model review; prepared verdict was not published.")
             return 0

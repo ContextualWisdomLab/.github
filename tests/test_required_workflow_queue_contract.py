@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 2),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -1406,15 +1405,15 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     """
     workflow = workflow_text("noema-review.yml")
 
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert 'NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || \'\' }}' in workflow
     assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
     assert (
         "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
         in workflow
     )
-    # The review step must prefer the PAT over the exchanged app token.
+    # Non-kcsap consumers retain PAT preference; k-csap is App-only.
     assert (
-        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        "GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}"
         in workflow
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow

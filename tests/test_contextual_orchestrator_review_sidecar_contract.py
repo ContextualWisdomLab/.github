@@ -517,7 +517,7 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}" in workflow
 
 
 def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
@@ -624,7 +624,7 @@ def test_sidecar_rebuilds_a_damaged_persistent_venv(tmp_path) -> None:
     re-running ``venv`` over a damaged ``pip`` package leaves it unimportable.
     """
     text = _read(SIDECAR)
-    line = next(l for l in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in l)
+    line = next(candidate for candidate in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in candidate)
     work = tmp_path / "work"
     site = work / ".venv" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
     env = {"PATH": os.environ["PATH"], "ORCHESTRATOR_WORK": str(work),
