@@ -15,6 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/bandscope-ci.yml"
 
 
+def test_dedicated_runner_label_is_registered_for_actionlint():
+    """Declare the exact workflow label without changing runner admission."""
+    config = yaml.safe_load((ROOT / ".github/actionlint.yaml").read_text(encoding="utf-8"))
+    labels = config["self-hosted-runner"]["labels"]
+    assert "bandscope-ci" in labels
+    assert "cwlab-ci-isolated" in labels
+    assert "cwlab-control" in labels
+
+
 def workflow():
     """Parse GitHub's on key without YAML 1.1's boolean coercion."""
     assert WORKFLOW.is_file(), "BandScope reusable producer is absent"

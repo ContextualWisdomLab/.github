@@ -63,7 +63,7 @@ class _GatewayStub(BaseHTTPRequestHandler):
                 "id": "stub",
                 "object": "chat.completion",
                 "created": 0,
-                "model": "orchestrator/free",
+                "model": "orchestrator/auto",
                 "choices": [
                     {
                         "index": 0,
@@ -128,8 +128,8 @@ def _run_opencode(
         json.dumps(
             {
                 "$schema": "https://opencode.ai/config.json",
-                "model": "contextual-orchestrator/orchestrator/free",
-                "small_model": "contextual-orchestrator/orchestrator/free",
+                "model": "contextual-orchestrator/orchestrator/auto",
+                "small_model": "contextual-orchestrator/orchestrator/auto",
                 "enabled_providers": ["contextual-orchestrator"],
                 "provider": {"contextual-orchestrator": provider},
             }
@@ -154,7 +154,7 @@ def _run_opencode(
             "reply with ok",
             "--pure",
             "--model",
-            "contextual-orchestrator/orchestrator/free",
+            "contextual-orchestrator/orchestrator/auto",
         ],
         cwd=project,
         env=environment,

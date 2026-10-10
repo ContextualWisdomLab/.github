@@ -194,7 +194,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}" in workflow
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in workflow
     prepare = workflow_step(workflow, "Prepare Noema model verdict")
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
     assert '.github/actions/noema-review/two_phase.py' in prepare
@@ -460,10 +460,20 @@ def test_noema_private_admission_uses_existing_metadata_credentials(
         case = tmp_path / str(index)
         case.mkdir()
         values = {"github.token": "workflow-only", **credentials}
+        # This fixture targets private-example, not the App-only k-csap path.
+        # Validate the branch guard before evaluating its legacy OR chain.
+        guarded = re.fullmatch(
+            r"env\.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' "
+            r"&& steps\.noema_metadata_app_token\.outputs\.token \|\| "
+            r"\(env\.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' "
+            r"&& \((.*?)\)\) \|\| ''",
+            expression,
+        )
+        assert guarded is not None
         token = next(
             (
                 values.get(term.strip(), "")
-                for term in expression.split("||")
+                for term in guarded.group(1).split("||")
                 if values.get(term.strip(), "")
             ),
             "",
@@ -506,14 +516,8 @@ def test_noema_private_admission_uses_existing_metadata_credentials(
             workflow, "Reject a stale trigger before credential or model setup"
         )
         guard_expression = re.search(r"GH_TOKEN: \$\{\{ (.*?) \}\}", guard).group(1)
-        guard_token = next(
-            (
-                values.get(term.strip(), "")
-                for term in guard_expression.split("||")
-                if values.get(term.strip(), "")
-            ),
-            "",
-        )
+        assert guard_expression == expression
+        guard_token = token
         guard_result = subprocess.run(
             [
                 shutil.which("bash") or "/bin/bash",

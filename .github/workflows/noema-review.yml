@@ -42,8 +42,8 @@ jobs:
         && github.event.pull_request.head.repo.full_name == github.repository
       )
     runs-on:
-      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: 5
     outputs:
       admitted: ${{ steps.live_head.outputs.admitted }}
@@ -72,7 +72,13 @@ jobs:
             exit 1
           fi
           echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
-          if [ -n "${METADATA_TOKEN:-}" ]; then
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/k-csap-skills" ]; then
+            if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+              echo "::error::k-csap-skills Noema metadata requires the native GitHub App client ID and private key; credential fallback is forbidden."
+              exit 1
+            fi
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          elif [ -n "${METADATA_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
           elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
             echo "source=github-app" >>"$GITHUB_OUTPUT"
@@ -96,7 +102,7 @@ jobs:
       - name: Admit only the exact live Noema head
         id: live_head
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_metadata_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token)) || '' }}
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
@@ -140,8 +146,8 @@ jobs:
     # path, matching strix.yml's identical repository_dispatch behavior.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on:
-      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -198,8 +204,8 @@ jobs:
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'closed' || github.event.action == 'converted_to_draft')
     runs-on:
-      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     # Bound this job well short of GitHub's 360-minute platform default. Its
     # only step is a single-repository, status-filtered gh api --paginate
     # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
@@ -378,8 +384,8 @@ jobs:
     name: noema-review
     needs: [admit-current-head, changed-scope]
     runs-on:
-      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL MCP remediation","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own
@@ -528,7 +534,13 @@ jobs:
             exit 1
           fi
           echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
-          if [ -n "${METADATA_TOKEN:-}" ]; then
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/k-csap-skills" ]; then
+            if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+              echo "::error::k-csap-skills Noema metadata requires the native GitHub App client ID and private key; credential fallback is forbidden."
+              exit 1
+            fi
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          elif [ -n "${METADATA_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
           elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
             echo "source=github-app" >>"$GITHUB_OUTPUT"
@@ -552,7 +564,7 @@ jobs:
       - name: Reject a stale trigger before credential or model setup
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_metadata_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token)) || '' }}
         run: |
           set -euo pipefail
           if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -650,7 +662,7 @@ jobs:
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
-          NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}
+          NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}
         run: |
           set -euo pipefail
 
@@ -660,6 +672,15 @@ jobs:
           fi
           repository_name="${TARGET_REPOSITORY#*/}"
           echo "repository=$repository_name" >>"$GITHUB_OUTPUT"
+
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/k-csap-skills" ]; then
+            if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+              echo "::error::k-csap-skills Noema reviewer requires the native GitHub App client ID and private key; PAT/OIDC fallback is forbidden."
+              exit 1
+            fi
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then
             echo "source=pat" >>"$GITHUB_OUTPUT"
@@ -761,7 +782,7 @@ jobs:
       - name: Validate current pull request head
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}
         run: |
           set -euo pipefail
           if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -781,7 +802,7 @@ jobs:
         if: env.PR_NUMBER != ''
         id: target_visibility
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -834,9 +855,13 @@ jobs:
         if: env.PR_NUMBER != ''
         id: live_draft
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema reviewer credential is missing for live draft check."
+            exit 1
+          fi
           live_draft=false
           if pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" 2>/tmp/noema-live-draft-error)"; then
             if jq -e -s 'length == 1 and (.[0] | type == "object" and .draft == true)' <<<"$pull_request_json" >/dev/null 2>&1; then
@@ -865,9 +890,29 @@ jobs:
           python-version: "3.12"
           update-environment: false
 
+      - name: Admit existing personal LiteLLM auto route
+        id: personal_route
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
+        env:
+          LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
+          PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
+          PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
+          PRIVATE_TARGET: ${{ steps.target_visibility.outputs.require_zdr }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LLM_GATEWAY_API_KEY:-}" ]; then
+            echo '::error::STOP: existing personal review Secret is unavailable.'
+            exit 1
+          fi
+          python3 -m scripts.ci.personal_review_route \
+            --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
+            --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
+            --private-target "$PRIVATE_TARGET"
+          echo 'selected=true' >>"$GITHUB_OUTPUT"
+
       - name: Provision contextual-orchestrator review sidecar
         id: noema_sidecar
-        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true' && steps.personal_route.outputs.selected != 'true'
         env:
           SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -876,6 +921,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
+          CONTEXTUAL_ORCHESTRATOR_POOL: auto
         run: |
           set -euo pipefail
           test ! -L "$GITHUB_WORKSPACE/strix_runs"
@@ -924,11 +970,13 @@ jobs:
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         id: noema_prepare
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
+          LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
+          PERSONAL_ROUTE_SELECTED: ${{ steps.personal_route.outputs.selected }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -940,15 +988,23 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot prepare a verdict."
             exit 1
           fi
+          if [ "${PERSONAL_ROUTE_SELECTED:-}" = 'true' ]; then
+            test -n "${LLM_GATEWAY_API_KEY:-}"
+            export NOEMA_LLM_API_URL="https://litellm.poinnetworks.net/v1/chat/completions"
+            export NOEMA_LLM_MODEL="auto"
+            export NOEMA_LLM_API_KEY="$LLM_GATEWAY_API_KEY"
+            unset NOEMA_LLM_VIA_ORCHESTRATOR
+          else
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
             echo "::error::contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
             exit 1
           fi
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
-          export NOEMA_LLM_MODEL="orchestrator/free"
+          export NOEMA_LLM_MODEL="orchestrator/auto"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
+          fi
           verdict_file="${RUNNER_TEMP}/noema-verdict-envelope.json"
           rm -f "$verdict_file"
           python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --prepare-verdict-file "$verdict_file"
@@ -991,7 +1047,7 @@ jobs:
       - name: Publish prepared Noema verdict on the exact live head
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
         env:
-          GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '' }}
+          GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_publication_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '')) || '' }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_publication_token.outputs['installation-id'] }}
@@ -1017,8 +1073,8 @@ jobs:
       && needs.noema-review.outputs.transport_capacity_unavailable == 'true'
       && needs.noema-review.outputs.transport_retry_eligible == 'true'
     runs-on:
-      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ ((github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis' || github.repository == 'ContextualWisdomLab/tokyo-travel-2026') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: 10
     permissions:
       contents: write

@@ -24,12 +24,15 @@ from tests.test_required_workflow_queue_contract import workflow_step, workflow_
 DRAFT_STEP = "Check live pull request draft state before sidecar provisioning"
 DRAFT_GATE = "steps.live_draft.outputs.live_draft != 'true'"
 REVIEWER_TOKEN = (
-    "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token"
-    " || steps.noema_oidc_token.outputs.token }}"
+    "GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && "
+    "steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != "
+    "'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || "
+    "steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}"
 )
 GATED_MODEL_STEPS = (
     "Provision pinned Node.js for Noema document review",
     "Set up lock-compatible sidecar Python",
+    "Admit existing personal LiteLLM auto route",
     "Provision contextual-orchestrator review sidecar",
     "Provision local reviewed HWP document reader",
     "Prepare Noema model verdict",
@@ -73,7 +76,8 @@ def test_live_draft_step_reads_the_live_pull_request_with_the_reviewer_token() -
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in step
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in validate
     assert "jq -e -s" in step
-    assert "set -e" not in step
+    assert "set -uo pipefail" not in step
+    assert "set -euo pipefail" in step
     # Ruleset-launched runs never see ready_for_review, so neither this check
     # nor any trigger-level filter may trust the event's draft snapshot.
     assert "github.event.pull_request.draft" not in workflow
@@ -84,7 +88,25 @@ def test_model_heavy_steps_are_gated_on_the_live_draft_output() -> None:
     workflow = workflow_text("noema-review.yml")
     for name in GATED_MODEL_STEPS:
         step = workflow_step(workflow, name)
-        assert f"if: env.PR_NUMBER != '' && {DRAFT_GATE}\n" in step, name
+        expected = f"env.PR_NUMBER != '' && {DRAFT_GATE}"
+        if name == "Provision contextual-orchestrator review sidecar":
+            expected += " && steps.personal_route.outputs.selected != 'true'"
+        condition = next(line.strip()[4:] for line in step.splitlines()
+                         if line.strip().startswith("if: "))
+        assert condition == expected, name
+        # Evaluate every supported conjunction, so draft=true denies both routes;
+        # additional OR terms or omitted guards fail the exact contract above.
+        for pr in ("", "2565"):
+            for draft in ("true", "false", ""):
+                for personal in ("true", "false", ""):
+                    terms = {"env.PR_NUMBER != ''": bool(pr),
+                             DRAFT_GATE: draft != "true",
+                             "steps.personal_route.outputs.selected != 'true'": personal != "true"}
+                    admitted = all(terms[term] for term in condition.split(" && "))
+                    wanted = bool(pr) and draft != "true"
+                    if name == "Provision contextual-orchestrator review sidecar":
+                        wanted = wanted and personal != "true"
+                    assert admitted == wanted, (name, pr, draft, personal)
 
 
 def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> None:
@@ -113,7 +135,7 @@ def test_trigger_types_are_unchanged_by_the_runtime_draft_check() -> None:
     )
 
 
-def _run_draft_step(tmp_path: Path, gh_body: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+def _run_draft_step(tmp_path: Path, gh_body: str, gh_token: str = "synthetic-token") -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     """Execute the draft step's bash with a fake ``gh`` and return its outputs."""
     bash_executable = shutil.which("bash") or "/bin/bash"
     script = textwrap.dedent(
@@ -131,7 +153,7 @@ def _run_draft_step(tmp_path: Path, gh_body: str) -> tuple[subprocess.CompletedP
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "TARGET_REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "7",
-            "GH_TOKEN": "synthetic-token",
+            "GH_TOKEN": gh_token,
             "GITHUB_OUTPUT": str(output),
         },
         capture_output=True,
@@ -148,6 +170,16 @@ def _live_pr(draft: object) -> str:
     """Render a fake ``gh api`` body that prints one live PR JSON object."""
     payload = json.dumps({"state": "open", "draft": draft, "head": {"sha": "a" * 40}})
     return f"printf '%s' '{payload}'"
+
+
+def test_live_draft_missing_token_fails_closed_before_lookup(tmp_path: Path) -> None:
+    """Missing reviewer authority cannot proceed to a live lookup or model setup."""
+    marker = tmp_path / "lookup-reached"
+    result, outputs = _run_draft_step(tmp_path, f"touch '{marker}'", gh_token="")
+    assert result.returncode != 0
+    assert outputs == {}
+    assert not marker.exists()
+    assert "::error::" in result.stdout
 
 
 def test_live_draft_pr_skips_model_review_with_a_clear_notice(tmp_path: Path) -> None:

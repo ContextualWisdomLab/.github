@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 2),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -1276,7 +1275,21 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' not in prepare
+    personal, sidecar = prepare.split("          else\n", 1)
+    assert 'if [ "${PERSONAL_ROUTE_SELECTED:-}" = \'true\' ]; then' in personal
+    assert 'test -n "${LLM_GATEWAY_API_KEY:-}"' in personal
+    assert 'export NOEMA_LLM_MODEL="auto"' in personal
+    assert 'https://litellm.poinnetworks.net/v1/chat/completions' in personal
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in sidecar
+    admission = workflow_step(workflow, "Admit existing personal LiteLLM auto route")
+    assert 'scripts.ci.personal_review_route' in admission
+    assert '--zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED"' in admission
+    assert '--zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED"' in admission
+    assert '--private-target "$PRIVATE_TARGET"' in admission
+    assert "vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false'" in admission
+    assert "vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false'" in admission
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
@@ -1392,15 +1405,15 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     """
     workflow = workflow_text("noema-review.yml")
 
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert 'NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || \'\' }}' in workflow
     assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
     assert (
         "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
         in workflow
     )
-    # The review step must prefer the PAT over the exchanged app token.
+    # Non-kcsap consumers retain PAT preference; k-csap is App-only.
     assert (
-        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        "GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}"
         in workflow
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
