@@ -910,6 +910,48 @@ jobs:
             --private-target "$PRIVATE_TARGET"
           echo 'selected=true' >>"$GITHUB_OUTPUT"
 
+      - name: Initialize current Noema sidecar evidence
+        id: noema_evidence
+        if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true' && steps.personal_route.outputs.selected != 'true'
+        run: |
+          set -euo pipefail
+          # Separate setup from the producer: unsafe paths fail before its outcome
+          # can admit an upload. Clear only these two files, before early startup.
+          python3 -I <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          workspace_text = os.environ["GITHUB_WORKSPACE"]
+          workspace = Path(workspace_text)
+          if (
+              not workspace.is_absolute()
+              or ".." in workspace.parts
+              or workspace.resolve(strict=True) != workspace
+              or not workspace.is_dir()
+          ):
+              raise SystemExit("Noema evidence workspace must be an unaliased directory")
+          evidence = workspace / "strix_runs"
+          if evidence.is_symlink() or (evidence.exists() and not evidence.is_dir()):
+              raise SystemExit("Noema evidence parent must be a non-symlink directory")
+          owned = (
+              evidence / "contextual-orchestrator-preflight.json",
+              evidence / "contextual-orchestrator-sidecar.stderr.log",
+          )
+          # Validate both before deleting either; reject dangling links, special
+          # files and hardlink aliases as well as nonregular evidence paths.
+          for path in owned:
+              try:
+                  metadata = path.lstat()
+              except FileNotFoundError:
+                  continue
+              if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                  raise SystemExit("Noema evidence must be regular, single-link files")
+          evidence.mkdir(mode=0o700, exist_ok=True)
+          for path in owned:
+              path.unlink(missing_ok=True)
+          PY
+
       - name: Provision contextual-orchestrator review sidecar
         id: noema_sidecar
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true' && steps.personal_route.outputs.selected != 'true'
@@ -1016,7 +1058,10 @@ jobs:
           fi
 
       - name: Upload contextual-orchestrator sidecar evidence
-        if: always() && env.PR_NUMBER != ''
+        # A live Draft never provisions the sidecar. Retain only current producer
+        # terminal diagnostics; absent/skipped outcomes cannot publish stale files.
+        # Non-Draft upload failures still fail the required review job.
+        if: always() && env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true' && (steps.noema_sidecar.outcome == 'success' || steps.noema_sidecar.outcome == 'failure' || steps.noema_sidecar.outcome == 'cancelled')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: noema-sidecar-evidence
