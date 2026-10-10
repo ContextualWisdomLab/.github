@@ -1,0 +1,1256 @@
+name: CGC central validation
+on:
+  workflow_call: null
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  test:
+    runs-on:
+      group: CWL CI isolated
+      labels:
+      - self-hosted
+      - Linux
+      - X64
+      - cwlab-ci-isolated
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.11'
+        - '3.12'
+        - '3.13'
+        - '3.14'
+    steps:
+    - name: Admit candidate before checkout
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ "$REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" || ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CGC repository or candidate SHA is not admitted" >&2
+          exit 1
+        fi
+        case "$EVENT_NAME" in
+          push) ;;
+          pull_request)
+            if [[ "$HEAD_REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" ]]; then
+              echo "fork or missing head repository is not admitted" >&2
+              exit 1
+            fi ;;
+          *) echo "unsupported candidate event" >&2; exit 1 ;;
+        esac
+    - name: Remove job-owned stale outputs before checkout
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+    - name: Initialize private job state
+      id: private
+      run: |
+        set -euo pipefail
+        umask 077
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_root="$(mktemp -d "$runner_root/cgc-ci.XXXXXXXX")"
+        chmod 700 "$private_root"
+        mkdir -m 700 "$private_root/home" "$private_root/config"
+        printf 'PRIVATE_ROOT=%s\nHOME=%s/home\nXDG_CONFIG_HOME=%s/config\nUV_CACHE_DIR=%s/cache\nUV_PROJECT_ENVIRONMENT=%s/venv\nTMPDIR=%s\nXDG_CACHE_HOME=%s/cache\nPYTHONPATH=\nPYTHONHOME=\nPYTHONOPTIMIZE=\nPYTHONNOUSERSITE=1\n' \
+          "$private_root" "$private_root" "$private_root" "$private_root" \
+          "$private_root" "$private_root" "$private_root" >> "$GITHUB_ENV"
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Verify exact source checkout
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: ${{ matrix.python-version }}
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: 0.11.32
+        enable-cache: 'false'
+    - run: uv lock --check
+    - run: uv sync --frozen --extra dev --python "${{ matrix.python-version }}"
+    - run: uv run --frozen --extra dev --python "${{ matrix.python-version }}" python -m compileall -q src
+    - run: uv run --frozen --extra dev --python "${{ matrix.python-version }}" python -m ruff check . --output-format=github
+    - run: uv run --frozen --extra dev --python "${{ matrix.python-version }}" python -m coverage run -m pytest
+        -q tests .github/tests
+    - run: uv run --frozen --extra dev --python "${{ matrix.python-version }}" python -m coverage report --fail-under=100
+    - name: Clean private job outputs
+      if: ${{ always() && steps.private.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_name="${PRIVATE_ROOT##*/}"
+        if [[ ! "$private_name" =~ ^cgc-ci\.[A-Za-z0-9]{8}$ ||
+              "$PRIVATE_ROOT" != "$runner_root/$private_name" ||
+              -L "$PRIVATE_ROOT" || ! -d "$PRIVATE_ROOT" ]]; then
+          echo "private cleanup root is not an owned direct directory" >&2
+          exit 1
+        fi
+        rm -rf -- "$PRIVATE_ROOT"
+  package:
+    runs-on:
+      group: CWL CI isolated
+      labels:
+      - self-hosted
+      - Linux
+      - X64
+      - cwlab-ci-isolated
+    timeout-minutes: 10
+    steps:
+    - name: Admit candidate before checkout
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ "$REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" || ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CGC repository or candidate SHA is not admitted" >&2
+          exit 1
+        fi
+        case "$EVENT_NAME" in
+          push) ;;
+          pull_request)
+            if [[ "$HEAD_REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" ]]; then
+              echo "fork or missing head repository is not admitted" >&2
+              exit 1
+            fi ;;
+          *) echo "unsupported candidate event" >&2; exit 1 ;;
+        esac
+    - name: Remove job-owned stale outputs before checkout
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+    - name: Initialize private job state
+      id: private
+      run: |
+        set -euo pipefail
+        umask 077
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_root="$(mktemp -d "$runner_root/cgc-ci.XXXXXXXX")"
+        chmod 700 "$private_root"
+        mkdir -m 700 "$private_root/home" "$private_root/config"
+        printf 'PRIVATE_ROOT=%s\nHOME=%s/home\nXDG_CONFIG_HOME=%s/config\nUV_CACHE_DIR=%s/cache\nUV_PROJECT_ENVIRONMENT=%s/venv\nTMPDIR=%s\nXDG_CACHE_HOME=%s/cache\nPYTHONPATH=\nPYTHONHOME=\nPYTHONOPTIMIZE=\nPYTHONNOUSERSITE=1\n' \
+          "$private_root" "$private_root" "$private_root" "$private_root" \
+          "$private_root" "$private_root" "$private_root" >> "$GITHUB_ENV"
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Verify exact source checkout
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: '3.14'
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: 0.11.32
+        enable-cache: 'false'
+    - run: uv lock --check
+    - name: Capture dependency lock for checked-out commit
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-lock-${{ github.event.pull_request.head.sha || github.sha }}
+        path: uv.lock
+        if-no-files-found: error
+        retention-days: '1'
+      if: ${{ success() }}
+    - run: uv sync --frozen --extra dev --python 3.14
+    - run: uv build --wheel --sdist --out-dir dist
+    - name: Inspect wheel and source distribution contract resources
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        import tarfile
+        import zipfile
+
+        wheel_path = next(Path("dist").glob("*.whl"))
+        sdist_path = next(Path("dist").glob("*.tar.gz"))
+        required_suffixes = {
+            "cwl_context_contracts/py.typed",
+            "cwl_context_contracts/contracts/context-fabric.asyncapi.json",
+            "cwl_context_contracts/conformance/cwl-timestamp-profile.v1.json",
+            "cwl_context_contracts/conformance/context-assertion-semantics.v1.json",
+            "cwl_context_contracts/conformance/context-assertion-event-semantics.v1.json",
+            "cwl_context_contracts/conformance/context-assertion-message-admission.v1.json",
+            "cwl_context_contracts/conformance/cloudevent-semantics.v1.json",
+            "cwl_context_contracts/conformance/cwl-json-interoperability.v1.json",
+            "cwl_context_contracts/conformance/data-management-assessment-semantics.v1.json",
+            "cwl_context_contracts/conformance/external-metadata-observation-semantics.v1.json",
+            "cwl_context_contracts/schemas/canonical-authority-uri.schema.json",
+            "cwl_context_contracts/schemas/canonical-asset-uri.schema.json",
+            "cwl_context_contracts/schemas/truth-status.schema.json",
+            "cwl_context_contracts/schemas/bitemporal-interval.schema.json",
+            "cwl_context_contracts/schemas/provenance-reference.schema.json",
+            "cwl_context_contracts/schemas/cloudevent-envelope.schema.json",
+            "cwl_context_contracts/schemas/context-membership.schema.json",
+            "cwl_context_contracts/schemas/context-assertion.schema.json",
+            "cwl_context_contracts/schemas/data-management-framework.schema.json",
+            "cwl_context_contracts/schemas/data-management-assessment.schema.json",
+            "cwl_context_contracts/schemas/external-metadata-source.schema.json",
+            "cwl_context_contracts/schemas/external-entity-reference.schema.json",
+            "cwl_context_contracts/schemas/metadata-observation-envelope.schema.json",
+            "cwl_context_contracts/schemas/metadata-projection-receipt.schema.json",
+            "cwl_context_contracts/fixtures/valid-event.json",
+            "cwl_context_contracts/fixtures/invalid-event.json",
+            "cwl_context_contracts/fixtures/valid-assertion.json",
+            "cwl_context_contracts/fixtures/invalid-assertion.json",
+            "cwl_context_contracts/fixtures/data-management-contract.valid.json",
+            "cwl_context_contracts/fixtures/data-management-assessment.valid.json",
+            "cwl_context_contracts/fixtures/metadata-observation-envelope.valid.json",
+            "cwl_context_contracts/fixtures/metadata-observation-envelope.invalid.json",
+            "cwl_context_contracts/fixtures/metadata-projection-receipt.valid.json",
+        }
+
+        with zipfile.ZipFile(wheel_path) as wheel_file:
+            wheel_names = set(wheel_file.namelist())
+        for suffix in required_suffixes:
+            assert any(name.endswith(suffix) for name in wheel_names), suffix
+        assert any(name.endswith("/licenses/LICENSE") for name in wheel_names)
+
+        with tarfile.open(sdist_path, "r:gz") as sdist_file:
+            sdist_names = set(sdist_file.getnames())
+        for suffix in required_suffixes:
+            assert any(name.endswith(suffix) for name in sdist_names), suffix
+        assert any(name.endswith("/LICENSE") for name in sdist_names)
+        PY
+    - run: uv venv .package-smoke --python 3.14
+    - run: uv pip install --python .package-smoke/bin/python --no-index --find-links dist cwl-context-contracts
+    - name: Smoke-test installed contracts, schemas, and conformance fixtures
+      run: |
+        .package-smoke/bin/python -I - <<'PY'
+        from cwl_context_contracts import (
+            CloudEventEnvelope,
+            ContextAssertion,
+            TruthStatus,
+            available_conformance_profile_names,
+            available_contract_names,
+            available_fixture_names,
+            available_schema_names,
+            load_conformance_profile,
+            load_contract,
+            load_fixture,
+            load_schema,
+            parse_cwl_timestamp,
+            admit_metadata_observation,
+            validate_data_management_assessment_semantics,
+        )
+
+        assert TruthStatus.OBSERVED.value == "observed"
+        for schema_name in available_schema_names():
+            schema = load_schema(schema_name)
+            assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+            assert schema["$id"].startswith("https://schemas.contextualwisdomlab.org/")
+
+        assert available_contract_names() == ("context-fabric.asyncapi.json",)
+        asyncapi = load_contract("context-fabric.asyncapi.json")
+        assert asyncapi["asyncapi"] == "3.1.0"
+        assert "servers" not in asyncapi
+        assert "channels" not in asyncapi
+        assert "operations" not in asyncapi
+
+        assert available_conformance_profile_names() == (
+            "cwl-timestamp-profile.v1.json",
+            "context-assertion-semantics.v1.json",
+            "context-assertion-event-semantics.v1.json",
+            "context-assertion-message-admission.v1.json",
+            "cloudevent-semantics.v1.json",
+            "cwl-json-interoperability.v1.json",
+            "data-management-assessment-semantics.v1.json",
+            "external-metadata-observation-semantics.v1.json",
+        )
+        timestamp_profile = load_conformance_profile(
+            "cwl-timestamp-profile.v1.json"
+        )
+        for timestamp_value in timestamp_profile["valid_values"]:
+            parse_cwl_timestamp(timestamp_value)
+        for timestamp_value in timestamp_profile["invalid_values"]:
+            try:
+                parse_cwl_timestamp(timestamp_value)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"negative timestamp vector unexpectedly parsed: {timestamp_value}"
+                )
+
+        assertion_profile = load_conformance_profile(
+            "context-assertion-semantics.v1.json"
+        )
+        for vector in assertion_profile["invalid_vectors"]:
+            try:
+                ContextAssertion.from_mapping(vector["value"])
+            except ValueError as exc:
+                assert vector["error_pattern"] in str(exc)
+            else:
+                raise AssertionError(
+                    f"negative assertion vector unexpectedly parsed: {vector['case_id']}"
+                )
+
+        assertion_event_profile = load_conformance_profile(
+            "context-assertion-event-semantics.v1.json"
+        )
+        for vector in assertion_event_profile["valid_vectors"]:
+            event = CloudEventEnvelope.from_mapping(vector["value"])
+            assertion = ContextAssertion.from_event(event)
+            assert assertion.to_mapping() == vector["value"]["data"]
+        for vector in assertion_event_profile["invalid_vectors"]:
+            try:
+                event = CloudEventEnvelope.from_mapping(vector["value"])
+                ContextAssertion.from_event(event)
+            except ValueError as exc:
+                assert vector["error_pattern"] in str(exc)
+            else:
+                raise AssertionError(
+                    "negative assertion-event vector unexpectedly admitted: "
+                    f"{vector['case_id']}"
+                )
+
+        event_profile = load_conformance_profile("cloudevent-semantics.v1.json")
+        for vector in event_profile["invalid_vectors"]:
+            try:
+                CloudEventEnvelope.from_mapping(vector["value"])
+            except ValueError as exc:
+                assert vector["error_pattern"] in str(exc)
+            else:
+                raise AssertionError(
+                    f"negative event vector unexpectedly parsed: {vector['case_id']}"
+                )
+        for vector in event_profile["valid_vectors"]:
+            assert CloudEventEnvelope.from_mapping(vector["value"]).to_mapping() == (
+                vector["value"]
+            )
+
+        assessment_profile = load_conformance_profile(
+            "data-management-assessment-semantics.v1.json"
+        )
+        for vector in assessment_profile["valid_vectors"]:
+            validate_data_management_assessment_semantics(vector["value"])
+        for vector in assessment_profile["invalid_vectors"]:
+            try:
+                validate_data_management_assessment_semantics(vector["value"])
+            except ValueError as exc:
+                assert vector["error_pattern"] in str(exc)
+            else:
+                raise AssertionError(
+                    "negative assessment vector unexpectedly validated: "
+                    f"{vector['case_id']}"
+                )
+
+        metadata_profile = load_conformance_profile(
+            "external-metadata-observation-semantics.v1.json"
+        )
+        for vector in metadata_profile["valid_vectors"]:
+            receipt = admit_metadata_observation(vector["value"])
+            assert receipt.result.value == "admitted", vector["case_id"]
+            assert receipt.reason_code == vector["expected_reason_code"]
+        for vector in metadata_profile["rejected_vectors"]:
+            receipt = admit_metadata_observation(vector["value"])
+            assert receipt.result.value == "rejected", vector["case_id"]
+            assert receipt.reason_code == vector["expected_reason_code"]
+        assert admit_metadata_observation(
+            load_fixture("metadata-observation-envelope.valid.json")
+        ).to_mapping() == load_fixture("metadata-projection-receipt.valid.json")
+
+        assert available_fixture_names() == (
+            "valid-event.json",
+            "invalid-event.json",
+            "valid-assertion.json",
+            "invalid-assertion.json",
+            "data-management-contract.valid.json",
+            "data-management-assessment.valid.json",
+            "metadata-observation-envelope.valid.json",
+            "metadata-observation-envelope.invalid.json",
+            "metadata-projection-receipt.valid.json",
+        )
+        valid_event = load_fixture("valid-event.json")
+        invalid_event = load_fixture("invalid-event.json")
+        assert CloudEventEnvelope.from_mapping(valid_event).to_mapping() == valid_event
+        try:
+            CloudEventEnvelope.from_mapping(invalid_event)
+        except ValueError as exc:
+            assert "UUIDv7" in str(exc) or "RFC 9562" in str(exc)
+        else:
+            raise AssertionError("negative conformance fixture unexpectedly parsed")
+
+        json_profile = load_conformance_profile(
+            "cwl-json-interoperability.v1.json"
+        )
+        for integer_value in json_profile["valid_integer_values"]:
+            event_mapping = {
+                **valid_event,
+                "data": {"nested": [{"count": integer_value}]},
+            }
+            assert (
+                CloudEventEnvelope.from_mapping(event_mapping)
+                .to_mapping()["data"]["nested"][0]["count"]
+                == integer_value
+            )
+        for integer_value in json_profile["invalid_integer_values"]:
+            event_mapping = {
+                **valid_event,
+                "data": {"nested": [{"count": integer_value}]},
+            }
+            try:
+                CloudEventEnvelope.from_mapping(event_mapping)
+            except ValueError as exc:
+                assert "exact interoperable range" in str(exc)
+            else:
+                raise AssertionError(
+                    f"out-of-range integer unexpectedly parsed: {integer_value}"
+                )
+
+        valid_assertion = load_fixture("valid-assertion.json")
+        invalid_assertion = load_fixture("invalid-assertion.json")
+        assert ContextAssertion.from_mapping(valid_assertion).to_mapping() == (
+            valid_assertion
+        )
+        try:
+            ContextAssertion.from_mapping(invalid_assertion)
+        except ValueError as exc:
+            assert "provenance" in str(exc)
+        else:
+            raise AssertionError("negative assertion fixture unexpectedly parsed")
+        PY
+    - name: Smoke-test installed conformance evidence commands
+      run: |
+        set -euo pipefail
+        umask 077
+        export SMOKE_ROOT
+        SMOKE_ROOT="$(mktemp -d "${RUNNER_TEMP:?}/contracts-smoke.XXXXXX")"
+        trap 'rm -rf -- "$SMOKE_ROOT"' EXIT
+        .package-smoke/bin/python -I .package-smoke/bin/cwl-context-conformance > "$SMOKE_ROOT/conformance-report.json"
+        .package-smoke/bin/python -I .package-smoke/bin/cwl-context-conformance-manifest > "$SMOKE_ROOT/approved-manifest.json"
+        .package-smoke/bin/python -I .package-smoke/bin/cwl-context-conformance-verify \
+          "$SMOKE_ROOT/approved-manifest.json" > "$SMOKE_ROOT/verification-report.json"
+        .package-smoke/bin/python -I .package-smoke/bin/cwl-context-conformance-admit \
+          "$SMOKE_ROOT/approved-manifest.json" > "$SMOKE_ROOT/admission-report.json"
+        .package-smoke/bin/python -I - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        conformance = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "conformance-report.json").read_text(encoding="utf-8")
+        )
+        verification = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "verification-report.json").read_text(encoding="utf-8")
+        )
+        admission = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "admission-report.json").read_text(encoding="utf-8")
+        )
+        assert conformance["status"] == "pass"
+        assert conformance["failures"] == []
+        assert verification["verified"] is True
+        assert verification["mismatches"] == []
+        assert verification["next_action"] == (
+            "accept the installed conformance evidence"
+        )
+        assert admission["admitted"] is True
+        assert admission["semantic_conformance"]["status"] == "pass"
+        assert admission["manifest_verification"]["verified"] is True
+        assert admission["next_action"] == (
+            "verify artifact provenance and runtime authorization before enabling "
+            "the integration"
+        )
+        PY
+    - name: Clean private job outputs
+      if: ${{ always() && steps.private.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_name="${PRIVATE_ROOT##*/}"
+        if [[ ! "$private_name" =~ ^cgc-ci\.[A-Za-z0-9]{8}$ ||
+              "$PRIVATE_ROOT" != "$runner_root/$private_name" ||
+              -L "$PRIVATE_ROOT" || ! -d "$PRIVATE_ROOT" ]]; then
+          echo "private cleanup root is not an owned direct directory" >&2
+          exit 1
+        fi
+        rm -rf -- "$PRIVATE_ROOT"
+  release-package-reproducibility:
+    runs-on:
+      group: CWL CI isolated
+      labels:
+      - self-hosted
+      - Linux
+      - X64
+      - cwlab-ci-isolated
+    timeout-minutes: 10
+    steps:
+    - name: Admit candidate before checkout
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ "$REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" || ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CGC repository or candidate SHA is not admitted" >&2
+          exit 1
+        fi
+        case "$EVENT_NAME" in
+          push) ;;
+          pull_request)
+            if [[ "$HEAD_REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" ]]; then
+              echo "fork or missing head repository is not admitted" >&2
+              exit 1
+            fi ;;
+          *) echo "unsupported candidate event" >&2; exit 1 ;;
+        esac
+    - name: Remove job-owned stale outputs before checkout
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+    - name: Initialize private job state
+      id: private
+      run: |
+        set -euo pipefail
+        umask 077
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_root="$(mktemp -d "$runner_root/cgc-ci.XXXXXXXX")"
+        chmod 700 "$private_root"
+        mkdir -m 700 "$private_root/home" "$private_root/config"
+        printf 'PRIVATE_ROOT=%s\nHOME=%s/home\nXDG_CONFIG_HOME=%s/config\nUV_CACHE_DIR=%s/cache\nUV_PROJECT_ENVIRONMENT=%s/venv\nTMPDIR=%s\nXDG_CACHE_HOME=%s/cache\nPYTHONPATH=\nPYTHONHOME=\nPYTHONOPTIMIZE=\nPYTHONNOUSERSITE=1\n' \
+          "$private_root" "$private_root" "$private_root" "$private_root" \
+          "$private_root" "$private_root" "$private_root" >> "$GITHUB_ENV"
+    - name: Checkout exact candidate into first clean tree
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        path: source-a
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Checkout exact candidate into second clean tree
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        path: source-b
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: '3.14'
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: 0.11.32
+        enable-cache: 'false'
+    - name: Bind both clean trees to the exact source commit
+      id: source
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        first_sha="$(git -C source-a rev-parse HEAD)"
+        second_sha="$(git -C source-b rev-parse HEAD)"
+        if [[ "$first_sha" != "$EXPECTED_SHA" || "$second_sha" != "$EXPECTED_SHA" ]]; then
+          echo "clean build trees do not match the exact source SHA" >&2
+          exit 1
+        fi
+        source_date_epoch="$(git -C source-a show -s --format=%ct HEAD)"
+        if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+          echo "source commit timestamp is not an integer epoch" >&2
+          exit 1
+        fi
+        echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+    - name: Verify both dependency locks
+      run: |
+        (cd source-a && uv lock --check)
+        (cd source-b && uv lock --check)
+    - name: Initialize fresh reproducibility output directories
+      run: |
+        cd "${GITHUB_WORKSPACE:?}"
+        rm -rf -- build-a build-b reproducibility-evidence
+        mkdir -- build-a build-b reproducibility-evidence
+    - name: Build release packages from first clean tree
+      env:
+        SOURCE_DATE_EPOCH: ${{ steps.source.outputs.source_date_epoch }}
+      run: |
+        (cd source-a && uv build --wheel --sdist --out-dir ../build-a)
+    - name: Build release packages from second clean tree
+      env:
+        SOURCE_DATE_EPOCH: ${{ steps.source.outputs.source_date_epoch }}
+      run: |
+        (cd source-b && uv build --wheel --sdist --out-dir ../build-b)
+    - name: Verify byte-reproducible release packages
+      run: |
+        python source-a/.github/scripts/verify_reproducible_package_builds.py \
+          build-a build-b \
+          | tee reproducibility-evidence/verification.txt
+        (
+          cd build-a
+          sha256sum -- *.whl *.tar.gz
+        ) > reproducibility-evidence/SHA256SUMS
+    - name: Retain exact-candidate reproducibility evidence
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: reproducibility-${{ github.event.pull_request.head.sha || github.sha }}
+        path: reproducibility-evidence
+        if-no-files-found: error
+        retention-days: '7'
+      if: ${{ success() }}
+    - name: Clean private job outputs
+      if: ${{ always() && steps.private.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_name="${PRIVATE_ROOT##*/}"
+        if [[ ! "$private_name" =~ ^cgc-ci\.[A-Za-z0-9]{8}$ ||
+              "$PRIVATE_ROOT" != "$runner_root/$private_name" ||
+              -L "$PRIVATE_ROOT" || ! -d "$PRIVATE_ROOT" ]]; then
+          echo "private cleanup root is not an owned direct directory" >&2
+          exit 1
+        fi
+        rm -rf -- "$PRIVATE_ROOT"
+  package-evidence:
+    outputs:
+      package-snapshot: ${{ steps.package-evidence-verification.outputs.package_snapshot }}
+    runs-on:
+      group: CWL CI isolated
+      labels:
+      - self-hosted
+      - Linux
+      - X64
+      - cwlab-ci-isolated
+    timeout-minutes: 10
+    steps:
+    - name: Admit candidate before checkout
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ "$REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" || ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CGC repository or candidate SHA is not admitted" >&2
+          exit 1
+        fi
+        case "$EVENT_NAME" in
+          push) ;;
+          pull_request)
+            if [[ "$HEAD_REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" ]]; then
+              echo "fork or missing head repository is not admitted" >&2
+              exit 1
+            fi ;;
+          *) echo "unsupported candidate event" >&2; exit 1 ;;
+        esac
+    - name: Remove job-owned stale outputs before checkout
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+    - name: Initialize private job state
+      id: private
+      run: |
+        set -euo pipefail
+        umask 077
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_root="$(mktemp -d "$runner_root/cgc-ci.XXXXXXXX")"
+        chmod 700 "$private_root"
+        mkdir -m 700 "$private_root/home" "$private_root/config"
+        printf 'PRIVATE_ROOT=%s\nHOME=%s/home\nXDG_CONFIG_HOME=%s/config\nUV_CACHE_DIR=%s/cache\nUV_PROJECT_ENVIRONMENT=%s/venv\nTMPDIR=%s\nXDG_CACHE_HOME=%s/cache\nPYTHONPATH=\nPYTHONHOME=\nPYTHONOPTIMIZE=\nPYTHONNOUSERSITE=1\n' \
+          "$private_root" "$private_root" "$private_root" "$private_root" \
+          "$private_root" "$private_root" "$private_root" >> "$GITHUB_ENV"
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Verify exact candidate checkout
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: '3.14'
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: 0.11.32
+        enable-cache: 'false'
+    - run: uv lock --check
+    - name: Bind release builds to the exact source commit
+      id: source
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        source_sha="$(git rev-parse HEAD)"
+        if [[ "$source_sha" != "$EXPECTED_SHA" ]]; then
+          echo "package build tree does not match the exact source SHA" >&2
+          exit 1
+        fi
+        source_date_epoch="$(git show -s --format=%ct HEAD)"
+        if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+          echo "source commit timestamp is not an integer epoch" >&2
+          exit 1
+        fi
+        echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+    - name: Build release packages for package evidence
+      env:
+        SOURCE_DATE_EPOCH: ${{ steps.source.outputs.source_date_epoch }}
+      run: uv build --wheel --sdist --out-dir dist
+    - name: Checkout exact candidate for reproducibility witness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        path: reproducibility-source
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Verify witness checkout and dependency lock
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        witness_sha="$(git -C reproducibility-source rev-parse HEAD)"
+        if [[ "$witness_sha" != "$EXPECTED_SHA" ]]; then
+          echo "reproducibility witness does not match the exact source SHA" >&2
+          exit 1
+        fi
+        (cd reproducibility-source && uv lock --check)
+    - name: Build independent reproducibility witness
+      env:
+        SOURCE_DATE_EPOCH: ${{ steps.source.outputs.source_date_epoch }}
+      run: |
+        (cd reproducibility-source && uv build --wheel --sdist --out-dir ../reproducibility-build)
+    - name: Bind package-evidence bytes to reproducibility proof
+      run: |
+        mkdir package-reproducibility-evidence
+        python .github/scripts/verify_reproducible_package_builds.py dist reproducibility-build \
+          | tee package-reproducibility-evidence/verification.txt
+        (
+          cd dist
+          sha256sum -- *.whl *.tar.gz
+        ) > package-reproducibility-evidence/package-evidence-SHA256SUMS
+        (
+          cd reproducibility-build
+          sha256sum -- *.whl *.tar.gz
+        ) > package-reproducibility-evidence/witness-SHA256SUMS
+    - name: Retain package-evidence reproducibility proof
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: package-reproducibility-${{ github.event.pull_request.head.sha || github.sha }}
+        path: package-reproducibility-evidence
+        if-no-files-found: error
+        retention-days: '7'
+      if: ${{ success() }}
+    - name: Install the built wheel into an isolated SBOM root
+      id: sbom-root
+      run: |
+        uv venv .sbom-venv --python 3.14
+        uv pip install --python .sbom-venv/bin/python --no-deps dist/*.whl
+        echo "path=$(.sbom-venv/bin/python - <<'PY'
+        import sysconfig
+        print(sysconfig.get_paths()["purelib"])
+        PY
+        )" >> "$GITHUB_OUTPUT"
+    - name: Generate SPDX 3 JSON SBOM from installed package metadata
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+      with:
+        path: ${{ steps.sbom-root.outputs.path }}
+        format: spdx-json@3.0
+        output-file: dist/cwl-context-contracts.spdx.json
+        upload-artifact: 'false'
+        upload-release-assets: 'false'
+        dependency-snapshot: 'false'
+        syft-version: v1.51.0
+    - name: Validate SPDX 3.0.1 SBOM and artifact checksums
+      run: |
+        python - <<'PY'
+        import json
+        from pathlib import Path
+
+        sbom_path = Path("dist/cwl-context-contracts.spdx.json")
+        sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+        assert sbom.get("@context") == "https://spdx.org/rdf/3.0.1/spdx-context.jsonld"
+        graph = sbom.get("@graph")
+        assert isinstance(graph, list) and graph
+        assert any(
+            item.get("type") == "CreationInfo"
+            and item.get("specVersion") == "3.0.1"
+            for item in graph
+            if isinstance(item, dict)
+        )
+        assert any(
+            item.get("type") == "software_Package"
+            and item.get("name") == "cwl-context-contracts"
+            for item in graph
+            if isinstance(item, dict)
+        )
+        wheels = list(Path("dist").glob("cwl_context_contracts-*.whl"))
+        sdists = list(Path("dist").glob("cwl_context_contracts-*.tar.gz"))
+        assert len(wheels) == 1
+        assert len(sdists) == 1
+        PY
+        (
+          cd dist
+          sha256sum -- *.whl *.tar.gz cwl-context-contracts.spdx.json > SHA256SUMS
+          sha256sum -c SHA256SUMS
+        )
+    - name: Verify package evidence with the release tool
+      id: package-evidence-verification
+      run: |
+        uv run --frozen cwl-context-package-evidence-verify dist \
+          > dist/package-evidence-verification.json
+        package_snapshot="$(python - <<'PY'
+        import json
+        from pathlib import Path
+
+        report = json.loads(
+            Path("dist/package-evidence-verification.json").read_text(encoding="utf-8")
+        )
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+        PY
+        )"
+        echo "package_snapshot=$package_snapshot" >> "$GITHUB_OUTPUT"
+    - name: Upload checked-out commit package evidence
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: package-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+        path: |
+          dist/*.whl
+          dist/*.tar.gz
+          dist/cwl-context-contracts.spdx.json
+          dist/SHA256SUMS
+          dist/package-evidence-verification.json
+        if-no-files-found: error
+        retention-days: '7'
+      if: ${{ success() }}
+    - name: Clean private job outputs
+      if: ${{ always() && steps.private.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_name="${PRIVATE_ROOT##*/}"
+        if [[ ! "$private_name" =~ ^cgc-ci\.[A-Za-z0-9]{8}$ ||
+              "$PRIVATE_ROOT" != "$runner_root/$private_name" ||
+              -L "$PRIVATE_ROOT" || ! -d "$PRIVATE_ROOT" ]]; then
+          echo "private cleanup root is not an owned direct directory" >&2
+          exit 1
+        fi
+        rm -rf -- "$PRIVATE_ROOT"
+  installed-wheel:
+    runs-on:
+      group: CWL CI isolated
+      labels:
+      - self-hosted
+      - Linux
+      - X64
+      - cwlab-ci-isolated
+    timeout-minutes: 10
+    steps:
+    - name: Admit candidate before checkout
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ "$REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" || ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CGC repository or candidate SHA is not admitted" >&2
+          exit 1
+        fi
+        case "$EVENT_NAME" in
+          push) ;;
+          pull_request)
+            if [[ "$HEAD_REPOSITORY" != "ContextualWisdomLab/context-graph-contracts" ]]; then
+              echo "fork or missing head repository is not admitted" >&2
+              exit 1
+            fi ;;
+          *) echo "unsupported candidate event" >&2; exit 1 ;;
+        esac
+    - name: Remove job-owned stale outputs before checkout
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+    - name: Initialize private job state
+      id: private
+      run: |
+        set -euo pipefail
+        umask 077
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_root="$(mktemp -d "$runner_root/cgc-ci.XXXXXXXX")"
+        chmod 700 "$private_root"
+        mkdir -m 700 "$private_root/home" "$private_root/config"
+        printf 'PRIVATE_ROOT=%s\nHOME=%s/home\nXDG_CONFIG_HOME=%s/config\nUV_CACHE_DIR=%s/cache\nUV_PROJECT_ENVIRONMENT=%s/venv\nTMPDIR=%s\nXDG_CACHE_HOME=%s/cache\nPYTHONPATH=\nPYTHONHOME=\nPYTHONOPTIMIZE=\nPYTHONNOUSERSITE=1\n' \
+          "$private_root" "$private_root" "$private_root" "$private_root" \
+          "$private_root" "$private_root" "$private_root" >> "$GITHUB_ENV"
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: 'false'
+        repository: ContextualWisdomLab/context-graph-contracts
+    - name: Verify exact candidate checkout
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+    - name: Verify exact source checkout
+      env:
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: '3.14'
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: 0.11.32
+        enable-cache: 'false'
+    - run: uv lock --check
+    - run: uv sync --frozen --extra dev --python 3.14
+    - run: uv build --wheel --sdist --out-dir dist
+    - run: uv venv .receipt-smoke --python 3.14
+    - run: uv pip install --python .receipt-smoke/bin/python --no-index --find-links dist cwl-context-contracts
+    - name: Exercise Context Assertion admission SDK from installed wheel
+      run: |
+        .receipt-smoke/bin/python -I - <<'PY'
+        from cwl_context_contracts import (
+            CONTEXT_ASSERTION_STRUCTURED_MEDIA_TYPE,
+            ContextAssertionAdmission,
+            admit_context_assertion_message,
+            load_conformance_profile,
+        )
+
+        profile = load_conformance_profile(
+            "context-assertion-event-semantics.v1.json"
+        )
+        event_mapping = profile["valid_vectors"][0]["value"]
+        admission = admit_context_assertion_message(
+            CONTEXT_ASSERTION_STRUCTURED_MEDIA_TYPE,
+            event_mapping,
+        )
+        assert type(admission) is ContextAssertionAdmission
+        assert admission.envelope.to_mapping() == event_mapping
+        assert admission.assertion.to_mapping() == event_mapping["data"]
+        assert admission.schema_version == 1
+        assert admission.profile_id == (
+            "urn:cwl:context-contracts:context-assertion-event-semantics:v1"
+        )
+        assert admission.profile_version == 1
+        assert admission.message_profile_id == (
+            "urn:cwl:context-contracts:context-assertion-message-admission:v1"
+        )
+        assert admission.message_profile_version == 1
+        assert admission.admission_version == 1
+
+        try:
+            ContextAssertionAdmission(
+                envelope=admission.envelope,
+                assertion=admission.assertion,
+            )
+        except ValueError as error:
+            assert str(error) == (
+                "Context Assertion receipt must come from structured-message admission"
+            )
+        else:
+            raise AssertionError(
+                "Context Assertion receipt was minted without transport admission"
+            )
+
+        hostile_media_types = (
+            "\r\napplication/cloudevents+json",
+            "application/cloudevents+json\r\n",
+            "\vapplication/cloudevents+json",
+            "application/cloudevents+json\f",
+        )
+        for media_type in hostile_media_types:
+            try:
+                admit_context_assertion_message(media_type, event_mapping)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    "hostile structured media type unexpectedly admitted: "
+                    f"{media_type!r}"
+                )
+
+        oversized_media_type = CONTEXT_ASSERTION_STRUCTURED_MEDIA_TYPE + (" " * 257)
+        try:
+            admit_context_assertion_message(oversized_media_type, event_mapping)
+        except ValueError as error:
+            assert str(error) == (
+                "Context Assertion media type must not exceed 256 characters"
+            )
+        else:
+            raise AssertionError("oversized structured media type unexpectedly admitted")
+        PY
+    - name: Exercise release evidence from installed wheel
+      run: |
+        set -euo pipefail
+        umask 077
+        export SMOKE_ROOT
+        SMOKE_ROOT="$(mktemp -d "${RUNNER_TEMP:?}/contracts-smoke.XXXXXX")"
+        trap 'rm -rf -- "$SMOKE_ROOT"' EXIT
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-conformance-manifest \
+          > "$SMOKE_ROOT/approved-manifest.json"
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-conformance-receipt \
+          "$SMOKE_ROOT/approved-manifest.json" > "$SMOKE_ROOT/admission-receipt.json"
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-bundle-manifest \
+          > "$SMOKE_ROOT/contract-bundle-manifest.json"
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-bundle-verify \
+          "$SMOKE_ROOT/contract-bundle-manifest.json" \
+          > "$SMOKE_ROOT/contract-bundle-verification.json"
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-release-admit \
+          "$SMOKE_ROOT/approved-manifest.json" \
+          "$SMOKE_ROOT/contract-bundle-manifest.json" \
+          > "$SMOKE_ROOT/contract-release-admission.json"
+        mkdir -p "$SMOKE_ROOT/package-evidence"
+        cp dist/*.whl dist/*.tar.gz "$SMOKE_ROOT/package-evidence/"
+        package_version="$(
+          .receipt-smoke/bin/python -I -c \
+            'from importlib.metadata import version; print(version("cwl-context-contracts"))'
+        )"
+        cat > "$SMOKE_ROOT/package-evidence/cwl-context-contracts.spdx.json" <<JSON
+        {
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            {"type": "CreationInfo", "specVersion": "3.0.1"},
+            {
+              "type": "software_Package",
+              "name": "cwl-context-contracts",
+              "software_packageVersion": "${package_version}"
+            }
+          ]
+        }
+        JSON
+        (
+          cd "$SMOKE_ROOT/package-evidence"
+          sha256sum -- \
+            *.whl \
+            *.tar.gz \
+            cwl-context-contracts.spdx.json \
+            > SHA256SUMS
+        )
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-package-evidence-verify \
+          "$SMOKE_ROOT/package-evidence" \
+          > "$SMOKE_ROOT/package-evidence-verification.json"
+        .receipt-smoke/bin/python -I .receipt-smoke/bin/cwl-context-release-evidence-admit \
+          "$SMOKE_ROOT/package-evidence" \
+          "$SMOKE_ROOT/approved-manifest.json" \
+          "$SMOKE_ROOT/contract-bundle-manifest.json" \
+          > "$SMOKE_ROOT/complete-release-evidence-admission.json"
+        .receipt-smoke/bin/python -I - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        receipt = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "admission-receipt.json").read_text(encoding="utf-8")
+        )
+        bundle_manifest = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "contract-bundle-manifest.json").read_text(encoding="utf-8")
+        )
+        bundle_verification = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "contract-bundle-verification.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        release_admission = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "contract-release-admission.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        package_evidence = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "package-evidence-verification.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        complete_release_evidence = json.loads(
+            (Path(os.environ["SMOKE_ROOT"]) / "complete-release-evidence-admission.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert receipt["receipt_format"] == (
+            "cwl-context-conformance-admission-receipt/v1"
+        )
+        assert receipt["canonicalization"] == "RFC8785"
+        assert receipt["manifest_normalization"] == "profile_name_ascending"
+        assert receipt["digest_algorithm"] == "sha256"
+        assert receipt["admitted"] is True
+        assert receipt["installed_distribution_name"] == "cwl-context-contracts"
+        assert len(receipt["approved_manifest_canonical_sha256"]) == 64
+        assert len(receipt["admission_evidence_sha256"]) == 64
+        assert receipt["next_action"] == (
+            "verify artifact provenance and runtime authorization before enabling "
+            "the integration"
+        )
+        assert bundle_manifest["manifest_format"] == (
+            "cwl-context-bundle-manifest/v1"
+        )
+        assert bundle_manifest["distribution_name"] == "cwl-context-contracts"
+        assert bundle_manifest["algorithm"] == "sha256"
+        assert bundle_manifest["resource_count"] == len(bundle_manifest["resources"])
+        resource_paths = {
+            item["resource_path"] for item in bundle_manifest["resources"]
+        }
+        assert {
+            "schemas/data-management-framework.schema.json",
+            "schemas/data-management-assessment.schema.json",
+            "fixtures/data-management-contract.valid.json",
+            "fixtures/data-management-assessment.valid.json",
+            "conformance/data-management-assessment-semantics.v1.json",
+            "schemas/metadata-observation-envelope.schema.json",
+            "schemas/metadata-projection-receipt.schema.json",
+            "fixtures/metadata-observation-envelope.valid.json",
+            "conformance/external-metadata-observation-semantics.v1.json",
+        } <= resource_paths
+        assert bundle_manifest["resources"] == sorted(
+            bundle_manifest["resources"],
+            key=lambda item: item["resource_path"],
+        )
+        assert all(len(item["sha256"]) == 64 for item in bundle_manifest["resources"])
+        assert bundle_manifest["next_action"] == (
+            "store this manifest with approved release evidence and verify semantic "
+            "conformance, package provenance, and runtime authorization before "
+            "enabling the integration"
+        )
+        assert bundle_verification == {
+            "verification_format": "cwl-context-bundle-verification/v1",
+            "verified": True,
+            "installed_distribution_name": "cwl-context-contracts",
+            "installed_distribution_version": bundle_manifest[
+                "distribution_version"
+            ],
+            "mismatches": [],
+            "next_action": "accept the installed contract bundle evidence",
+        }
+        assert release_admission["admission_format"] == (
+            "cwl-context-contract-release-admission/v1"
+        )
+        assert release_admission["admitted"] is True
+        assert release_admission["conformance_admission"]["admitted"] is True
+        assert release_admission["bundle_verification"]["verified"] is True
+        assert release_admission["next_action"] == (
+            "obtain qualifying independent approval and verify artifact provenance, "
+            "protected-release evidence, and runtime authorization before enabling "
+            "the integration"
+        )
+        assert package_evidence["verification_format"] == (
+            "cwl-context-package-evidence-verification/v1"
+        )
+        assert package_evidence["verified"] is True
+        assert package_evidence["mismatches"] == []
+        assert len(package_evidence["artifacts"]) == 3
+        assert package_evidence["next_action"] == (
+            "verify artifact attestations bind these exact package bytes to the "
+            "intended protected main source commit before release"
+        )
+        assert complete_release_evidence["admission_format"] == (
+            "cwl-context-complete-release-evidence-admission/v1"
+        )
+        assert complete_release_evidence["admitted"] is True
+        assert complete_release_evidence["installed_distribution_version"] == (
+            bundle_manifest["distribution_version"]
+        )
+        assert complete_release_evidence["package_distribution_version"] == (
+            bundle_manifest["distribution_version"]
+        )
+        assert complete_release_evidence["release_mismatches"] == []
+        assert complete_release_evidence["contract_release_admission"][
+            "admitted"
+        ] is True
+        assert complete_release_evidence["package_evidence_verification"][
+            "verified"
+        ] is True
+        assert complete_release_evidence["next_action"] == (
+            "verify artifact attestations bind these exact package bytes to the "
+            "intended protected main source commit, generate and independently verify "
+            "the attested release-source manifest, then satisfy independent review "
+            "and release authorization before publication"
+        )
+        PY
+    - name: Clean private job outputs
+      if: ${{ always() && steps.private.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        # Delete only job-owned outputs, never a runner parent or another job's state.
+        rm -rf -- dist .package-smoke .receipt-smoke .sbom-venv source-a source-b \
+          build-a build-b reproducibility-evidence reproducibility-source \
+          reproducibility-build package-reproducibility-evidence
+        runner_root="$(cd -- "${RUNNER_TEMP:?}" && pwd -P)"
+        private_name="${PRIVATE_ROOT##*/}"
+        if [[ ! "$private_name" =~ ^cgc-ci\.[A-Za-z0-9]{8}$ ||
+              "$PRIVATE_ROOT" != "$runner_root/$private_name" ||
+              -L "$PRIVATE_ROOT" || ! -d "$PRIVATE_ROOT" ]]; then
+          echo "private cleanup root is not an owned direct directory" >&2
+          exit 1
+        fi
+        rm -rf -- "$PRIVATE_ROOT"
+
+  required:
+    name: CGC required validation
+    if: ${{ always() }}
+    needs: [test, package, installed-wheel, release-package-reproducibility, package-evidence]
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+    timeout-minutes: 2
+    steps:
+    - name: Require every producer gate to succeed
+      env:
+        TEST_RESULT: ${{ needs.test.result }}
+        PACKAGE_RESULT: ${{ needs.package.result }}
+        INSTALLED_WHEEL_RESULT: ${{ needs.installed-wheel.result }}
+        RELEASE_PACKAGE_REPRODUCIBILITY_RESULT: ${{ needs.release-package-reproducibility.result }}
+        PACKAGE_EVIDENCE_RESULT: ${{ needs.package-evidence.result }}
+      run: |
+        set -euo pipefail
+        for result in "$TEST_RESULT" "$PACKAGE_RESULT" "$INSTALLED_WHEEL_RESULT" \
+          "$RELEASE_PACKAGE_REPRODUCIBILITY_RESULT" "$PACKAGE_EVIDENCE_RESULT"; do
+          if [[ "$result" != "success" ]]; then
+            echo "a required CGC producer gate did not succeed" >&2
+            exit 1
+          fi
+        done
