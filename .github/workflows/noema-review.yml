@@ -896,6 +896,7 @@ jobs:
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
+          PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
@@ -906,6 +907,7 @@ jobs:
           fi
           python3 -m scripts.ci.personal_review_route \
             --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
+            --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
             --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
             --private-target "$PRIVATE_TARGET"
           echo 'selected=true' >>"$GITHUB_OUTPUT"
