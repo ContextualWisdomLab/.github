@@ -35,9 +35,13 @@ def default_setup_scanning_nothing(name: str) -> dict:
     }
 
 
-def covered_by_recent_analysis(name: str, *, days_ago: int = 1) -> dict:
+def covered_by_recent_analysis(
+    name: str, *, days_ago: int = 1, reference_time: datetime = NOW
+) -> dict:
     """Return a repository payload covered by a recent, successful CodeQL analysis."""
-    created_at = (NOW - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
+    created_at = (reference_time - timedelta(days=days_ago)).isoformat().replace(
+        "+00:00", "Z"
+    )
     return {
         "name": name,
         "archived": False,
@@ -270,7 +274,13 @@ def test_audit_codeql_coverage_defaults_now_to_current_time(monkeypatch) -> None
             return NOW
 
     monkeypatch.setattr(audit, "datetime", FixedClock)
-    repositories = [covered_by_recent_analysis("DefaultNowRepo", days_ago=0)]
+    repositories = [
+        covered_by_recent_analysis(
+            "DefaultNowRepo",
+            days_ago=0,
+            reference_time=datetime.now(timezone.utc),
+        )
+    ]
 
     assert audit.audit_codeql_coverage(repositories) == []
 
@@ -316,7 +326,14 @@ def test_main_pass_path_reports_from_file_arg(tmp_path, capsys, monkeypatch) -> 
     monkeypatch.setattr(audit, "datetime", FixedClock)
     payload_path = tmp_path / "repositories.json"
     payload_path.write_text(
-        json.dumps([covered_by_default_setup("ELUNVERA"), covered_by_recent_analysis("Orgmetra")]),
+        json.dumps(
+            [
+                covered_by_default_setup("ELUNVERA"),
+                covered_by_recent_analysis(
+                    "Orgmetra", reference_time=datetime.now(timezone.utc)
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
 

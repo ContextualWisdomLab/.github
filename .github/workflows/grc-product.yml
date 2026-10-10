@@ -1,0 +1,81 @@
+# Central execution only. Consumers retain trigger/concurrency declarations.
+# Proposed until linux-cluster-ops#326 and QSR#136/#137 admit this caller.
+name: GRC Product
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  product:
+    name: Lint, tests, and coverage
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - name: Admit GRC caller before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/governance-risk-compliance"
+          case "$CALLER_EVENT" in
+            pull_request)
+              test "$HEAD_REPOSITORY" = "$CALLER_REPOSITORY"
+              ;;
+            push|workflow_dispatch) ;;
+            *) exit 1 ;;
+          esac
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - name: Checkout exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv without a shared cache
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.5"
+          enable-cache: false
+          cache-local-path: ${{ runner.temp }}/grc-uv-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      - name: Install the hash-locked product
+        run: uv sync --locked --extra dev
+      - name: Lint
+        run: uv run ruff check cwl_grc tests
+      - name: Docstrings
+        run: uv run interrogate --fail-under 100 cwl_grc
+      - name: Tests and coverage
+        run: >-
+          uv run pytest --cov=cwl_grc --cov-branch
+          --cov-report=term-missing --cov-fail-under=100
+      - name: Compile
+        run: uv run python -m compileall -q cwl_grc tests
+      - name: Verify lock freshness
+        run: uv lock --check
+      - name: Verify clean product tree
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+      - name: Remove job-private uv cache
+        if: always()
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/grc-uv-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        run: rm -rf -- "$UV_CACHE_DIR"
