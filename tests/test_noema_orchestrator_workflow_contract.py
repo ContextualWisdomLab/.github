@@ -702,13 +702,15 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
 def test_noema_review_retains_sanitized_sidecar_evidence_after_any_outcome() -> None:
     """Retain existing sanitized evidence on success, failure and cancellation.
 
-    A forced runner shutdown can still prevent upload; this contract only
-    removes the failure-only gate without adding raw logs or new files.
+    Upload only after provisioning was attempted. Diagnostic upload failure
+    must not replace a valid verdict or a model failure with a storage error.
     """
     workflow = workflow_text("noema-review.yml")
     name = "Upload contextual-orchestrator sidecar evidence"
     step = workflow_step(workflow, name)
-    assert "if: always() && env.PR_NUMBER != ''" in step
+    assert "steps.noema_sidecar.outcome != 'skipped'" in step
+    assert "steps.noema_sidecar.outcome != ''" in step
+    assert "continue-on-error: true" in step
     strix_pin = re.search(
         r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
     ).group(1)
