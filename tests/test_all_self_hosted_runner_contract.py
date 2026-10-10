@@ -17,6 +17,7 @@ STATIC_RUNNER_GROUP_LABELS = {
     'CWL central OpenCode': set(),
     'CWL CI isolated': {'cwlab-ci-isolated'},
     'CWL law CI': {'law-ai-agent-ci'},
+    'CWL Gyeot CI': {'gyeot-ci'},
 }
 
 
@@ -81,6 +82,14 @@ def test_static_runner_group_policy_is_explicit_and_fail_closed() -> None:
     assert required_static_labels('CWL law CI') == {
         'self-hosted', 'linux', 'x64', 'law-ai-agent-ci',
     }
+    assert required_static_labels('CWL Gyeot CI') == {
+        'self-hosted', 'linux', 'x64', 'gyeot-ci',
+    }
+    configured = yaml.safe_load(Path('.github/actionlint.yaml').read_text())
+    assert 'gyeot-ci' in configured['self-hosted-runner']['labels']
+    assert {'cwlab-ci-isolated', 'cwlab-control'}.issubset(
+        configured['self-hosted-runner']['labels']
+    )
     with pytest.raises(AssertionError, match='unsupported static group'):
         required_static_labels('CWL ungoverned CI')
 
