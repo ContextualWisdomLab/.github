@@ -56,6 +56,24 @@ def test_tick_does_not_stack():
     assert "cancel-in-progress: false" in concurrency_block
 
 
+def test_tick_uses_the_admitted_central_self_hosted_group():
+    """Trusted schedule metadata work must not consume billing-locked hosted jobs."""
+    job = _job_block()
+    assert (
+        "    runs-on:\n      group: CWL MCP remediation\n"
+        "      labels: [self-hosted, linux, x64]"
+    ) in job
+    assert "runs-on: ubuntu" not in job
+    assert "pull_request:" not in _workflow_text()
+    header = job.split("runs-on:", 1)[0]
+    assert "github.repository == 'ContextualWisdomLab/.github'" in header
+    assert "github.event_name == 'schedule'" in header
+    assert (
+        "github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/"
+        "opencode-review-coalesce-tick.yml@refs/heads/main'"
+    ) in header
+
+
 def test_tick_bounds_its_own_wall_clock():
     job = _job_block()
     assert "timeout-minutes: 4" in job
@@ -74,6 +92,7 @@ def test_tick_scopes_each_repository_pass_to_review_dispatch_only():
         1,
     )[1]
     assert "--no-enable-auto-merge" in dispatch_step
+    assert "--merge-mode disabled" in dispatch_step
     assert "--no-update-branches" in dispatch_step
     assert "--branch-update-limit 0" in dispatch_step
     assert "--trigger-reviews" in dispatch_step

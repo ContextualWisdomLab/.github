@@ -2531,7 +2531,9 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "'opencode-app' || 'github-token' }}"
     ) in workflow
     assert "--no-trigger-reviews" in workflow
-    assert "--enable-auto-merge" in workflow
+    assert "--no-enable-auto-merge" in workflow
+    assert "--merge-mode disabled" in workflow
+    assert "--enable-auto-merge" not in workflow
     assert "--no-update-branches" in workflow
     assert "--require-opencode-app" in workflow
     assert "approval_attempt in 1 2 3 4 5 6" in workflow
