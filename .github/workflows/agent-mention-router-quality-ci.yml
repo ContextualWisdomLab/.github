@@ -13,7 +13,10 @@ on:
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
       - "tests/test_pr_review_fix_scheduler_coverage.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
   push:
     branches: [main]
     paths:
@@ -26,7 +29,10 @@ on:
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
       - "tests/test_pr_review_fix_scheduler_coverage.py"
+      - "requirements-opencode-review-ci.txt"
+      - "requirements-noema-document-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/compile_opencode_review_lock.sh"
 
 concurrency:
   group: agent-mention-router-quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}

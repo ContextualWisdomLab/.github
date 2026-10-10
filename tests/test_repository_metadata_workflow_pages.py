@@ -50,6 +50,20 @@ def test_metadata_pr_validation_cancels_superseded_head_runs() -> None:
     assert "github.event.pull_request.head.sha" not in concurrency
 
 
+
+def test_metadata_validation_fetches_history_for_published_lineage_contracts() -> None:
+    """The complete suite must have ancestry for its published-commit checks."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    validate_checkout = workflow.split(
+        "- name: Check out exact revision", 1
+    )[1].split("- name: Verify exact revision", 1)[0]
+
+    assert re.search(
+        r"(?m)^[ \t]+fetch-depth:[ \t]+0[ \t]*$",
+        validate_checkout,
+    )
+
 def test_manifest_accepts_explicit_workflow_pages_mode() -> None:
     """Workflow-backed Pages intent is explicit without changing legacy records."""
 

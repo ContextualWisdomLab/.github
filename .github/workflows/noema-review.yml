@@ -493,6 +493,10 @@ jobs:
           trusted_archive="${RUNNER_TEMP}/trusted-noema-source.tar.gz"
           api_url="${GITHUB_API_URL:-https://api.github.com}"
           curl -fsSL \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --retry-max-time 30 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
