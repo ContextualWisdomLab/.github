@@ -779,7 +779,7 @@ jobs:
           visibility=""
           for target_visibility_attempt in 1 2 3 4 5 6; do
             if visibility="$(
-              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
+              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private == true then "private" elif .private == false then "public" else "" end)'
             )"; then
               break
             fi

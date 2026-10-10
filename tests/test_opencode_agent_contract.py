@@ -3048,3 +3048,85 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert (
         "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
     )
+
+
+@pytest.mark.parametrize(
+    "repository_metadata,expected",
+    [
+        pytest.param({"visibility": "public"}, "false", id="public"),
+        pytest.param({"visibility": "private"}, "true", id="private"),
+        pytest.param({"visibility": "internal"}, "true", id="internal"),
+        pytest.param({}, None, id="missing"),
+        pytest.param({"visibility": None}, None, id="null"),
+        pytest.param({"visibility": "unknown"}, None, id="unknown"),
+        pytest.param({"visibility": 0}, None, id="number"),
+        pytest.param({"visibility": []}, None, id="array"),
+        pytest.param({"visibility": {}}, None, id="object"),
+        pytest.param({"private": True}, None, id="no-boolean-fallback-true"),
+        pytest.param({"private": False}, None, id="no-boolean-fallback-false"),
+    ],
+)
+def test_opencode_live_visibility_metadata_fails_closed(
+    tmp_path: Path, repository_metadata: dict, expected: str | None
+) -> None:
+    """Execute the sibling metadata admission shell with real jq and no network."""
+    assert shutil.which("jq") is not None
+    repository = "ContextualWisdomLab/example"
+    metadata = {
+        "state": "open",
+        "base": {"repo": {"full_name": repository, **repository_metadata}, "ref": "main", "sha": "a" * 40},
+        "head": {"repo": {"full_name": repository}, "ref": "feature", "sha": "b" * 40},
+    }
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("opencode-review-dispatch.yml"),
+            "Bind workflow inputs to live organization pull request metadata",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\n'
+        'test "$1" = api\ntest "$2" = repos/ContextualWisdomLab/example/pulls/7\n'
+        'test "$#" = 2\nprintf called >> "$FAKE_GH_CALLS"\n'
+        'printf "%s" "$FAKE_METADATA"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    calls = tmp_path / "gh-calls"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(tmp_path),
+            "GITHUB_OUTPUT": str(output),
+            "GH_TOKEN": "synthetic-review-token",
+            "EVENT_NAME": "repository_dispatch",
+            "DISPATCH_ACTOR": "synthetic-bot",
+            "DISPATCH_SENDER": "synthetic-bot",
+            "ALLOWED_DISPATCH_ACTOR": "synthetic-bot",
+            "ALLOWED_DISPATCH_TARGETS": repository,
+            "TARGET_REPOSITORY": repository,
+            "PR_NUMBER": "7",
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "a" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+            "FAKE_METADATA": json.dumps(metadata),
+            "FAKE_GH_CALLS": str(calls),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    assert calls.read_text(encoding="utf-8") == "called"
+    assert "synthetic-review-token" not in result.stdout + result.stderr
+    if expected is None:
+        assert result.returncode != 0
+        assert not output.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert values["is_private"] == expected
