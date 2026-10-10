@@ -1606,7 +1606,7 @@ def call_llm(
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/free"
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/auto"
     if not api_url or not api_key:
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."

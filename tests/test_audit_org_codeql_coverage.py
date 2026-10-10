@@ -35,13 +35,9 @@ def default_setup_scanning_nothing(name: str) -> dict:
     }
 
 
-def covered_by_recent_analysis(
-    name: str, *, days_ago: int = 1, reference_time: datetime = NOW
-) -> dict:
+def covered_by_recent_analysis(name: str, *, days_ago: int = 1) -> dict:
     """Return a repository payload covered by a recent, successful CodeQL analysis."""
-    created_at = (reference_time - timedelta(days=days_ago)).isoformat().replace(
-        "+00:00", "Z"
-    )
+    created_at = (NOW - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
     return {
         "name": name,
         "archived": False,
@@ -266,14 +262,15 @@ def test_null_latest_analysis_is_not_coverage() -> None:
     ]
 
 
-def test_audit_codeql_coverage_defaults_now_to_current_time() -> None:
-    repositories = [
-        covered_by_recent_analysis(
-            "DefaultNowRepo",
-            days_ago=0,
-            reference_time=datetime.now(timezone.utc),
-        )
-    ]
+def test_audit_codeql_coverage_defaults_now_to_current_time(monkeypatch) -> None:
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return NOW
+
+    monkeypatch.setattr(audit, "datetime", FixedClock)
+    repositories = [covered_by_recent_analysis("DefaultNowRepo", days_ago=0)]
 
     assert audit.audit_codeql_coverage(repositories) == []
 
@@ -309,17 +306,17 @@ def test_main_fail_path_reports_gaps_from_stdin(monkeypatch, capsys) -> None:
     assert "FAIL: 1 repositories have no CodeQL coverage" in captured.err
 
 
-def test_main_pass_path_reports_from_file_arg(tmp_path, capsys) -> None:
+def test_main_pass_path_reports_from_file_arg(tmp_path, capsys, monkeypatch) -> None:
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return NOW
+
+    monkeypatch.setattr(audit, "datetime", FixedClock)
     payload_path = tmp_path / "repositories.json"
     payload_path.write_text(
-        json.dumps(
-            [
-                covered_by_default_setup("ELUNVERA"),
-                covered_by_recent_analysis(
-                    "Orgmetra", reference_time=datetime.now(timezone.utc)
-                ),
-            ]
-        ),
+        json.dumps([covered_by_default_setup("ELUNVERA"), covered_by_recent_analysis("Orgmetra")]),
         encoding="utf-8",
     )
 
