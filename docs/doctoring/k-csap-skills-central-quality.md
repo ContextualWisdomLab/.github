@@ -4,6 +4,10 @@
 
 ## 현재 단계
 
+2026-10-10 admission 수리본의 독립 fresh review는 `CONDITIONAL_SOURCE_ACCEPTANCE`다. 부모가 report SHA-256 `dbc0d58d24a098c68f33268fcd8dc1a6de00f57bfe729aa0dd0272fd4e29ff62` 및 workflow `2b14845ebf761652ca78ecdaac86c6e851ea41dc573312f41ade2695b0a719b7`, test `36bbf733ea0bec7e0cd3b03cb07d6c466cf19fffb578f16114e820a9d69c3737`를 직접 대조했다. 실제 admission shell 35개와 SHA 소비자 4개 사례가 기대대로 동작했고 고정본 계약 테스트 28개가 통과했다. PR head/event SHA 및 state를 분리하며 admission 출력 SHA를 checkout/HEAD 검증이 함께 소비한다. Flatback의 이전 head 독립 재현은 2 FAIL/3 PASS로 보존한다. 이전 아래 해시는 역사 증거이며 새 수리본의 승인으로 재사용하지 않는다.
+
+setup-uv 사설 저장소/checksum 수정은 실제 pinned dist의 macOS arm64 Node24 실행, 잘못된 checksum 거부, cache-disabled post 실행으로 검토했다. report SHA-256 `2159eec4f6343b82250124b78af57ed8925deaa8a63dc007a6f7e15a9670da83`를 대조했으며 admission 변경과 해당 setup/cleanup 블록의 바이트가 동일함을 fresh reviewer가 확인했다. Linux X64/Node20 실제 Actions, Python runtime 무결성, same-UID 공격 및 강제 종료 격리는 미검증이다. job expression 검증은 로컬 합성 입력이며 원격 runner 배정 증거가 아니다. scratch custom-label actionlint는 canonical CI vocabulary 수락을 대체하지 않는다. 새 소스 출판은 허용되지만 Draft 해제·운영 활성화·병합은 아직 수락하지 않았다.
+
 초안의 독립 리뷰가 FAIL이다. 원본 workflow SHA-256은 `1743d6c788606bdbd6caa2006a2de47a22029ed5696d2a9a705085542224fa45`, 테스트는 `29e2d825a666332c6bf8a3272359d72c743856606f5d940c3f6920869e354db6`이다. 리뷰 report SHA-256은 `a67ed03a6136c0bdc98b48201b68720489f10a68c10a7eaa8eaa5e72f5546fd9`이다. 초안의 9개 계약 테스트와 actionlint 통과는 이 FAIL을 대체하지 않는다.
 
 독립 재리뷰는 동일 workflow/test 해시에서 `PASS_WITH_ACTIVATION_LIMITATIONS`를 반환했다. 부모가 report SHA-256 `923b518cf61b072d3fb8ca7e03e5a1825faaca3c248942dd3048d2fbc2a2a378` 및 두 파일 해시를 직접 대조했다. 리뷰의 focused pytest 21개, custom-label actionlint exit 0, 별도 harmless cleanup probe 11/11은 로컬 계약 증거다. 초기 FAIL report는 역사 기록으로 보존한다. setup-uv 도구 상태는 private cleanup 범위 밖이며 외부 action 내부 cleanup, immutable download 무결성, 실제 원격 실행/App 승인은 미검증이다.

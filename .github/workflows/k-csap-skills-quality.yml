@@ -14,7 +14,10 @@ jobs:
       github.repository == 'ContextualWisdomLab/k-csap-skills' &&
       ((github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.state == 'open') ||
+        github.event.pull_request.state == 'open' &&
+        github.event.pull_request.head.sha != '' &&
+        github.event.pull_request.number > 0 &&
+        github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) ||
        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
         github.ref == 'refs/heads/master'))
     runs-on: [self-hosted, Linux, X64, k-csap-isolated]
@@ -26,9 +29,10 @@ jobs:
           TARGET_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_SHA: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
-          PR_STATE: ${{ github.event.pull_request.state || 'open' }}
+          PR_STATE: ${{ github.event.pull_request.state || '' }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
@@ -42,12 +46,18 @@ jobs:
                 echo "::error::K-CSAP quality only accepts master branch pushes or dispatches."
                 exit 1
               fi
+              EXPECTED_SHA="$EVENT_SHA"
               ;;
             pull_request)
               if [ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ] || [ "$PR_STATE" != "open" ]; then
                 echo "::error::K-CSAP quality accepts only open same-repository pull requests."
                 exit 1
               fi
+              if ! [[ "$EVENT_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]; then
+                echo "::error::K-CSAP quality rejected a malformed pull request ref."
+                exit 1
+              fi
+              EXPECTED_SHA="$PR_HEAD_SHA"
               ;;
             *)
               echo "::error::K-CSAP quality rejected an unsupported event."
@@ -58,6 +68,7 @@ jobs:
             echo "::error::K-CSAP quality rejected a malformed source SHA."
             exit 1
           fi
+          echo "expected_sha=$EXPECTED_SHA" >>"$GITHUB_OUTPUT"
           echo "admitted=true" >>"$GITHUB_OUTPUT"
 
       - name: Prepare run-owned source directory
@@ -88,21 +99,38 @@ jobs:
       - name: Checkout exact caller source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.admission.outputs.expected_sha }}
           path: ${{ steps.prepare.outputs.source_path }}
           persist-credentials: false
           clean: true
 
+      - name: Prepare private setup action storage
+        working-directory: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          test ! -e .ci-tools && test ! -L .ci-tools
+          mkdir -p .ci-tools/tmp .ci-tools/tool-cache
+
       - name: Install pinned uv action
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        env:
+          RUNNER_TOOL_CACHE: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/tool-cache
+          RUNNER_TEMP: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/tmp
         with:
           version: '0.9.7'
+          checksum: b26fcc8dfa1c39b5a5613445af3be3eefda45d9a39359bee271eafe34913583e
           enable-cache: false
+          restore-cache: false
+          save-cache: false
+          cache-local-path: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/cache
+          tool-dir: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/uv-tools
+          tool-bin-dir: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/bin
 
       - name: Verify K-CSAP quality in a job-private environment
         working-directory: ${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SHA: ${{ steps.admission.outputs.expected_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail

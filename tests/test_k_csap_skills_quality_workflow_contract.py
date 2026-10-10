@@ -54,6 +54,75 @@ def test_admission_before_checkout_and_no_credential_persistence():
     assert steps[0]["env"]["HEAD_REPOSITORY"].startswith("${{")
 
 
+@pytest.mark.parametrize(
+    ("head_sha", "ref", "state", "expected"),
+    [
+        ("a" * 40, "refs/pull/17/merge", "open", 0),
+        ("", "refs/pull/17/merge", "open", 1),
+        ("a" * 40, "refs/heads/master", "open", 1),
+        ("a" * 40, "refs/pull/17/merge", "", 1),
+        ("a" * 40, "refs/pull/0/merge", "open", 1),
+    ],
+)
+def test_pr_admission_never_falls_back_to_event_sha(tmp_path, head_sha, ref, state, expected):
+    import os
+    import subprocess
+
+    step = workflow()["jobs"]["quality"]["steps"][0]
+    values = {
+        "${{ github.repository }}": "ContextualWisdomLab/k-csap-skills",
+        "${{ github.event_name }}": "pull_request",
+        "${{ github.event.pull_request.head.repo.full_name || '' }}": "ContextualWisdomLab/k-csap-skills",
+        "${{ github.event.pull_request.head.sha || github.sha }}": head_sha or "b" * 40,
+        "${{ github.event.pull_request.head.sha || '' }}": head_sha,
+        "${{ github.sha }}": "b" * 40,
+        "${{ github.ref }}": ref,
+        "${{ github.event.pull_request.state || 'open' }}": state or "open",
+        "${{ github.event.pull_request.state || '' }}": state,
+    }
+    env = {"PATH": os.environ["PATH"], **{key: values[value] for key, value in step["env"].items()},
+           "GITHUB_OUTPUT": str(tmp_path / "output")}
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                            env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == expected, result.stdout + result.stderr
+    output = tmp_path / "output"
+    if expected == 0:
+        assert output.read_text() == f"expected_sha={head_sha}\nadmitted=true\n"
+    else:
+        assert not output.exists()
+
+
+def test_source_consumers_use_admitted_sha():
+    steps = workflow()["jobs"]["quality"]["steps"]
+    checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+    verify = next(step for step in steps if step.get("name", "").startswith("Verify K-CSAP"))
+    assert checkout["with"]["ref"] == "${{ steps.admission.outputs.expected_sha }}"
+    assert verify["env"]["EXPECTED_SHA"] == "${{ steps.admission.outputs.expected_sha }}"
+    gate = workflow()["jobs"]["quality"]["if"]
+    assert "github.event.pull_request.head.sha != ''" in gate
+    assert "format('refs/pull/{0}/merge', github.event.pull_request.number)" in gate
+
+
+def test_setup_uv_is_checksum_pinned_and_job_owned():
+    steps = workflow()["jobs"]["quality"]["steps"]
+    setup = next(step for step in steps if step.get("uses", "").startswith("astral-sh/setup-uv@"))
+    assert setup["with"]["checksum"] == (
+        "b26fcc8dfa1c39b5a5613445af3be3eefda45d9a39359bee271eafe34913583e"
+    )
+    assert setup["env"]["RUNNER_TOOL_CACHE"] == (
+        "${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/tool-cache"
+    )
+    assert setup["env"]["RUNNER_TEMP"] == (
+        "${{ github.workspace }}/${{ steps.prepare.outputs.source_path }}/.ci-tools/tmp"
+    )
+    assert setup["with"]["cache-local-path"].endswith("/.ci-tools/cache")
+    assert setup["with"]["enable-cache"] is False
+    assert setup["with"]["save-cache"] is False
+    assert setup["with"]["restore-cache"] is False
+    assert setup["with"]["tool-bin-dir"].endswith("/.ci-tools/bin")
+    assert setup["with"]["tool-dir"].endswith("/.ci-tools/uv-tools")
+
+
 def test_locked_quality_steps_and_scope_are_executable():
     steps = workflow()["jobs"]["quality"]["steps"]
     source = "\n".join(step.get("run", "") for step in steps)
@@ -142,8 +211,9 @@ def test_actual_admission_shell_rejects_untrusted_before_checkout(
 
     script = workflow()["jobs"]["quality"]["steps"][0]["run"]
     env = {**os.environ, "TARGET_REPOSITORY": repository, "EVENT_NAME": event,
-           "HEAD_REPOSITORY": head_repository, "EXPECTED_SHA": "a" * 40,
-           "PR_STATE": "open", "EVENT_REF": "refs/heads/master",
+           "HEAD_REPOSITORY": head_repository, "PR_HEAD_SHA": "a" * 40,
+           "EVENT_SHA": "b" * 40, "PR_STATE": "open",
+           "EVENT_REF": "refs/pull/17/merge" if event == "pull_request" else "refs/heads/master",
            "GITHUB_OUTPUT": str(tmp_path / "output")}
     proc = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
                           env=env, capture_output=True, text=True, check=False)
@@ -203,7 +273,7 @@ def test_admission_rejects_non_master_closed_pr_and_invalid_sha(
     script = workflow()["jobs"]["quality"]["steps"][0]["run"]
     env = {**os.environ, "TARGET_REPOSITORY": "ContextualWisdomLab/k-csap-skills",
            "EVENT_NAME": event, "HEAD_REPOSITORY": head, "EVENT_REF": ref,
-           "PR_STATE": state, "EXPECTED_SHA": sha,
+           "PR_STATE": state, "PR_HEAD_SHA": sha, "EVENT_SHA": sha,
            "GITHUB_OUTPUT": str(tmp_path / "output")}
     proc = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
                           env=env, capture_output=True, text=True, check=False)
