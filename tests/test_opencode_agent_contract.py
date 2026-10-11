@@ -795,6 +795,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
+    # Cargo crate archives keep modes such as 0640 through COPY, so the
+    # coverage image must normalize the base-rust dependency tree before
+    # unprivileged sandbox execution.
+    assert measure_step.index(
+        "COPY base-rust-dependencies /opt/base-rust-dependencies"
+    ) < measure_step.index("RUN chmod -R a+rX /opt/base-rust-dependencies")
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
@@ -1285,7 +1291,7 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "[ -d src ] && printf src:. || printf ." in measure
     assert "PYTHONPATH=. python3 -m pytest tests/test_docstrings.py" not in measure
     assert (
-        'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" '
+        'PYTHONPATH=\\"\\$([ -d src ] && printf src:. || printf .)\\" '
         "python3 -m pytest tests/test_docstrings.py"
     ) in measure
 
@@ -2201,7 +2207,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
     assert (
         workflow.count(
-            '["opencode-review","coverage-evidence","metadata-only gate evaluation"]'
+            '[\\"opencode-review\\",\\"coverage-evidence\\",\\"metadata-only gate evaluation\\"]'
         )
         >= 2
     )
@@ -2217,9 +2223,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         not in failed_check_collector
     )
     assert (
-        '["opencode-review", "coverage-evidence", "coverage-source-tree", '
-        '"required-workflow-bootstrap", "metadata-only gate evaluation", '
-        '"scan-pr-queue"]' in workflow
+        '[\\"opencode-review\\", \\"coverage-evidence\\", \\"coverage-source-tree\\", '
+        '\\"required-workflow-bootstrap\\", \\"metadata-only gate evaluation\\", '
+        '\\"scan-pr-queue\\"]' in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 
@@ -2306,7 +2312,8 @@ def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
 
     # Both failed-check collectors and both pending-check collectors exclude the
     # scheduler check by name, independently of its current state or conclusion.
-    assert workflow.count(unconditional_filter) >= 5
+    escaped_filter = 'select((.name // \\"\\") != \\"scan-pr-queue\\")'
+    assert workflow.count(unconditional_filter) + workflow.count(escaped_filter) >= 5
     assert cancelled_only_filter not in workflow
     failed_check_collector = Path(
         "scripts/ci/collect_failed_check_evidence.sh"
@@ -2909,7 +2916,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
     )[1].split("      - name: Publish OpenCode review outcome", 1)[0]
     assert "continue-on-error: true" in fast_approval
     assert "def latest_peer_checks:" in fast_approval
-    assert 'group_by([.app.slug // "", .name // ""])' in fast_approval
+    assert 'group_by([.app.slug // \\"\\", .name // \\"\\"])' in fast_approval
     assert fast_approval.count("latest_peer_checks") == 3
     assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
     assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
@@ -3012,7 +3019,7 @@ def test_opencode_review_language_signal_is_throttle_proof():
         workflow,
     )
     # The preferred-language marker and its Korean/English detection remain.
-    assert "- Preferred review language: `%s`" in workflow
+    assert "- Preferred review language: \\`%s\\`" in workflow
     assert "grep -Eq '[가-힣]'" in workflow
 
 

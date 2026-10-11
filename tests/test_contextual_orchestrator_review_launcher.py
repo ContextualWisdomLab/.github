@@ -6,6 +6,7 @@ import json
 import logging
 import runpy
 import sys
+import threading
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -473,30 +474,59 @@ def test_preflight_without_fallback_preserves_the_primary_failure() -> None:
 
 
 def test_concurrent_preflight_waits_for_an_outstanding_route() -> None:
-    """Exhausting the iterator waits for its live probe instead of failing early."""
+    """Hold the probe until the scheduler reaches its blocking receive."""
     agent = SimpleNamespace(
         id="slow-ready", provider_name="bytez", model="test/free", priority=0
     )
+    release = threading.Event()
+    original_queue = launcher.queue.Queue
+    original_thread = launcher.threading.Thread
+    workers: list[threading.Thread] = []
+    blocking_get_calls: list[bool] = []
 
-    class SlowClient:
-        """Delay long enough for the scheduler to enter its blocking receive."""
+    class RecordingQueue(original_queue):
+        """Release the held probe only on an actual blocking receive."""
+
+        def get(self, block: bool = True, timeout: float | None = None) -> object:
+            if block:
+                blocking_get_calls.append(True)
+                release.set()
+            return super().get(block=block, timeout=timeout)
+
+    def recording_thread(*args: object, **kwargs: object) -> threading.Thread:
+        worker = original_thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    class HeldClient:
+        """Wait for the receive handshake, not a scheduling-dependent sleep."""
 
         def proxy_send_once(
             self, selected_agent: object, endpoint: str, payload: dict[str, object]
         ) -> dict[str, object]:
-            time.sleep(0.02)
+            assert release.wait(timeout=5), "scheduler did not enter blocking receive"
             return {
                 "choices": [
                     {"finish_reason": "stop", "message": {"content": "OK"}}
                 ]
             }
 
-    viable_agents, preflight_report = launcher._preflight_review_agents_concurrently(
-        [agent], client=SlowClient()
-    )
-
-    assert viable_agents == [agent]
-    assert preflight_report["ready_count"] == 1
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(launcher.queue, "Queue", RecordingQueue)
+        monkeypatch.setattr(launcher.threading, "Thread", recording_thread)
+        viable_agents, preflight_report = launcher._preflight_review_agents_concurrently(
+            [agent], client=HeldClient()
+        )
+        assert blocking_get_calls == [True]
+        assert viable_agents == [agent]
+        assert preflight_report["ready_count"] == 1
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+        monkeypatch.undo()
+        assert all(not worker.is_alive() for worker in workers)
 
 
 def test_postponed_concurrent_probe_cannot_spend_an_escalation(
