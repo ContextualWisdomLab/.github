@@ -45,10 +45,15 @@ not a permanent capacity claim.
 
 - Product PR execution must use a verified isolation boundary; do not send
   untrusted builds to shared metadata/review runners.
-- A Noema approval is not yet accepted by the scheduler's blanket bot
-  exclusion. A future change must recognize only authenticated authorized
-  App evidence on the exact head, preserve revocations, and not admit arbitrary
-  bot approvals.
+- The scheduler recognizes only the canonical GitHub-authenticated Noema
+  App as an exception to blanket bot exclusion. It requires the real review
+  commit to match the exact head, a coherent publisher head/result/actor/App
+  credential receipt, and non-author identity after REST/GraphQL normalization.
+  The latest relevant formal review is resolved before receipt validation:
+  revocations or malformed latest approvals cannot resurrect older approvals.
+  This establishes independent-review eligibility only; GitHub's aggregate
+  approval policy, checks, security evidence, threads, and merge freshness
+  remain separate and unchanged.
 - Current review configuration remains `orchestrator/free`; it is not a
   literal `auto` model setting. An authenticated LiteLLM onboarding and
   explicit gateway contract/policy update are required before claiming the
