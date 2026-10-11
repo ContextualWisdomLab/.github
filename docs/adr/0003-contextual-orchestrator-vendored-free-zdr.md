@@ -5,7 +5,7 @@
   `orchestrator/free`)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Public Noema/OpenCode reviews use the configured PoinNetworks LiteLLM `auto` model with the centrally stored `LLM_GATEWAY_API_KEY`. Private/internal reviews use the **vendored** `contextual-orchestrator` sidecar and only an attested ZDR route from `orchestrator/free`. Unknown visibility fails closed. Strix continues to use the sidecar's `orchestrator/free` pool. **ZDR-compliant routes remain mandatory for private targets.**
+- Decision: Public Noema/OpenCode reviews use the configured PoinNetworks LiteLLM `auto` model with the centrally stored `LLM_GATEWAY_API_KEY`. Private/internal reviews use the **vendored** `contextual-orchestrator` sidecar and only an attested ZDR route from `orchestrator/free`. Unknown visibility fails closed. Strix continues to use the sidecar's `orchestrator/free` pool. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 

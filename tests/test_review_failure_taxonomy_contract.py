@@ -66,18 +66,17 @@ def test_autofix_opencode_provider_targets_the_served_gateway_path() -> None:
 
 
 def test_dispatch_opencode_provider_targets_the_served_gateway_path() -> None:
-    """The dispatch gateway overlay must carry the same /v1 prefix.
-
-    The dispatch workflow writes a provider-free base config and then layers
-    the gateway provider on with a second ``jq`` filter, so the assertion is
-    on every ``baseURL`` the workflow binds for that provider.
-    """
+    """Both visibility-scoped providers retain their served /v1 prefix."""
     workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
-    bound = re.findall(
-        r'"baseURL": "(\{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL\}[^"]*)"', workflow
+    route_block = workflow.split('          if [ "$EXPECTED_IS_PRIVATE" = true ]; then', 1)[1]
+    private_route, public_route = route_block.split(
+        '          elif [ "$EXPECTED_IS_PRIVATE" = false ]; then', 1
     )
-    assert bound, "the dispatch workflow binds no gateway baseURL"
-    assert set(bound) == {EXPECTED_BASE_URL}
+    public_route = public_route.split("          else\n", 1)[0]
+    assert f'base_url="{EXPECTED_BASE_URL}"' in private_route
+    assert 'base_url="https://litellm.poinnetworks.net/v1"' in public_route
+    assert '--arg base_url "$base_url"' in route_block
+    assert '"options": {"baseURL": $base_url, "apiKey": $api_key}' in route_block
 
 
 def test_repository_opencode_config_targets_the_served_gateway_path() -> None:

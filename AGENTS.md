@@ -20,7 +20,7 @@ Central Noema and OpenCode reviews use the configured PoinNetworks LiteLLM
 `LLM_GATEWAY_API_KEY`). Private/internal targets use the vendored
 **contextual-orchestrator** sidecar with `orchestrator/free` and an attested
 ZDR-only catalog. Unknown visibility fails closed without selecting either
-route. Strix uses that sidecar's `orchestrator/free` pool. The sidecar's five
+route. Strix uses that sidecar's zero-cost `orchestrator/free` pool. The sidecar's five
 provider secrets enter its in-process KV only as bootstrap transport. See
 [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 and [`docs/doctoring/noema-orchestrator-free-zdr.md`](docs/doctoring/noema-orchestrator-free-zdr.md).
