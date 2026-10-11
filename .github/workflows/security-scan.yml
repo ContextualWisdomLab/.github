@@ -654,7 +654,7 @@ jobs:
         run: |
           echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
-        if: always()
+        if: always() && steps.osv_prepare.outcome == 'success' && steps.osv_prepare.outputs.root != '' && steps.osv_require.outcome == 'success'
         # The reporter and SARIF upload above preserve the security verdict.
         # Debug retention quota is observability only and must not turn a clean
         # comparison into a failed security gate.

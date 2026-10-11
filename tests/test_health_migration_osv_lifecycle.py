@@ -221,6 +221,72 @@ def test_sarif_admission_rejects_empty_partial_and_symlink(lifecycle, bad):
     assert "steps.osv_sarif_admission.outputs.admitted == 'true'" in upload
 
 
+def debug_upload_plan(prepare, root, admission):
+    """Evaluate the parsed guard and render paths, without accessing them."""
+    upload = step('Upload OSV debug artifacts')
+    values = {
+        'steps.osv_prepare.outcome': prepare,
+        'steps.osv_prepare.outputs.root': root,
+        'steps.osv_require.outcome': admission,
+    }
+    expression = upload['if'].replace('always()', 'True').replace('&&', ' and ')
+    for key, value in values.items():
+        expression = expression.replace(key, repr(value))
+    eligible = eval(expression, {'__builtins__': {}}, {})
+    rendered = upload['with']['path'].replace('${{ steps.osv_prepare.outputs.root }}', root)
+    return eligible, rendered.splitlines()
+
+
+@pytest.mark.parametrize('prepare', ['failure', 'skipped', 'cancelled', '', 'unknown'])
+@pytest.mark.parametrize('root', ['', '/synthetic-existing-foreign-root'])
+def test_debug_upload_rejects_failed_prepare(prepare, root):
+    eligible, paths = debug_upload_plan(prepare, root, 'success')
+    # Missing outputs really render absolute foreign paths; never touch them.
+    if not root:
+        assert paths == ['/old-results.json', '/new-results.json', '/results.sarif']
+    assert eligible is False, f'failed prepare admitted foreign paths: {paths}'
+
+
+@pytest.mark.parametrize(('root', 'admission'), [
+    ('', 'success'),
+    ('/synthetic-existing-foreign-root', 'failure'),
+    ('/synthetic-existing-foreign-root', 'skipped'),
+    ('/synthetic-existing-foreign-root', 'cancelled'),
+    ('/synthetic-existing-foreign-root', ''),
+    ('/synthetic-existing-foreign-root', 'unknown'),
+])
+def test_debug_upload_requires_current_root_admission(root, admission):
+    eligible, paths = debug_upload_plan('success', root, admission)
+    assert eligible is False, f'unadmitted root eligible: {paths}'
+
+
+def test_debug_upload_keeps_admitted_failure_diagnostics(lifecycle):
+    env, cwd, _ = lifecycle
+    assert execute('Scan base with OSV', env, cwd).returncode == 0
+    assert execute('Scan head with OSV', env, cwd).returncode == 0
+    assert execute('Require OSV scan output', env, cwd).returncode == 0
+    # The reporter can fail after this admission. Debug retention is not a pass.
+    root = Path(env['OSV_ROOT'])
+    (root / 'results.sarif').write_text('{"partial":')
+    eligible, paths = debug_upload_plan('success', str(root), 'success')
+    assert eligible is True
+    assert paths == [str(root / name) for name in
+                     ('old-results.json', 'new-results.json', 'results.sarif')]
+    assert all(Path(path).is_file() for path in paths)
+    assert step('Upload OSV debug artifacts')['continue-on-error'] is True
+    assert 'continue-on-error' not in step('Report PR-introduced OSV findings')
+
+
+def test_debug_upload_rejects_actual_current_root_admission_failure(lifecycle):
+    env, cwd, _ = lifecycle
+    assert execute('Scan base with OSV', env, cwd).returncode == 0
+    assert execute('Scan head with OSV', env, cwd).returncode == 0
+    rejected = execute('Require OSV scan output', {**env, 'OSV_NONCE': 'foreign'}, cwd)
+    assert rejected.returncode != 0, rejected.stdout + rejected.stderr
+    eligible, _ = debug_upload_plan('success', env['OSV_ROOT'], 'failure')
+    assert eligible is False
+
+
 def test_setup_failure_skips_sarif_upload():
     guard = step('Upload OSV SARIF to code scanning')['if']
     assert "steps.osv_prepare.outcome == 'success'" in guard
