@@ -1610,7 +1610,42 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
         )
 
 
-def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(monkeypatch, tmp_path):
+@pytest.fixture
+def modeled_host_home(monkeypatch, tmp_path):
+    """Keep the modeled host home separate from path-resolution workspaces.
+
+    Approved runner scratch may itself be beneath the real HOME. Model only
+    Path.home for these tests; leave HOME and the production denial unchanged.
+    """
+    home = tmp_path.parent / f"{tmp_path.name}-host-home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
+def test_isolated_command_rejects_workspace_inside_modeled_home(monkeypatch, modeled_host_home):
+    """Workspace admission must not override the host-home executable denial."""
+    sandbox = modeled_host_home / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "launch.sh"
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match=re.escape("host home directory")):
+        sandboxed_web_e2e.isolated_command(
+            "./launch.sh",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A ./gradlew-style repository launcher resolves against the sandboxed cwd.
 
     ``shutil.which`` resolves any command string containing a path separator
@@ -1641,7 +1676,9 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(mon
     assert command.endswith("./gradlew build")
 
 
-def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypatch, tmp_path):
+def test_isolated_command_resolves_bare_command_via_relative_path_entry(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A bare command resolves when PATH itself has a relative entry.
 
     ``shutil.which`` joins a relative ``PATH`` entry with the *calling
@@ -1674,7 +1711,9 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypa
     assert command.endswith("tool")
 
 
-def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(monkeypatch, tmp_path):
+def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """An absolute copied-repo launcher path is rewritten to its /workspace equivalent.
 
     ``isolated_command`` binds ``sandbox_root`` at ``SANDBOX_MOUNT`` inside
@@ -1743,7 +1782,9 @@ def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypat
         )
 
 
-def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
+def test_isolated_command_rejects_repo_local_path_traversal(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
@@ -1763,7 +1804,9 @@ def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_pat
         )
 
 
-def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
+def test_isolated_command_rejects_explicit_external_path(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """An explicit absolute path outside the workspace and bind roots is still rejected."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"

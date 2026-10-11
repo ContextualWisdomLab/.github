@@ -7,10 +7,15 @@ import importlib
 import json
 import runpy
 import subprocess
-import tomllib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised by the Python 3.10 CI lane
+    import tomli as tomllib
 
 import pytest
 

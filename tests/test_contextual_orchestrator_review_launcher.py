@@ -509,15 +509,55 @@ def test_postponed_concurrent_probe_cannot_spend_an_escalation(
         )
         for index in range(3)
     ]
-    probe_calls = 0
+    consumed_agent_ids: list[str] = []
+    scheduled_probes: list[tuple[str, bool]] = []
+
+    class ConsumptionQueue(launcher.queue.Queue):
+        """Record receives, not just worker completion, at the scheduler seam."""
+
+        def get(self, block: bool = True, timeout: float | None = None) -> object:
+            result = super().get(block=block, timeout=timeout)
+            _, outcome = result
+            if not isinstance(outcome, BaseException):
+                consumed_agent_ids.append(outcome["agent_id"])
+            return result
+
+    class InlineProbeThread:
+        """Complete a probe before the next scheduler iteration, without sleeps."""
+
+        def __init__(self, *, target: object, args: tuple, daemon: bool) -> None:
+            self.target = target
+            self.args = args
+            assert daemon is True
+
+        def start(self) -> None:
+            _, agent, postponed_probe = self.args
+            if agent.id == "2":
+                # Consumption updates the real scheduler's account streak; a
+                # completed-but-unconsumed 429 is not sufficient for deferral.
+                assert consumed_agent_ids == ["0", "1"]
+                assert postponed_probe is True
+            scheduled_probes.append((agent.id, postponed_probe))
+            # The constructor receives the real scheduler's callable probe.
+            assert callable(self.target)
+            self.target(*self.args)
+
+    # Replace only this launcher's module references under fixture cleanup.
+    # The separate outstanding-route test continues to use actual threads.
+    monkeypatch.setattr(
+        launcher, "queue",
+        SimpleNamespace(Queue=ConsumptionQueue, Empty=launcher.queue.Empty),
+    )
+    monkeypatch.setattr(
+        launcher, "threading",
+        SimpleNamespace(Thread=InlineProbeThread, Lock=launcher.threading.Lock),
+    )
 
     def deterministic_probe(
         selected_agents: list[object], **settings: object
     ) -> tuple[list[object], dict[str, object]]:
-        nonlocal probe_calls
-        probe_calls += 1
         selected_agent = selected_agents[0]
-        if probe_calls <= 2:
+        if selected_agent.id in {"0", "1"}:
             route = {
                 "agent_id": selected_agent.id,
                 "provider": "bytez",
@@ -545,5 +585,9 @@ def test_postponed_concurrent_probe_cannot_spend_an_escalation(
     with pytest.raises(launcher.ReviewPreflightError) as error_result:
         launcher._preflight_review_agents_concurrently(agents, client=object())
 
+    assert scheduled_probes == [("0", False), ("1", False), ("2", True)]
+    assert consumed_agent_ids == ["0", "1", "2"]
+    assert error_result.value.report["postponed_probed_count"] == 1
     postponed_route = error_result.value.report["routes"][2]
+    assert postponed_route["agent_id"] == "2"
     assert postponed_route["error_type"] == "escalation_reserved_for_first_pass"
