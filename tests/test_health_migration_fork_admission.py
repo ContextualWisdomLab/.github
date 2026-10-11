@@ -141,7 +141,7 @@ PREDECESSOR_DOCUMENTS = {
     "agent-mention-router-quality-ci.yml": "59e130fd1368d6db3f4e008accd366dc655306889553c5b8ecf1687c9f543d11",
     "agent-review-runtime-quality-ci.yml": "d54b335ba924a97890d4547532505b2fbd4e9af5ca1b49a78b537e57e6458dd5",
     "trusted-uv-materializer-quality-ci.yml": "497fc97437b427c0c3e304107c4c0bbd286334c7f593dd9415fad2e729fd479d",
-    "exact-head-coverage-quality-gate.yml": "edc69da721d0aa030876a49760be8adc92a1130338bbf80865c5066b32588a8f",
+    "exact-head-coverage-quality-gate.yml": "7f91a3459678df8d1e486637d0e9e7a7180c3dd98a0f950867f0131cf8f53e45",
 }
 REFUSAL_JOB = "refuse-unsupported-pr"
 
