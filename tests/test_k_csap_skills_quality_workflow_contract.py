@@ -254,6 +254,34 @@ def test_real_prepare_and_cleanup_preserve_stale_and_sibling_source(tmp_path, st
     assert sentinel.read_text() == "unchanged"
 
 
+@pytest.mark.parametrize("storage", ["source", "setup-tools"])
+def test_owned_directories_are_private_with_permissive_parent_umask(tmp_path, storage):
+    import os
+    import stat
+    import subprocess
+
+    steps = workflow()["jobs"]["quality"]["steps"]
+    output = tmp_path / "output"
+    env = {**os.environ, "RUN_ID": "83", "RUN_ATTEMPT": "2",
+           "GITHUB_WORKSPACE": str(tmp_path), "GITHUB_OUTPUT": str(output)}
+    if storage == "source":
+        step = steps[1]
+        directory = tmp_path / "k-csap-quality.83.2"
+    else:
+        step = next(item for item in steps
+                    if item.get("name") == "Prepare private setup action storage")
+        directory = tmp_path / ".ci-tools"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", "umask 000; " + step["run"]],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    for child in directory.rglob("*"):
+        if child.is_dir():
+            assert stat.S_IMODE(child.stat().st_mode) == 0o700
+
+
 @pytest.mark.parametrize(
     ("event", "head", "ref", "state", "sha", "expected"),
     [

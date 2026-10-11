@@ -1,6 +1,6 @@
 # Goal — K-CSAP 중앙 self-hosted 실행과 조건부 병합
 
-갱신: 2026-10-10 23:04 KST. 이 worktree의 단일 작성자는 goosefish 부모다.
+갱신: 2026-10-11 KST. 이 worktree의 단일 작성자는 goosefish 부모다.
 
 ## 완료 결과
 
@@ -49,8 +49,8 @@
 3. 공유 auto route의 base chain을 default `main`까지 추적한다. feature-stack merge는 배포가 아니다. canonical lint label과 test dependency linkage도 해당 소유자와 결합한다.
 4. 실제 self-hosted run/job ID와 runner_name, 실행된 source SHA 및 required step exits를 확인한다.
 5. 실제 개인 gateway 인증 추론과 substantive verdict, author-distinct canonical App의 현재 head/base review를 확인한다. Draft skip/무료 요약/인프라 오류는 approval이 아니다.
-6. live head/checks/required rules/unresolved findings를 fail-closed로 판정한다. 실패·skip·부재·다른 head 증거는 Ready/merge로 진행하지 않는다. 성공 후 일반 merge를 수행하고 state/mergedAt/mergeCommit/default branch를 읽어 확인한다.
-7. 제품 caller를 immutable protected producer pin으로 전환하고 실제 caller-context 실행을 확인한다. hosted fallback 없이 교체한다.
+6. 리뷰 요청 단계와 병합 수락 단계를 분리한다. Ready는 승인·검증 통과가 아니다. 소스 검토와 live head/base/필수 규칙/미해결 finding 확인 후, 실행 가능한 승인된 reviewer 경로가 있으면 Ready만 전환할 수 있다. 실제 callee 증거는 oscar가 승인된 임시 caller에서 immutable 후보 SHA를 사용해 병합 전에 확보한다. legacy/다른 모델 실행은 요구된 `auto` 증거로 세지 않는다.
+7. 병합 직전 live head/checks/required rules/unresolved findings를 fail-closed로 판정한다. 실패·skip·부재·다른 head 증거가 있으면 merge하지 않는다. 모든 조건 충족 후 일반 merge를 수행하고 state/mergedAt/mergeCommit/default branch를 읽어 확인한다. 최종 제품 caller는 immutable protected producer pin으로 전환하고 실제 caller-context 실행을 확인한다. hosted fallback 없이 교체한다.
 
 ## 현재 수락 상태
 
@@ -58,11 +58,11 @@
 
 ## 다음 실제 작업
 
-1. 이미 시작한 운영 진단 작업의 실제 호스트 관측과 실행 receipt를 대조하고, 격리·toolchain의 좁은 수리를 담당자와 실행한다.
-2. 병렬 전달 경로 작업으로 #2565의 base chain과 canonical label의 다음 정상 통합 지점을 결정한다. 운영 작업과 불필요한 선행조건으로 묶지 않는다.
-3. 개인 gateway `auto` 추론과 작성자와 다른 App의 현재 head review를 검증한다. shared/key 담당자의 source와 custody를 유지한다.
-4. 모든 병합 gate가 충족되면 최신 head에 결속한 preflight와 동일 실행 경로에서 정상 Ready/merge를 수행한다. 실패·skip·부재 시 mutation을 멈추고 해당 원인을 수리한다.
-5. Kelp/Flatback은 이 worktree를 편집하지 않고 독립 packet을 반환한다. 다음 checkpoint는 실행 중인 두 작업의 구조화된 결과다.
+1. 읽기전용 운영 보고의 최종 해시를 검증했다. online/container 관측은 배타 lease나 process settlement/cleanup 통과가 아니다. oscar의 기존 운영 수리와 caller 후보를 재사용한다.
+2. permissive umask에서 source와 `.ci-tools`가 0777로 만들어지는 실제 shell RED 2개를 확인했다. 각 생성 단계에 `umask 077`을 적용하고 계약 테스트 30개 통과를 확인했다. 이는 다른 UID의 접근 제한이며 같은 UID의 적대적 writer 격리 증거가 아니다. 독립 delta 리뷰 후 게시한다.
+3. canonical CI lock의 PyYAML 누락은 실제 collection RED exit 2로 확인했다. dedicated PyYAML 6.0.3 hash block을 추가한 scratch 제안은 28개 통과다. shared 소유자에게 comment `6098771884`로 전달했다. 2026-10-11 remote head `b78007bfc976faaa4d416d2b6578b114e2725a82`의 canonical lock에 PyYAML pin이 추가된 사실을 확인했다. 해당 pin의 설치 검증 및 보호된 main 통합은 별도다. canonical lint의 `k-csap-isolated`는 이 head에서도 없다.
+4. bootstrap plan review `5eaa615dc1f6ac143f526329ae46d68f95284452114cada4a83c77e3391586b1`의 CHANGES_REQUESTED를 채택했다. Ready와 merge를 분리하고 임시 exact-SHA caller로 실행 순환을 해소한다. 실제 `auto`/App 및 운영 수락 조건은 유지한다.
+5. 기존 caller 후보는 PR32 base 위의 oscar 소유 2파일이며 아직 미게시다. source가 바뀌면 기존 후보 pin의 증거를 새 SHA로 이전하지 않는다. 독립 리뷰와 운영 승인 후 소유자가 pin을 갱신하고 실행한다.
 
 ## Hosted 절차 중단 상태
 

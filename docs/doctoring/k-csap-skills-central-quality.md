@@ -46,4 +46,12 @@ PR exact head 검증은 기존 PR #30의 exact-head 증거 계약을 이어받�
 3. 실제 required checks와 formal App 검토를 확인하고 제한을 해결한 뒤 일반 병합으로 callee를 보호 브랜치에 출판한다. 소비자 caller에 가짜 SHA나 mutable branch를 넣지 않는다.
 4. caller·runner ACL·capacity를 승인된 경계에서 연결하고 run ID와 job.runner_name을 검증한다.
 5. 실제 Noema/OpenCode auto inference 및 조건부 App 승인을 별도 확인한다. 단독 개발자에게 가상의 다른 인간 리뷰어를 요구하지 않는다.
-6. 현재 head에서 확인한 두 실패는 별개다. CodeQL `Analyze (javascript-typescript)`는 billing account lock 때문에 시작하지 않았다. Noema는 Draft라 model inference를 skip한 뒤 Artifact storage quota로 upload에 실패했다. GraphQL annotations로 원인을 확인했으며 REST log 조회 quota 403은 별도 조회 실패다. `coverage-evidence`/`coverage-source-tree` SUCCESS와 `opencode-review` SKIPPED는 실 모델 승인 증거가 아니다. 필요한 check 실패 및 운영 제한 해결 전 Draft를 유지한다.
+6. 초도 head에서 확인한 두 실패는 별개다. CodeQL `Analyze (javascript-typescript)`는 billing account lock 때문에 시작하지 않았다. Noema는 Draft라 model inference를 skip한 뒤 Artifact storage quota로 upload에 실패했다. GraphQL annotations로 원인을 확인했으며 REST log 조회 quota 403은 별도 조회 실패다. `coverage-evidence`/`coverage-source-tree` SUCCESS와 `opencode-review` SKIPPED는 실 모델 승인 증거가 아니다. 이 실패 이력은 현재 head의 검증 결과로 승계하지 않는다.
+
+## 2026-10-11 다음 병합 준비 단계
+
+- bootstrap 독립 plan review는 `CHANGES_REQUESTED`, 보고서 해시 `5eaa615dc1f6ac143f526329ae46d68f95284452114cada4a83c77e3391586b1`다. Ready는 리뷰 요청이며 merge 승인과 분리한다. 승인된 reviewer 경로가 준비되면 소스 및 live preflight 후 Ready만 전환할 수 있다. 실제 callee 실행은 oscar가 승인된 임시 exact-SHA caller로 병합 전에 확인한다. 실행·literal auto·App 승인·필수 check가 미충족이면 병합하지 않는다.
+- 실제 inline shell을 permissive `umask 000` 아래 실행하면 source와 `.ci-tools`가 mode0777로 생성되는 RED 2개를 확인했다. 각 생성 단계의 `umask 077` 수리 후 30개 계약 테스트가 통과했다. 다른 UID 접근 제한만 확인하며 같은 UID의 비협조 writer 격리나 forced-kill cleanup을 증명하지 않는다.
+- 이전 scratch Python 3.11 환경과 actionlint config가 없어 최초 호출은 setup 실패했다. 새 검증은 기존 hash-locked Python 3.14.7 scratch 환경을 사용했다. workflow의 Python 3.11.14 runtime 통과가 아니다.
+- canonical PyYAML 누락 제안은 #2565 comment `6098771884`로 전달했다. 최신 remote shared head `b78007bfc976faaa4d416d2b6578b114e2725a82`의 canonical lock에 PyYAML pin이 있음을 확인했다. 보호된 main 배포와 실제 설치는 별도다. 그 head의 canonical lint label에는 `k-csap-isolated`가 없다. diagnostic label config의 성공은 canonical CI 수락이 아니다.
+- oscar의 PR32 caller 후보 packet을 읽었다. 미게시 2파일 변경이며 base는 `9b0b1a202ea23b96ba2d3fe71ac1d86b0ca6bc36`, 기존 producer pin은 `c0d6235bd996159fa8c2bb2d176dce2d1983b38b`다. 후보의 로컬 테스트는 소유자 보고이며 Actions 실행이 아니다. 새 producer bytes를 게시하면 caller 소유자가 pin을 다시 검토해야 한다.

@@ -92,6 +92,7 @@ jobs:
             echo "::error::Source path already exists; refusing stale source."
             exit 1
           fi
+          umask 077
           mkdir -- "$GITHUB_WORKSPACE/$source_path"
           echo "source_path=$source_path" >>"$GITHUB_OUTPUT"
 
@@ -110,6 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           test ! -e .ci-tools && test ! -L .ci-tools
+          umask 077
           mkdir -p .ci-tools/tmp .ci-tools/tool-cache
 
       - name: Install pinned uv action
