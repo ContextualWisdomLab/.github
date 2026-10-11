@@ -6,8 +6,10 @@ from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
 
+import os
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,78 @@ def _workflow_text() -> str:
     """Return the consolidated workflow source."""
 
     return WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def _candidate_execution_job(workflow: str) -> dict:
+    """Parse the actual workflow before checking job-scoped cardinality."""
+    import yaml
+
+    document = yaml.load(workflow, Loader=yaml.BaseLoader)
+    assert "on" in document
+    assert "env" not in document  # Refusal must not inherit workflow environment.
+    jobs = document["jobs"]
+    assert set(jobs) == {"agent_review_runtime_quality", "refuse-unsupported-pr"}
+    runner = {
+        "group": "CWL CI isolated",
+        "labels": ["self-hosted", "linux", "x64", "cwlab-ci-isolated"],
+    }
+    candidate = jobs["agent_review_runtime_quality"]
+    assert candidate.get("runs-on") == runner
+    refusal = jobs["refuse-unsupported-pr"]
+    assert set(refusal) == {
+        "name", "if", "runs-on", "permissions", "timeout-minutes", "steps",
+    }
+    assert refusal["runs-on"] == runner
+    assert refusal["permissions"] == {}
+    assert refusal["timeout-minutes"] == "2"
+    assert len(refusal["steps"]) == 1
+    step = refusal["steps"][0]
+    assert set(step) == {"name", "shell", "run"}  # No actions or env.
+    assert step["shell"] == "bash --noprofile --norc -e -o pipefail {0}"
+    assert step["run"] == "exit 1\n"  # No checkout, install, or tests.
+    return candidate
+
+
+@pytest.mark.parametrize("mutation", (
+    "extra_job", "renamed_refusal", "candidate_runner", "refusal_runner",
+    "checkout", "install", "tests", "job_env", "step_env", "permissions",
+    "continue_on_error", "workflow_env",
+))
+def test_candidate_cardinality_rejects_refusal_execution_mutations(mutation: str) -> None:
+    """Reject executable refusals and extra jobs even with the same runner count."""
+    import copy
+    import yaml
+
+    document = yaml.load(_workflow_text(), Loader=yaml.BaseLoader)
+    jobs = document["jobs"]
+    refusal = jobs["refuse-unsupported-pr"]
+    if mutation == "extra_job":
+        jobs["arbitrary_metadata_job"] = copy.deepcopy(refusal)
+    elif mutation == "renamed_refusal":
+        jobs["arbitrary_metadata_job"] = jobs.pop("refuse-unsupported-pr")
+    elif mutation == "candidate_runner":
+        del jobs["agent_review_runtime_quality"]["runs-on"]
+    elif mutation == "refusal_runner":
+        refusal["runs-on"] = "ubuntu-latest"
+    elif mutation == "checkout":
+        refusal["steps"].append({"uses": "actions/checkout@untrusted"})
+    elif mutation in ("install", "tests"):
+        refusal["steps"][0]["run"] = (
+            "python -m pip install attacker\nexit 1\n" if mutation == "install"
+            else "python -m pytest\nexit 1\n"
+        )
+    elif mutation == "job_env":
+        refusal["env"] = {"CANDIDATE": "untrusted"}
+    elif mutation == "step_env":
+        refusal["steps"][0]["env"] = {"CANDIDATE": "untrusted"}
+    elif mutation == "permissions":
+        refusal["permissions"] = {"contents": "read"}
+    elif mutation == "continue_on_error":
+        refusal["continue-on-error"] = "true"
+    else:
+        document["env"] = {"CANDIDATE": "untrusted"}
+    with pytest.raises(AssertionError):
+        _candidate_execution_job(yaml.safe_dump(document))
 
 
 def test_quality_workflows_are_replaced_by_one_owner() -> None:
@@ -71,7 +145,8 @@ def test_consolidated_workflow_materializes_one_runner_job() -> None:
 
     workflow = _workflow_text()
 
-    assert workflow.count("runs-on:") == 1
+    # Exactly one candidate execution job; refusal is static metadata only.
+    assert "runs-on" in _candidate_execution_job(workflow)
     assert workflow.count("actions/checkout@") == 1
     assert workflow.count("actions/setup-python@") == 3
     assert "workflow_dispatch:" not in workflow
@@ -128,6 +203,116 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         assert required_path in workflow
 
 
+@pytest.mark.parametrize(
+    "changed_path",
+    (
+        "scripts/ci/codeql_ghas_configuration_identity.py",
+        "tests/test_codeql_ghas_configuration_identity.py",
+        "tests/test_codeql_ghas_analyses_pagination.py",
+        "tests/test_github_api_url_boundary.py",
+    ),
+)
+def test_ghas_runtime_changes_start_the_quality_runner(changed_path: str) -> None:
+    """Admit the helper and each focused GHAS regression independently."""
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "expected_suites"),
+    (
+        ("scripts/ci/codeql_ghas_configuration_identity.py", {"ghas"}),
+        ("tests/test_codeql_ghas_configuration_identity.py", {"ghas"}),
+        ("tests/test_codeql_ghas_analyses_pagination.py", {"ghas"}),
+        ("tests/test_github_api_url_boundary.py", {"ghas"}),
+        ("tests/test_agent_review_runtime_quality_consolidation.py", {"ghas"}),
+        (
+            ".github/workflows/agent-review-runtime-quality-ci.yml",
+            {"noema", "opencode", "strix", "queue", "review_repair",
+             "commercial_readiness", "exact_artifact", "ghas"},
+        ),
+        ("docs/doctoring/codeql-ghas-analyses-pagination.md", set()),
+    ),
+)
+def test_ghas_runtime_selector_executes_the_actual_shell(
+    changed_path: str, expected_suites: set[str], tmp_path: Path
+) -> None:
+    """Execute the full selector with a synthetic diff and a real HEAD guard."""
+    selector_step = _workflow_text().split(
+        "- name: Select affected contract suites", 1
+    )[1].split("      - name:", 1)[0]
+    script = textwrap.dedent(selector_step.split("        run: |\n", 1)[1])
+    output = tmp_path / "suites.txt"
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True
+    ).strip()
+    # Only changed-path input is synthetic; HEAD verification uses actual Git.
+    diff_fixture = (
+        'git() {\n'
+        '  if [[ "$1" == diff ]]; then\n'
+        '    printf "%s\\n" "$CHANGED_PATH"\n'
+        '  else\n'
+        '    command git "$@"\n'
+        '  fi\n'
+        '}\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         diff_fixture + script],
+        cwd=REPOSITORY_ROOT,
+        env={**os.environ, "HEAD_SHA": head, "BASE_SHA": head,
+             "CHANGED_PATH": changed_path, "GITHUB_OUTPUT": str(output)},
+        text=True, capture_output=True, check=True,
+    )
+    suites = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert suites == {
+        name: str(name in expected_suites).lower()
+        for name in ("noema", "opencode", "strix", "queue", "review_repair",
+                     "commercial_readiness", "exact_artifact", "ghas")
+    }
+    assert result.stdout == result.stderr == ""
+
+
+@pytest.mark.parametrize("pytest_exit", (0, 42))
+def test_ghas_runtime_step_runs_exact_tests_and_fails_closed(
+    pytest_exit: int, tmp_path: Path
+) -> None:
+    """Run the actual step shell and capture its argv without invoking providers."""
+    workflow = _workflow_text()
+    step_name = "      - name: Verify GHAS identity, pagination, and API boundary contracts\n"
+    assert step_name in workflow, "focused GHAS test-command step is missing"
+    step = workflow.split(step_name, 1)[1].split("      - name:", 1)[0]
+    assert "if: steps.affected_suites.outputs.ghas == 'true'" in step
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    calls = tmp_path / "python-calls.txt"
+    recorder = (
+        'python() {\n'
+        '  printf "%s\\n" "$*" >> "$CALLS"\n'
+        '  if [[ "$*" == *pytest* ]]; then return "$PYTEST_EXIT"; fi\n'
+        '}\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         recorder + script],
+        cwd=REPOSITORY_ROOT,
+        env={**os.environ, "CALLS": str(calls), "PYTEST_EXIT": str(pytest_exit)},
+        text=True, capture_output=True, check=False,
+    )
+    tests = (
+        "tests/test_codeql_ghas_configuration_identity.py "
+        "tests/test_codeql_ghas_analyses_pagination.py "
+        "tests/test_github_api_url_boundary.py"
+    )
+    expected = [f"-m pytest -q {tests}"]
+    if pytest_exit == 0:
+        expected.append(
+            "-m compileall -q scripts/ci/codeql_ghas_configuration_identity.py " + tests
+        )
+    assert calls.read_text().splitlines() == expected
+    assert result.returncode == pytest_exit
+    assert result.stdout == result.stderr == ""
+
+
 def test_exact_head_is_verified_before_selected_suites_run() -> None:
     """Reject a checkout that differs from the pull request's current head."""
 
@@ -151,7 +336,8 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
     assert (
         "if: steps.affected_suites.outputs.review_repair == 'true'" in workflow
     )
-    assert workflow.count("runs-on:") == 1
+    # Exactly one candidate execution job; refusal is static metadata only.
+    assert "runs-on" in _candidate_execution_job(workflow)
 
 
 def test_review_launcher_runtime_is_owned_by_the_review_repair_suite() -> None:

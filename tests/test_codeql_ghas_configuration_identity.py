@@ -492,6 +492,9 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
 
 def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     """A non-list analyses response fails closed."""
-    monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
+    monkeypatch.setattr(
+        identity, "_request_json",
+        lambda url, token, timeout_seconds, response_headers=None: {"ok": True},
+    )
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")

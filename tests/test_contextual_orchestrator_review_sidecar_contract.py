@@ -41,6 +41,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
+AUTO_REVIEW_MODEL = "contextual-orchestrator/orchestrator/auto"
 ORCH_PIN_SHA = "01bf92a3ec67a0e1f9b68978eb16b60301e985fd"
 
 
@@ -93,47 +94,23 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
     assert "https://openrouter.ai/api/v1/endpoints/zdr" in text
 
 
-def test_sidecar_pins_the_pool_to_free_for_github_actions() -> None:
-    """GitHub Actions Workflow usage of contextual-orchestrator is pinned free.
-
-    ``auto`` was removed from the sidecar's own accepted
-    ``CONTEXTUAL_ORCHESTRATOR_POOL`` values: the org has not solved cost-safe
-    free+ZDR routing well enough yet to justify a priced-inclusive pool in
-    central CI. The launcher's own ``--pool`` flag (a general-purpose CLI
-    also used outside GitHub Actions, asserted separately above) still
-    accepts ``auto`` -- only this repo's GitHub-Actions-facing sidecar script
-    is narrowed.
-    """
+def test_sidecar_accepts_auto_with_explicit_zero_cost_ceiling() -> None:
+    """Auto alias changes selection, not authorization for paid fallback."""
     text = _read(SIDECAR)
-    assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in text
-    assert 'case "$orchestrator_pool" in\n  free)' in text
-    assert "fail \"CONTEXTUAL_ORCHESTRATOR_POOL must be free\"" in text
-    assert "free|auto" not in text
-    assert "must be free or auto" not in text
-
-    pool_case = text.split('orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"', 1)[
-        1
-    ].split("esac", 1)[0]
-    for candidate, should_fail in (("free", False), ("auto", True), ("", False), ("bogus", True)):
+    prefix = 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"'
+    pool_case = text[text.index(prefix):].split("esac", 1)[0] + "esac"
+    for candidate, expected in (("free", 0), ("auto", 0), ("", 0), ("bogus", 7)):
         result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                'fail() { echo "FAIL: $*"; exit 7; }\n'
-                f'CONTEXTUAL_ORCHESTRATOR_POOL="{candidate}"\n'
-                'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"\n'
-                + pool_case
-                + "esac\necho \"pool_args=${pool_args[*]}\"",
-            ],
-            capture_output=True,
-            text=True,
+            ["bash", "-c", 'fail() { exit 7; }; ' + pool_case +
+             '\nprintf "%s\\n" "${pool_args[@]}"'],
+            env={"CONTEXTUAL_ORCHESTRATOR_POOL": candidate},
+            capture_output=True, text=True, timeout=5,
         )
-        if should_fail:
-            assert result.returncode == 7, (candidate, result.stdout, result.stderr)
-            assert "must be free" in result.stdout
-        else:
-            assert result.returncode == 0, (candidate, result.stdout, result.stderr)
-            assert "pool_args=--pool free" in result.stdout
+        assert result.returncode == expected, (candidate, result.stdout, result.stderr)
+        if candidate == "auto":
+            assert result.stdout.splitlines() == ["--pool", "auto", "--zero-cost-only"]
+        elif expected == 0:
+            assert result.stdout.splitlines() == ["--pool", "free"]
 
 
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
@@ -439,14 +416,14 @@ def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
 
 
 def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
-    """OpenCode's default review route is orchestrator/free through the gateway."""
+    """OpenCode's default review route is orchestrator/auto through the gateway."""
     config = _read(OPENCODE_CONFIG)
-    assert f'"model": "{GATEWAY_MODEL}"' in config
-    assert f'"small_model": "{GATEWAY_MODEL}"' in config
+    assert f'"model": "{AUTO_REVIEW_MODEL}"' in config
+    assert f'"small_model": "{AUTO_REVIEW_MODEL}"' in config
     assert '"enabled_providers": ["contextual-orchestrator"' in config
     assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1"' in config
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
-    assert '"orchestrator/free": {' in config
+    assert '"orchestrator/auto": {' in config
 
 
 def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
@@ -532,7 +509,7 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
     for secret in FIVE_SECRETS:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in workflow
     assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_TOKEN}" in workflow
@@ -540,7 +517,7 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}" in workflow
 
 
 def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
@@ -565,10 +542,10 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
     assert workflow.index("Validate pull request head repository trust") < workflow.index(
         "Provision contextual-orchestrator review sidecar"
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
-    assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/auto"' in workflow
+    assert 'MODEL: contextual-orchestrator/orchestrator/auto' in workflow
     assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
-    assert '.model = "contextual-orchestrator/orchestrator/free"' in workflow
+    assert '.model = "contextual-orchestrator/orchestrator/auto"' in workflow
     assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN:-' in workflow
     assert 'STRIX_GITHUB_MODELS_TOKEN:-' not in workflow
     assert 'MODEL: github-models/' not in workflow
@@ -647,7 +624,7 @@ def test_sidecar_rebuilds_a_damaged_persistent_venv(tmp_path) -> None:
     re-running ``venv`` over a damaged ``pip`` package leaves it unimportable.
     """
     text = _read(SIDECAR)
-    line = next(l for l in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in l)
+    line = next(candidate for candidate in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in candidate)
     work = tmp_path / "work"
     site = work / ".venv" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
     env = {"PATH": os.environ["PATH"], "ORCHESTRATOR_WORK": str(work),

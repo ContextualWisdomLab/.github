@@ -1759,6 +1759,23 @@ def test_which_relative_to_cwd_returns_none_for_empty_path(tmp_path):
     assert result is None
 
 
+def test_isolated_command_rejects_explicit_host_home_even_inside_workspace(monkeypatch, tmp_path):
+    """An allowed scratch workspace cannot turn a host-home executable into code."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "launch.sh"
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    with pytest.raises(RuntimeError, match="host home directory"):
+        sandboxed_web_e2e.isolated_command(
+            str(launcher), backend="/usr/bin/bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
 def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypatch, tmp_path):
     """A relative PATH entry cannot be used to search the real host filesystem outside the copy.
 

@@ -45,8 +45,36 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  refuse-unsupported-pr:
+    name: Refuse unsupported PR metadata
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+          (github.repository == '' ||
+           github.event.pull_request.head.repo.full_name == '' ||
+           github.event.pull_request.head.repo.full_name != github.repository ||
+           github.event.pull_request.head.sha == '') }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: Reject unsupported candidate without checkout
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          exit 1
+
   quality:
-    runs-on: ubuntu-24.04
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.repository != '' &&
+       github.event.pull_request.head.repo.full_name != '' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.sha != '') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 20
     steps:
       - name: Harden runner

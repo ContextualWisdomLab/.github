@@ -71,7 +71,9 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -126,7 +128,9 @@ jobs:
   osv-scan:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 25
     permissions:
       actions: read
@@ -136,6 +140,294 @@ jobs:
       - name: Explain OSV scan mode and timeout budget
         run: |
           echo "::notice::OSV hard gate scans direct manifest and lockfile evidence with --no-resolve so external transitive registry resolver stalls cannot hold the required-check queue indefinitely. The job is capped at 25 minutes; if this budget is exceeded, rerun after the upstream registry/service recovers or inspect the uploaded debug artifacts."
+      - name: Prepare observable OSV lifecycle
+        id: osv_prepare
+        shell: bash
+        env:
+          OSV_RUN: ${{ github.run_id }}:${{ github.run_attempt }}
+          OSV_BASE_REV: ${{ github.event.pull_request.base.sha }}
+          OSV_HEAD_REV: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'INIT'
+          import os, pathlib, tempfile, secrets, json
+          parent = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          runner = pathlib.Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+          root = pathlib.Path(tempfile.mkdtemp(prefix='osv-observable-', dir=parent))
+          control = pathlib.Path(tempfile.mkdtemp(prefix='osv-control-', dir=runner))
+          root.chmod(0o700)
+          control.chmod(0o700)
+          st = root.stat()
+          identity = f'{st.st_dev}:{st.st_ino}'
+          nonce = secrets.token_hex(32)
+          record = {'schema': 1, 'root': str(root), 'parent': str(parent), 'identity': identity, 'nonce': nonce, 'uid': os.getuid(), 'run': os.environ['OSV_RUN'], 'base': os.environ['OSV_BASE_REV'], 'head': os.environ['OSV_HEAD_REV']}
+          for path in (control / 'creation.json', root / 'identity.json'):
+              path.write_text(json.dumps(record))
+              path.chmod(0o600)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              for key, value in {'root': root, 'relative': root.name, 'identity': identity, 'nonce': nonce, 'control': control, 'wrapper': control / 'scan.sh'}.items():
+                  out.write(f'{key}={value}\n')
+          (control / 'validate.py').write_text(r'''
+          import os, sys, json, pathlib, shutil, stat, hashlib, subprocess, signal
+
+          def require(value, message='OSV admission rejected'):
+              if not value:
+                  raise ValueError(message)
+
+          def regular(path, mode=None):
+              st = path.lstat()
+              require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid())
+              if mode is not None:
+                  require(stat.S_IMODE(st.st_mode) == mode)
+              return path.read_bytes()
+
+          def atomic(path, data):
+              temporary = path.with_name(path.name + '.pending')
+              with temporary.open('xb') as output:
+                  output.write(data)
+                  output.flush()
+                  os.fsync(output.fileno())
+              os.replace(temporary, path)
+
+          control = pathlib.Path(__file__).parent
+          cs = control.lstat()
+          require(control == control.resolve(strict=True) and stat.S_ISDIR(cs.st_mode))
+          require(cs.st_uid == os.getuid() and stat.S_IMODE(cs.st_mode) == 0o700)
+          record = json.loads(regular(control / 'creation.json', 0o600))
+          require(type(record) is dict and set(record) == {'schema','root','parent','identity','nonce','uid','run','base','head'})
+          require(type(record['schema']) is int and record['schema'] == 1)
+          require(type(record['uid']) is int and record['uid'] == os.getuid())
+          require(all(type(record[k]) is str and record[k] for k in ('root','parent','identity','nonce','run','base','head')))
+          root = pathlib.Path(record['root'])
+          require(str(root) == os.environ['OSV_ROOT'] and record['identity'] == os.environ['OSV_IDENTITY'] and record['nonce'] == os.environ['OSV_NONCE'])
+          require(root == root.resolve(strict=True) and root.parent == pathlib.Path(record['parent']))
+          require(root.parent == pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True))
+          st = root.lstat()
+          require(stat.S_ISDIR(st.st_mode) and st.st_uid == record['uid'] and stat.S_IMODE(st.st_mode) == 0o700)
+          require(f'{st.st_dev}:{st.st_ino}' == record['identity'])
+          require(json.loads(regular(root / 'identity.json', 0o600)) == record)
+
+          pairs = {'base-first':'old-results.json','base-retry':'old-results.json','head-first':'new-results.json','head-retry':'new-results.json'}
+
+          def binding(attempt):
+              require(attempt in pairs)
+              revision = record['base' if attempt.startswith('base') else 'head']
+              return {'schema':1,'attempt':attempt,'nonce':record['nonce'],'run':record['run'],'revision':revision}
+
+          def completed(receipt, attempt):
+              require(type(receipt) is dict and set(receipt) == set(binding(attempt)) | {'completed','exit','transport_exit','digest','settled','cid'})
+              require(all(type(receipt[k]) is type(v) and receipt[k] == v for k,v in binding(attempt).items()))
+              require(type(receipt['completed']) is bool and receipt['completed'] is True)
+              require(type(receipt['settled']) is bool and receipt['settled'] is True)
+              require(type(receipt['exit']) is int and receipt['exit'] in (0,1))
+              require(type(receipt['transport_exit']) is int and receipt['transport_exit'] == receipt['exit'])
+              require(type(receipt['digest']) is str and len(receipt['digest']) == 64)
+              require(type(receipt['cid']) is str and len(receipt['cid']) == 64)
+
+
+          def verify_final(target):
+              receipt = json.loads(regular(control / (target+'.receipt.json')))
+              attempt = receipt.get('attempt')
+              require(pairs.get(attempt) == target)
+              completed(receipt, attempt)
+              prefix = 'OSV_BASE' if attempt.startswith('base') else 'OSV_HEAD'
+              first, retry = os.environ[prefix+'_OUTCOME'], os.environ[prefix+'_RETRY_OUTCOME']
+              selected = prefix.lower().removeprefix('osv_') + ('-first' if first == 'success' and retry == 'skipped' else '-retry' if first == 'failure' and retry == 'success' else '-invalid')
+              require(attempt == selected, 'No successful current attempt')
+              raw = regular(root / target)
+              require(hashlib.sha256(raw).hexdigest() == receipt['digest'])
+              data = json.loads(raw)
+              require(type(data) is dict and 'results' in data and (data['results'] is None or type(data['results']) is list))
+              return receipt
+
+
+          def comparison():
+              receipts = [verify_final(name) for name in ('old-results.json','new-results.json')]
+              witness = {'schema':1,'run':record['run'],'nonce':record['nonce'],'base':record['base'],'head':record['head'],'digests':[r['digest'] for r in receipts]}
+              return witness
+
+          mode = sys.argv[1]
+          def docker(*args):
+              return subprocess.run(['docker', *args], text=True, capture_output=True, timeout=15)
+
+
+          def absence(name, cid=''):
+              for key, value in [('name', '^/'+name+'$')] + ([('id',cid)] if cid else []):
+                  result = docker('ps','-aq','--no-trunc','--filter',key+'='+value)
+                  require(result.returncode == 0 and not result.stdout.strip(), 'Owned container absence not established')
+
+
+          def settle(owned, path):
+              require(set(owned) == {'schema','attempt','nonce','name','cid','settled','absence_verified','cid_slot_identity'})
+              require(owned['schema'] == 1 and type(owned['schema']) is int)
+              require(owned['nonce'] == record['nonce'] and owned['attempt'] in pairs)
+              require(owned['name'] == 'osv-'+record['nonce']+'-'+owned['attempt'])
+              require(type(owned['settled']) is bool and type(owned['cid']) is str)
+              require(owned['absence_verified'] is True, 'Creation name absence was not verified')
+              slot = control / (owned['attempt']+'.cid-slot')
+              ss = slot.lstat()
+              require(slot == slot.resolve(strict=True) and stat.S_ISDIR(ss.st_mode))
+              require(ss.st_uid == os.getuid() and stat.S_IMODE(ss.st_mode) == 0o700)
+              require(owned['cid_slot_identity'] == f'{ss.st_dev}:{ss.st_ino}')
+              # Docker creates this previously absent file in the exclusive trusted slot.
+              # Recover its CID after client failure/timeout; name lookup is never authority.
+              descriptor = os.open(slot / 'container.cid', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              try:
+                  fs = os.fstat(descriptor)
+                  require(stat.S_ISREG(fs.st_mode) and fs.st_uid == os.getuid() and fs.st_nlink == 1)
+                  raw = os.read(descriptor, 66)
+              finally:
+                  os.close(descriptor)
+              cid = raw.decode().strip()
+              require(len(cid) == 64 and all(c in '0123456789abcdef' for c in cid), 'Creation CID unavailable')
+              require(not owned['cid'] or owned['cid'] == cid, 'Creation CID changed')
+              owned['cid'] = cid
+              atomic(path, json.dumps(owned).encode())
+              inspection = docker('inspect','--format','[{{json .Id}},{{json .Name}},{{json .State}}]',cid)
+              if inspection.returncode == 0:
+                  cid_value, name_value, state_value = json.loads(inspection.stdout)
+                  data = {'Id':cid_value,'Name':name_value,'State':state_value}
+                  cid = data.get('Id')
+                  require(type(cid) is str and len(cid) == 64 and data.get('Name') == '/'+owned['name'])
+                  require(owned['cid'] == cid)
+                  require(type(data['State']['Running']) is bool)
+                  if data['State']['Running'] is True:
+                      require(docker('stop','--time','5',cid).returncode == 0)
+                  require(docker('rm',cid).returncode == 0)
+              absence(owned['name'],owned['cid'])
+              owned['settled'] = True
+              atomic(path, json.dumps(owned).encode())
+
+
+          if mode == 'scan':
+              attempt, target = sys.argv[2:4]
+              require(pairs.get(attempt) == target)
+              for path in (root / target, control / (target+'.receipt.json'), control / 'comparison.json', control / 'sarif.receipt.json'):
+                  if path.is_symlink():
+                      raise ValueError('Refusing alias destination')
+                  path.unlink(missing_ok=True)
+              directory = root / attempt
+              directory.mkdir(mode=0o700)
+              owned_path = control / (attempt+'-owned.json')
+              owned = {'schema':1,'attempt':attempt,'nonce':record['nonce'],'name':'osv-'+record['nonce']+'-'+attempt,'cid':'','settled':False,'absence_verified':False,'cid_slot_identity':''}
+              atomic(owned_path,json.dumps(owned).encode())
+              slot = control / (attempt+'.cid-slot')
+              slot.mkdir(mode=0o700)
+              ss = slot.stat()
+              owned['cid_slot_identity'] = f'{ss.st_dev}:{ss.st_ino}'
+              cidfile = slot / 'container.cid'
+              require(not cidfile.exists() and not cidfile.is_symlink())
+              absence(owned['name'])
+              owned['absence_verified'] = True
+              atomic(owned_path,json.dumps(owned).encode())
+              command = ['docker','run','--name',owned['name'],'--cidfile',str(cidfile),'--entrypoint','/root/osv-scanner','--volume',os.environ['GITHUB_WORKSPACE']+':/github/workspace:ro','--volume',str(root)+':/evidence','--workdir','/github/workspace','ghcr.io/google/osv-scanner-action:v2.5.1@sha256:dcd947131d8d11b8d0964de6590661fb921a4ecbd7b90a7cb21083acfc3fd8cc','--verbosity=error','--format=json','--output-file=/evidence/'+attempt+'/results.json',*sys.argv[4:]]
+              interrupted = False
+              process = None
+              transport = None
+              child = None
+              def stop_signal(signum, frame):
+                  raise InterruptedError('scanner signal '+str(signum))
+              previous = {signum: signal.signal(signum,stop_signal) for signum in (signal.SIGTERM,signal.SIGINT)}
+              try:
+                  with (directory / 'stderr').open('xb') as errors:
+                      process = subprocess.Popen(command,stderr=errors)
+                      transport = process.wait(timeout=float(os.environ.get('OSV_SCAN_DEADLINE','420' if attempt.endswith('first') else '180')))
+                  owned['cid'] = regular(cidfile).decode().strip()
+                  require(len(owned['cid']) == 64 and all(c in '0123456789abcdef' for c in owned['cid']))
+                  inspection = docker('inspect','--format','[{{json .Id}},{{json .Name}},{{json .State}}]',owned['cid'])
+                  require(inspection.returncode == 0)
+                  cid_value, name_value, state_value = json.loads(inspection.stdout)
+                  data = {'Id':cid_value,'Name':name_value,'State':state_value}
+                  require(data['Id'] == owned['cid'] and data['Name'] == '/'+owned['name'])
+                  require(type(data['State']['Running']) is bool and data['State']['Running'] is False)
+                  child = data['State']['ExitCode']
+                  require(type(child) is int)
+              except (subprocess.TimeoutExpired, InterruptedError):
+                  interrupted = True
+              finally:
+                  for signum in previous:
+                      signal.signal(signum,signal.SIG_IGN)
+                  if process is not None and process.poll() is None:
+                      process.terminate()
+                      try:
+                          transport = process.wait(timeout=5)
+                      except subprocess.TimeoutExpired:
+                          process.kill()
+                          transport = process.wait(timeout=5)
+                  try:
+                      settle(owned,owned_path)
+                  finally:
+                      for signum,handler in previous.items():
+                          signal.signal(signum,handler)
+                  receipt = {**binding(attempt),'completed':not interrupted and child is not None,'exit':child,'transport_exit':transport,'digest':hashlib.sha256(regular(directory / 'results.json')).hexdigest() if (directory / 'results.json').is_file() and not (directory / 'results.json').is_symlink() else '', 'settled':owned['settled'],'cid':owned['cid']}
+                  atomic(control / (attempt+'.json'),json.dumps(receipt).encode())
+                  atomic(directory / 'receipt.json',json.dumps(receipt).encode())
+              completed(receipt,attempt)
+              subprocess.run([sys.executable,__file__,'admit',attempt,target],check=True)
+
+          elif mode == 'admit':
+              attempt,target = sys.argv[2:4]
+              require(pairs.get(attempt) == target)
+              directory = root / attempt
+              require(directory == directory.resolve(strict=True) and directory.parent == root and not directory.is_symlink())
+              receipt = json.loads(regular(control / (attempt+'.json')))
+              completed(receipt, attempt)
+              require(regular(directory / 'stderr') == b'')
+              raw = regular(directory / 'results.json')
+              require(hashlib.sha256(raw).hexdigest() == receipt['digest'])
+              data = json.loads(raw)
+              require(type(data) is dict and 'results' in data and (data['results'] is None or type(data['results']) is list))
+              require(not (root / target).is_symlink())
+              atomic(root / target, raw)
+              atomic(control / (target+'.receipt.json'), json.dumps(receipt).encode())
+          elif mode == 'require':
+              atomic(control / 'comparison.json', json.dumps(comparison()).encode())
+          elif mode == 'sarif':
+              require(json.loads(regular(control / 'comparison.json')) == comparison())
+              outcome = os.environ['OSV_REPORTER_OUTCOME']
+              require(outcome in ('success','failure'))
+              raw = regular(root / 'results.sarif')
+              require(bool(raw))
+              data = json.loads(raw)
+              require(type(data) is dict and data.get('version') == '2.1.0')
+              runs = data.get('runs')
+              require(type(runs) is list and bool(runs))
+              total = 0
+              for run in runs:
+                  require(type(run) is dict and type(run.get('tool')) is dict)
+                  driver = run['tool'].get('driver')
+                  require(type(driver) is dict and type(driver.get('name')) is str and bool(driver['name']))
+                  results = run.get('results')
+                  require(type(results) is list and all(type(r) is dict and type(r.get('message')) is dict and type(r['message'].get('text')) is str and bool(r['message']['text']) for r in results))
+                  total += len(results)
+                  driver['isComprehensive'] = outcome == 'success'
+              require(outcome == 'success' or total > 0, 'Failed clean reporter is not admissible evidence')
+              raw = json.dumps(data).encode()
+              atomic(root / 'results.sarif', raw)
+              atomic(control / 'sarif.receipt.json', json.dumps({'schema':1,'run':record['run'],'revision':record['head'],'nonce':record['nonce'],'digest':hashlib.sha256(raw).hexdigest(),'diagnostic':outcome == 'failure'}).encode())
+              with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+                  output.write('admitted=true\n')
+              print(f'OSV SARIF {total} results; comprehensive={outcome == "success"}')
+          elif mode == 'cleanup':
+              for path in control.glob('*-owned.json'):
+                  owned = json.loads(regular(path))
+                  if owned.get('settled') is not True:
+                      settle(owned,path)
+                  require(owned.get('settled') is True, 'Scanner settlement required before evidence deletion')
+              shutil.rmtree(root)
+              shutil.rmtree(control)
+          elif mode == 'check':
+              pass
+          else:
+              raise ValueError('Unknown operation')
+          ''')
+          (control / 'scan.sh').write_text(r'''
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec python3 "$OSV_CONTROL/validate.py" scan "$@"
+          ''')
+          (control / 'scan.sh').chmod(0o700)
+          INIT
       - name: Checkout base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -157,36 +449,36 @@ jobs:
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan base with OSV
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
         id: osv_base
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output-file=old-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        shell: bash
+        run: |
+          export OSV_CONTROL="${{ steps.osv_prepare.outputs.control }}"
+          bash "$OSV_CONTROL/scan.sh" base-first old-results.json --maven-registry=https://maven-central.storage-download.googleapis.com/maven2 --no-resolve --allow-no-lockfiles -r source/
       - name: Explain base OSV resolver fallback
         if: steps.osv_base.outcome == 'failure'
         run: |
           echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry base OSV without transitive resolution
+        id: osv_base_retry
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
         if: steps.osv_base.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output-file=old-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        shell: bash
+        run: |
+          export OSV_CONTROL="${{ steps.osv_prepare.outputs.control }}"
+          bash "$OSV_CONTROL/scan.sh" base-retry old-results.json --no-resolve --allow-no-lockfiles -r source/
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -208,49 +500,64 @@ jobs:
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan head with OSV
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
         id: osv_head
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output-file=new-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        shell: bash
+        run: |
+          export OSV_CONTROL="${{ steps.osv_prepare.outputs.control }}"
+          bash "$OSV_CONTROL/scan.sh" head-first new-results.json --maven-registry=https://maven-central.storage-download.googleapis.com/maven2 --no-resolve --allow-no-lockfiles -r source/
       - name: Explain head OSV resolver fallback
         if: steps.osv_head.outcome == 'failure'
         run: |
           echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry head OSV without transitive resolution
+        id: osv_head_retry
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
         if: steps.osv_head.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output-file=new-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        shell: bash
+        run: |
+          export OSV_CONTROL="${{ steps.osv_prepare.outputs.control }}"
+          bash "$OSV_CONTROL/scan.sh" head-retry new-results.json --no-resolve --allow-no-lockfiles -r source/
       - name: Require OSV scan output
+        id: osv_require
+        if: always() && steps.osv_prepare.outcome == 'success'
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
+          OSV_BASE_OUTCOME: ${{ steps.osv_base.outcome }}
+          OSV_BASE_RETRY_OUTCOME: ${{ steps.osv_base_retry.outcome }}
+          OSV_HEAD_OUTCOME: ${{ steps.osv_head.outcome }}
+          OSV_HEAD_RETRY_OUTCOME: ${{ steps.osv_head_retry.outcome }}
         run: |
           set -euo pipefail
-          test -s old-results.json
-          test -s new-results.json
+          python3 "${{ steps.osv_prepare.outputs.control }}/validate.py" require
       - name: Print OSV findings being compared
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
         shell: python3 {0}
         run: |
-          import json
+          import json, os
           from pathlib import Path
 
           def iter_findings(path):
-              data = json.loads(Path(path).read_text(encoding="utf-8"))
+              data = json.loads((Path(os.environ["OSV_ROOT"]) / path).read_text(encoding="utf-8"))
               for result in data.get("results") or []:
                   source = result.get("source", {})
                   source_name = source.get("path") or source.get("name") or "unknown"
@@ -282,47 +589,56 @@ jobs:
                   )
               if len(findings) > 50:
                   print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
+      - name: Revalidate OSV reporter inputs
+        if: success() && steps.osv_require.outcome == 'success'
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
+          OSV_BASE_OUTCOME: ${{ steps.osv_base.outcome }}
+          OSV_BASE_RETRY_OUTCOME: ${{ steps.osv_base_retry.outcome }}
+          OSV_HEAD_OUTCOME: ${{ steps.osv_head.outcome }}
+          OSV_HEAD_RETRY_OUTCOME: ${{ steps.osv_head_retry.outcome }}
+        run: |
+          set -euo pipefail
+          python3 "${{ steps.osv_prepare.outputs.control }}/validate.py" require
       - name: Report PR-introduced OSV findings
+        id: osv_reporter
         uses: google/osv-scanner-action/osv-reporter-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.3.8
         with:
           scan-args: |
-            --output-files=results.sarif
-            --old=old-results.json
-            --new=new-results.json
+            --output-files=${{ steps.osv_prepare.outputs.relative }}/results.sarif
+            --old=${{ steps.osv_prepare.outputs.relative }}/old-results.json
+            --new=${{ steps.osv_prepare.outputs.relative }}/new-results.json
             --gh-annotations=true
             --fail-on-vuln=true
       - name: Mark clean OSV SARIF as comprehensive
-        if: always() && hashFiles('results.sarif') != ''
-        shell: python3 {0}
+        id: osv_sarif_admission
+        if: always() && steps.osv_prepare.outcome == 'success' && steps.osv_require.outcome == 'success' && (steps.osv_reporter.outcome == 'success' || steps.osv_reporter.outcome == 'failure')
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
+          OSV_BASE_OUTCOME: ${{ steps.osv_base.outcome }}
+          OSV_BASE_RETRY_OUTCOME: ${{ steps.osv_base_retry.outcome }}
+          OSV_HEAD_OUTCOME: ${{ steps.osv_head.outcome }}
+          OSV_HEAD_RETRY_OUTCOME: ${{ steps.osv_head_retry.outcome }}
+          OSV_REPORTER_OUTCOME: ${{ steps.osv_reporter.outcome }}
+        shell: bash
         run: |
-          import json
-          from pathlib import Path
-
-          sarif_path = Path("results.sarif")
-          sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
-          total_results = 0
-          for run in sarif.get("runs", []):
-              total_results += len(run.get("results", []))
-              run.setdefault("tool", {}).setdefault("driver", {})["isComprehensive"] = True
-
-          temp_path = sarif_path.with_name(f"{sarif_path.name}.tmp")
-          temp_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
-          temp_path.replace(sarif_path)
-          print(
-              "OSV reporter SARIF contains "
-              f"{total_results} result(s); marked the code-scanning analysis "
-              "comprehensive so fixed PR-introduced alerts close after a clean "
-              "base/head comparison."
-          )
+          set -euo pipefail
+          python3 "${{ steps.osv_prepare.outputs.control }}/validate.py" sarif
       - name: Upload OSV SARIF to code scanning
         id: upload_osv_sarif
-        if: always() && hashFiles('results.sarif') != ''
+        if: always() && steps.osv_prepare.outcome == 'success' && steps.osv_sarif_admission.outcome == 'success' && steps.osv_sarif_admission.outputs.admitted == 'true'
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
-          sarif_file: results.sarif
+          sarif_file: ${{ steps.osv_prepare.outputs.root }}/results.sarif
           # The exact head checkout lives in `source`, not the workspace root;
           # without this binding upload-sarif logs "does not appear to be a git
           # repository" twice and falls back to server-derived commit identity.
@@ -339,20 +655,38 @@ jobs:
           echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
         if: always()
+        # The reporter and SARIF upload above preserve the security verdict.
+        # Debug retention quota is observability only and must not turn a clean
+        # comparison into a failed security gate.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: osv-scan-debug
           path: |
-            old-results.json
-            new-results.json
-            results.sarif
+            ${{ steps.osv_prepare.outputs.root }}/old-results.json
+            ${{ steps.osv_prepare.outputs.root }}/new-results.json
+            ${{ steps.osv_prepare.outputs.root }}/results.sarif
           if-no-files-found: ignore
           retention-days: 5
+
+      - name: Cleanup observable OSV lifecycle
+        if: always() && steps.osv_prepare.outcome == 'success'
+        env:
+          OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}
+          OSV_IDENTITY: ${{ steps.osv_prepare.outputs.identity }}
+          OSV_NONCE: ${{ steps.osv_prepare.outputs.nonce }}
+          OSV_CONTROL: ${{ steps.osv_prepare.outputs.control }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "${{ steps.osv_prepare.outputs.control }}/validate.py" cleanup
 
   dependency-review:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       pull-requests: read
@@ -387,6 +721,23 @@ jobs:
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable: exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \
@@ -436,7 +787,9 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -526,7 +879,9 @@ jobs:
   trivy-fs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write
@@ -553,6 +908,10 @@ jobs:
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
+          # Runner groups can schedule onto different hosts. Reinstall the
+          # pinned binary instead of trusting a cache entry whose path or
+          # executable bit belongs to a previous runner.
+          cache: false
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
@@ -633,7 +992,9 @@ jobs:
   scorecard:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:
