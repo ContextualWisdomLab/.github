@@ -1192,7 +1192,7 @@ def evaluate_dependency_license(
         # termcolor 1.4.1, winapi-util 0.1.11, typenum 1.20.1 and reviewed
         # COPYRIGHT bodies in Rand, unicode-width, rustix and linux-raw-sys.
         # A reference is never a grant; every named full grant must be present.
-        normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
+        normalized = " ".join(str(texts[filename]).split())
         reference_digest = hashlib.sha256(normalized.encode()).hexdigest()
         references = {
             "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1": frozenset({"MIT", "Unlicense"}),
@@ -1206,7 +1206,7 @@ def evaluate_dependency_license(
             "175bdea6e6b8888ac70595db99c828183a9796b5ca60a3982b5242f1ecad22c0",
             "27c181067597d1d238893ff4fec1f2cfbf385100cf2e73f39e2e0af9fbcbde7a",
         } and not any(
-            hashlib.sha256(re.sub(r"[ \t\r\n]+", " ", str(text)).strip(" \t\r\n").encode()).hexdigest()
+            hashlib.sha256(" ".join(str(text).split()).encode()).hexdigest()
             == "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c"
             for text in texts.values()
         ):

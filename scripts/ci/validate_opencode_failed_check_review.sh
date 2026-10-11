@@ -234,7 +234,6 @@ location_re = re.compile(
 clean_prefix_pipe_re = re.compile(r"^.*?│\s*")
 clean_suffix_pipe_re = re.compile(r"\s*│.*$")
 clean_prefix_z_re = re.compile(r"^.*?[0-9]Z\s+")
-clean_whitespace_re = re.compile(r"\s+")
 new_field_re = re.compile(r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b", re.IGNORECASE)
 window_model_re = re.compile(r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)", re.IGNORECASE)
 continuation_border_re = re.compile(r"^[╭╰─]+$")
@@ -252,7 +251,7 @@ def clean(raw_line: str) -> str:
         line = clean_suffix_pipe_re.sub("", line)
     else:
         line = clean_prefix_z_re.sub("", line)
-    line = clean_whitespace_re.sub(" ", line).strip()
+    line = " ".join(line.split())
     return line
 
 
