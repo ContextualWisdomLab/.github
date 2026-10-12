@@ -1,3 +1,15 @@
+### Gap register traceability matrix
+
+- Added `scripts/ci/gap_traceability_matrix.py`, an offline standard-library
+  CLI that links open PRs and issues to the Gap register in
+  `docs/product-technical-gap-baseline.md`. It reports linked work, register
+  IDs without work, work without a known ID, dangling references and duplicate
+  register rows, and offers `--require-link-event` for a later, separately
+  approved PR gate. On the 2026-10-06 inventory, 13 of 623 open items cited a
+  known register ID, 19 of 27 register IDs had no open work and 14 cited IDs
+  were undefined on `main`. No workflow or required check is added. See
+  `docs/doctoring/gap-traceability-matrix.md`.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
