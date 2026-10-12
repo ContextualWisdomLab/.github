@@ -1,3 +1,6 @@
+### Strix supplies bounded Job Analysis authority context from the trusted base
+
+- Orgmetra #63 changes `packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py`, but the Strix scan workspace previously omitted the unchanged authorization, HTTP, snapshot, and persistence collaborators that establish its resource-ownership boundary. That incomplete context produced a false HIGH IDOR finding even though the product reconstructs owner scope and authorizes resource fields before port access. A source-first executable fixture now requires the changed PR-head module, exactly five unchanged Job Analysis authority files from the authenticated trusted base, and exclusion of an unrelated administration file. RED `1fd22f4e` failed because `auth.py` was absent; the gate now recognizes only the normalized Job Analysis trigger and adds the five fixed context paths through the existing trusted-base materialization boundary. No consumer source, provider/model policy, severity gate, timeout, or write authority changes.
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
