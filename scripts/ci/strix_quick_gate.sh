@@ -1384,6 +1384,7 @@ pull_request_scope_context_files() {
 	local needs_backend_app_python=0
 	local needs_contextual_orchestrator_python=0
 	local needs_frontend_email_api_context=0
+	local needs_orgmetra_job_analysis_authority_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
 	for changed_file in "$@"; do
@@ -1399,6 +1400,9 @@ pull_request_scope_context_files() {
 			;;
 		contextual_orchestrator/*.py)
 			needs_contextual_orchestrator_python=1
+			;;
+		packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py)
+			needs_orgmetra_job_analysis_authority_context=1
 			;;
 		# The app shell, email components, threading URL builder, and API client can
 		# shape frontend email retrieval flows; include backend auth context with them.
@@ -1549,6 +1553,16 @@ backend/services/threading_service.py
 EOF
 	fi
 
+	if [ "$needs_orgmetra_job_analysis_authority_context" -eq 1 ]; then
+		cat <<'EOF'
+services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/http.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py
+EOF
+	fi
+
 	if [ "$needs_deployment_context" -eq 1 ]; then
 		cat <<'EOF'
 Dockerfile
@@ -1688,6 +1702,26 @@ PY
 		esac
 		local src_path="$REPO_ROOT/$relative_path"
 		if [ ! -e "$src_path" ]; then
+			case "$relative_path" in
+			services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/http.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py | \
+				services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py)
+				local job_analysis_change_rc=0
+				changed_file_list_contains \
+					"packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py" || job_analysis_change_rc=$?
+				case "$job_analysis_change_rc" in
+				0)
+					echo "ERROR: required Job Analysis trusted context file is unavailable: $context_file" >&2
+					return 2
+					;;
+				2)
+					return 2
+					;;
+				esac
+				;;
+			esac
 			return 0
 		fi
 		if [ ! -f "$src_path" ] || [ -L "$src_path" ]; then

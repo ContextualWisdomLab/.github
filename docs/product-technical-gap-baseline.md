@@ -3438,6 +3438,102 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 
 **Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
 
+## 2026-09-20 Strix trusted-binder consumer-isolation gap
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2291`; exact-head hosted
+checks, independent review, and protected-main integration remain required.
+
+**Context Map / owner.** The central `.github` CI bounded context owns
+`strix_quick_gate.sh`, its evidence binder, and the executable gate harness.
+Consumer repositories supply only the scan workspace through
+`STRIX_REPO_ROOT`; they do not copy or own the binder.
+
+**Gap / root cause.** The production gate incorrectly resolved the trusted
+binder from the consumer root. The first repair correctly moved that lookup to
+`SCRIPT_DIR`, but its test harness copied only the gate and model helper into
+the isolated fixture. The current PR head therefore still reproduced the same
+missing-binder exit in the `success` scenario. Three assertions in that harness
+also described the removed standalone `coverage-source-tree` job after its
+responsibility moved into `validate-pr-metadata`.
+
+**Action / evidence.** The production gate resolves
+`strix_evidence_binding.py` beside its trusted source. RED `191bd630`
+requires the generic executable consumer fixture to contain no binder. GREEN
+`ef1a8667` materializes the gate, model helper, and binder under a separate
+`trusted-source/scripts/ci` directory, passes only the binder-free consumer
+workspace through `STRIX_REPO_ROOT`, and invokes the trusted gate by its
+absolute path. This makes the core executable fixture reproduce the production
+owner boundary instead of proving a co-located copy. The full exact-tree Strix
+harness and hosted checks remain the release authority; no provider, model,
+timeout, severity, or consumer ownership boundary changes.
+
+**2026-09-26 exact-head RCA / owner integration.** Exact Python-security job
+`107750961662` on head `1794626af3473ef23b9c2e678c3f06fd6c11636f`
+found AnyIO 4.14.0's CVE-2026-63374, CVE-2026-64847, and CVE-2026-63349 in
+`requirements-strix-ci-hashes.txt`; this branch had not adopted the central
+source-to-hash AnyIO 4.14.2 repair from `ContextualWisdomLab/.github#2385`.
+Exact CodeQL dispatch run `36204821293`, Python job `108319933572`, separately
+produced one Medium+ SARIF result:
+`py/incomplete-url-substring-sanitization` at
+`tests/test_organization_commercial_readiness_loop_receipt_contract.py:60`.
+The receipt test parsed the complete YAML endpoint block but then expressed the
+expected receiver hostname through a subset/membership-style assertion that
+CodeQL correctly rejects on URL-security surfaces. The ordinary two-parent
+owner integration adopts #2385's AnyIO contract; the test now compares the
+complete seven-entry endpoint set exactly. This strengthens the egress oracle:
+an unexpected endpoint fails rather than being tolerated. No CodeQL query,
+severity, SARIF gate, dependency audit, or endpoint allowlist is suppressed or
+widened. Fresh exact-head hosted Python Security and CodeQL remain mandatory.
+
+**2026-09-27 Job Analysis bounded-context repair.** ContextualWisdomLab/orgmetra#63 exact head
+`d88800a5ca3ca15df332e8def5e25064c46e4005` changes the HRIS-kernel Job
+Analysis aggregate module, while the trusted scan workspace previously omitted
+the unchanged product-owned authority context that explains its ownership
+checks. Strix consequently reported a HIGH IDOR finding against an incomplete
+workspace even though the Job Analysis API reconstructs the canonical owner and
+authorizes resource fields before snapshot or PostgreSQL port access. Source-
+first RED `1fd22f4e1e86d0ebfe5dab932697e95593c9ad10` adds an executable
+pull-request-target fixture whose fake scanner refuses to run unless the changed
+PR-head `job_analysis.py` is accompanied by exactly the five fixed trusted-base
+collaborators (`auth.py`, `authorization.py`, `http.py`, `postgres.py`, and
+`snapshot.py`); it also proves an unrelated administration module is excluded.
+The minimal GREEN recognizes only that normalized trigger and emits those five
+paths through the existing trusted-base context materializer. This is a bounded
+CI-context repair, not a transfer of product domain truth: no Orgmetra source,
+authorization order, persistence boundary, model/provider policy, severity,
+timeout, or write capability changes. Exact-head hosted Strix acceptance,
+independent review, ordinary protected-main integration, and a fresh
+ContextualWisdomLab/orgmetra#63 consumer run remain mandatory before the
+false-positive gap is complete.
+
+**2026-09-27 required-context fail-closed follow-up.** Review of PR #2291 at
+head `b90d873e67860944308d5cef919a1f95243ef98f` found that the five paths above
+were selected but not required: the shared trusted-context copier treated a
+missing base path as an optional success. A Job Analysis scan could therefore
+reach Strix without the authority evidence the mapping promises. RED removed
+`auth.py` from the authenticated base, changed only the Job Analysis kernel,
+and observed exit 1 after one fake-Strix invocation. Exact source commit
+`5ee6c876da508e45d284517a3812d52e053e3728` makes those five paths mandatory
+only when that kernel trigger is in the authenticated changed-file inventory;
+missing context now exits 2 before Strix, while unrelated mapping families keep
+their prior optional-file behavior. The full Strix shell harness passes, and
+the full Python suite passes with DeprecationWarning promoted to an error
+(`3388 passed, 28 skipped, 40 subtests`). Hosted exact-head checks, qualifying
+independent review, ordinary protected-main integration, and a fresh
+ContextualWisdomLab/orgmetra#63 consumer run remain mandatory.
+
+**2026-09-29 protected-main integration.** The branch had fallen 260 commits
+behind `main` and was `CONFLICTING`. An ordinary two-parent merge adopts the
+trusted-binder lookup, separated trusted fixture runtime, and OpenCode
+assertions that `main` had already absorbed; this PR now owns only the
+binder-owner harness assertions, the consumer-fixture binder guard, the Job
+Analysis authority mapping and its fail-closed copier, the exact receipt
+endpoint set, and the explicit pytest-asyncio loop scope. The duplicate
+fixture helper produced by the automatic merge was removed in favour of
+`main`'s definition. Exact-tree evidence: full Strix harness PASS, filtered Job
+Analysis case PASS, and the full Python suite 5,095 passed and 5 skipped.
+Hosted exact-head checks and qualifying independent review remain mandatory.
+
 ## 2026-09-27 exact release distribution/scope evidence coverage
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2400`; the current
