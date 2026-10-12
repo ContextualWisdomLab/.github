@@ -1,14 +1,24 @@
 """Static contracts for the future dedicated QSR reusable CI lane."""
 
+from copy import deepcopy
 from pathlib import Path
 import os
 import subprocess
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/quarantine-sandbox-runtime-ci.yml"
 DOCTORING = ROOT / "docs/doctoring/quarantine-sandbox-runtime-self-hosted-ci.md"
+CALLER_CONTRACT_COMMAND = (
+    "python3 -B -m unittest scripts/test_central_ci_caller.py "
+    "scripts/test_central_ci_caller_sensitivity.py"
+)
+CALLER_CONTRACT_STEP = {
+    "name": "Test caller CI contract",
+    "run": CALLER_CONTRACT_COMMAND,
+}
 
 
 def workflow():
@@ -22,7 +32,7 @@ def test_reusable_workflow_exists_and_is_call_only():
     assert workflow()["on"] == {"workflow_call": ""}
 
 
-# Frozen from the actual source workflow; never load a sibling checkout in tests.
+# Retained source mechanics plus CALLER-CONTRACT-001; no sibling checkout reads.
 EXPECTED_MECHANICS = {
     "verify": {
         "steps": [
@@ -42,6 +52,7 @@ EXPECTED_MECHANICS = {
                 "name": "Test coverage evidence parser",
                 "run": "python3 -m unittest scripts/test_check_coverage.py",
             },
+            CALLER_CONTRACT_STEP,
             {"name": "Check formatting", "run": "cargo fmt --check"},
             {"name": "Test", "run": "cargo test --locked --workspace --all-targets"},
             {
@@ -198,6 +209,83 @@ EXPECTED_MECHANICS = {
 
 
 RETAINED_JOB_NAMES = tuple(EXPECTED_MECHANICS)
+
+
+def test_verify_runs_product_owned_caller_contract_oracles():
+    """The checked-out QSR candidate must execute both caller tests in verify."""
+    job = workflow()["jobs"]["verify"]
+    assert "continue-on-error" not in job, "CALLER-CONTRACT-001: verify masks failure"
+    steps = job["steps"]
+    matches = [step for step in steps if step.get("run") == CALLER_CONTRACT_COMMAND]
+    assert len(matches) == 1, (
+        "CALLER-CONTRACT-001: verify does not execute the exact QSR caller oracles once"
+    )
+    assert matches[0] == CALLER_CONTRACT_STEP, (
+        "CALLER-CONTRACT-001: caller tests must be unconditional and fail closed"
+    )
+    checkout_index = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Verify exact checkout"
+    )
+    assert steps.index(matches[0]) > checkout_index, (
+        "CALLER-CONTRACT-001: caller tests must run after candidate HEAD verification"
+    )
+
+
+def caller_contract_control():
+    """Derive a positive synthetic control from this producer's actual YAML."""
+    data = deepcopy(workflow())
+    steps = data["jobs"]["verify"]["steps"]
+    steps[:] = [
+        step for step in steps if step.get("name") != CALLER_CONTRACT_STEP["name"]
+    ]
+    index = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Check formatting"
+    )
+    steps.insert(index, dict(CALLER_CONTRACT_STEP))
+    return data
+
+
+def test_verify_caller_contract_accepts_exact_source_bound_control(monkeypatch):
+    """The future owner repair must be accepted, not always rejected."""
+    data = caller_contract_control()
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    test_verify_runs_product_owned_caller_contract_oracles()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "removed_commands",
+        "or_true",
+        "alternate_path",
+        "missing_sensitivity",
+        "continue_on_error",
+    ),
+)
+def test_verify_caller_contract_rejects_source_bound_mutations(monkeypatch, mutation):
+    """Reject command removal, substitution, partial invocation and masked failure."""
+    data = caller_contract_control()
+    steps = data["jobs"]["verify"]["steps"]
+    step = next(
+        step for step in steps if step.get("name") == CALLER_CONTRACT_STEP["name"]
+    )
+    if mutation == "removed_commands":
+        steps.remove(step)
+    elif mutation == "or_true":
+        step["run"] += " || true"
+    elif mutation == "alternate_path":
+        step["run"] = step["run"].replace(
+            "scripts/test_central_ci_caller.py", "alternate/test_central_ci_caller.py"
+        )
+    elif mutation == "missing_sensitivity":
+        step["run"] = step["run"].replace(
+            " scripts/test_central_ci_caller_sensitivity.py", ""
+        )
+    else:
+        step["continue-on-error"] = "true"
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    with pytest.raises(AssertionError, match="CALLER-CONTRACT-001"):
+        test_verify_runs_product_owned_caller_contract_oracles()
 
 
 def test_preserves_all_four_job_mechanics():

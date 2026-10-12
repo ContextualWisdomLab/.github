@@ -70,7 +70,7 @@ There is no GitHub-hosted fallback or user-selected runner routing.
 
 | Child job | Preserved mechanics |
 | --- | --- |
-| `verify` | Rust 1.97.1; locked metadata/test/clippy; repository policy; coverage-parser unit tests; fmt; rustdoc with warnings denied |
+| `verify` | Rust 1.97.1; locked metadata/test/clippy; repository policy; coverage-parser unit tests; both product-owned caller contract modules; fmt; rustdoc with warnings denied |
 | `coverage` | Rust 1.97.1 + llvm-tools-preview; cargo-llvm-cov 0.8.6 locked install; workspace lib/tests JSON and strict production parser |
 | `branch-coverage` | nightly-2026-07-01 + llvm-tools-preview; cargo-llvm-cov 0.8.6 locked install; branch JSON, missing-line report and `--require-branches` parser |
 | `podman-e2e-positive-lsm` | Rust 1.97.1; exact Podman 5.8.4; nonempty runner name; rootless and SELinux boolean assertions; immutable pre-pull; real service isolation/cleanup witness; always-run zero container/network leak assertions |
@@ -92,6 +92,17 @@ rejection-and-cleanup witness is lost. It is not migrated to an unverified
 self-hosted AppArmor profile and is not represented as passed by positive SELinux,
 unit tests or skipped checks. Restoring a negative producer needs separately owned
 capability and real unchanged-candidate evidence.
+
+## Caller contract enforcement
+
+The `verify` job executes both product-owned caller modules after checking the
+candidate HEAD, using `python3 -B -m unittest scripts/test_central_ci_caller.py
+scripts/test_central_ci_caller_sensitivity.py`. The invocation is unconditional;
+a missing module or either module's failure fails this job. There is no optional
+skip, alternate path, or failure masking. The caller's reviewed full-SHA oracle
+must be updated together with its workflow pin when adopting a successor.
+Running this producer against a predecessor without these modules fails closed.
+Their tests do not replace host prelease isolation or actual execution evidence.
 
 ## Check-name migration is not branch protection compatibility
 
