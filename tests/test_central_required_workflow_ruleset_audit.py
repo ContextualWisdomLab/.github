@@ -23,6 +23,7 @@ def ruleset_payload() -> dict:
         "name": "CWL Central required workflows",
         "target": "branch",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
@@ -116,6 +117,53 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
             "PASS: ruleset 18156473 enforces 7 central required workflows"
         in capsys.readouterr().out
     )
+
+
+def test_central_ruleset_rejects_persistent_bypass_actor() -> None:
+    """A standing actor cannot bypass the exact-head review and check gates."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": 1,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset has persistent bypass actors: "
+        "['OrganizationAdmin:1:always']"
+    ]
+
+
+def test_central_ruleset_rejects_missing_bypass_actor_data() -> None:
+    """An incomplete live payload cannot prove that no bypass actor exists."""
+    payload = ruleset_payload()
+    payload.pop("bypass_actors")
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset bypass actor data is missing"
+    ]
+
+
+def test_central_ruleset_rejects_malformed_bypass_actor_data() -> None:
+    """Unreadable bypass configuration fails closed."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = "invalid"
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset bypass actor data is malformed"
+    ]
+
+
+def test_central_ruleset_describes_malformed_bypass_actor_entry() -> None:
+    """A malformed standing actor remains visible in the drift reason."""
+    payload = ruleset_payload()
+    payload["bypass_actors"] = ["invalid"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset has persistent bypass actors: ['<malformed>']"
+    ]
 
 
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
@@ -378,6 +426,7 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "expected ruleset name CWL Central required workflows",
         "central ruleset target is not branch",
         "central ruleset enforcement is not active",
+        "central ruleset bypass actor data is missing",
         "central ruleset does not include all repositories",
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset does not target every default branch",
@@ -489,6 +538,35 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
+
+
+def test_ruleset_audit_requires_dedicated_write_credential() -> None:
+    """The bypass audit must not confuse hidden fields with live drift."""
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    ruleset_step = workflow.split(
+        "- name: Read live inherited organization ruleset and repository scope\n", 1
+    )[1].split("      - name: ", 1)[0]
+    coverage_step = workflow.split(
+        "- name: Audit organization CodeQL coverage\n", 1
+    )[1].split("      - name: ", 1)[0]
+
+    assert (
+        "GH_TOKEN: ${{ secrets.CWL_RULESET_AUDIT_TOKEN || '' }}" in ruleset_step
+    )
+    assert (
+        "RULESET_WRITE_CREDENTIAL_AVAILABLE: "
+        "${{ secrets.CWL_RULESET_AUDIT_TOKEN != '' }}" in ruleset_step
+    )
+    assert 'if [ "$RULESET_WRITE_CREDENTIAL_AVAILABLE" = "false" ]; then' in ruleset_step
+    assert "requires CWL_RULESET_AUDIT_TOKEN with ruleset write access" in ruleset_step
+    assert "|| github.token" not in ruleset_step
+    assert "GH_TOKEN: ${{ github.token }}" not in ruleset_step
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN "
+        "|| secrets.OPENCODE_APPROVE_TOKEN || '' }}" in coverage_step
+    )
 
 
 def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_guard() -> None:

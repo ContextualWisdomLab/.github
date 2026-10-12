@@ -23,6 +23,7 @@ def _ruleset_payload() -> dict:
         "name": audit.RULESET_NAME,
         "target": "branch",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
