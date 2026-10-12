@@ -1,12 +1,9 @@
 """Contract tests for the vendored contextual-orchestrator review sidecar.
 
-These static contracts pin the org policy: every central CI review path routes
-through the vendored ``contextual-orchestrator`` gateway, all five provider
-secrets (``BYTEZ_API_KEY``, ``NVIDIA_NIM_API_KEY``, ``NVIDIA_NIM_API_KEY_SUB``,
-``OPENROUTER_API_KEY``, ``OPENAI_API_KEY``) enter its process-local KV as
-bootstrap transport, models are auto-discovered, and the ``orchestrator/free``
-fail-closed zero-cost pool (prioritized by the ZDR policy in
-``scripts/ci/zdr_policy.py``) is the review model.
+These contracts pin the org policy: private CI reviews use the vendored
+``contextual-orchestrator`` ZDR route, while public reviews use the central
+LiteLLM ``auto`` model. Provider secrets bootstrap the private sidecar's
+process-local credential store; ``orchestrator/free`` remains its model.
 """
 
 from __future__ import annotations
@@ -526,14 +523,24 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
 
 
-def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
-    """Required Noema review uses the gateway; the public NIM hardcode is gone."""
+def test_noema_review_workflow_provisions_private_sidecar_with_five_secrets() -> None:
+    """Only private Noema reviews provision the ZDR sidecar and its bootstrap keys."""
     workflow = _read(NOEMA_WORKFLOW)
+    sidecar_step = workflow.split(
+        "      - name: Provision contextual-orchestrator review sidecar\n", 1
+    )[1].split("\n      - name:", 1)[0]
+    sidecar_guard = (
+        "if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true' "
+        "&& steps.target_visibility.outputs.require_zdr == 'true'"
+    )
+    assert sidecar_guard in sidecar_step
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
     for secret in FIVE_SECRETS:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
+    assert "Public Noema review requires the configured auto model and LiteLLM key." in workflow
+    assert "https://litellm.poinnetworks.net/v1/chat/completions" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_TOKEN}" in workflow
     assert "https://integrate.api.nvidia.com" not in workflow
@@ -559,17 +566,23 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
 
 
 def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosis() -> None:
-    """The privileged Required OpenCode path has no direct-provider model route."""
+    """Private reviews use the ZDR sidecar; public reviews use LiteLLM auto."""
     workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
     assert "Provision contextual-orchestrator review sidecar" in workflow
     assert workflow.index("Validate pull request head repository trust") < workflow.index(
         "Provision contextual-orchestrator review sidecar"
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
-    assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
-    assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
-    assert '.model = "contextual-orchestrator/orchestrator/free"' in workflow
-    assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN:-' in workflow
+    assert "if: needs.validate-pr-metadata.outputs.is_private == 'true'" in workflow
+    assert (
+        "OPENCODE_MODEL_CANDIDATES: ${{ needs.validate-pr-metadata.outputs.is_private"
+        in workflow
+    )
+    assert "MODEL: ${{ needs.validate-pr-metadata.outputs.is_private" in workflow
+    assert "litellm-poinnetworks/{0}" in workflow
+    assert "LLM_GATEWAY_MODEL=auto" in workflow
+    assert "https://litellm.poinnetworks.net/v1" in workflow
+    assert 'api_key="{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in workflow
+    assert 'source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"' in workflow
     assert 'STRIX_GITHUB_MODELS_TOKEN:-' not in workflow
     assert 'MODEL: github-models/' not in workflow
 

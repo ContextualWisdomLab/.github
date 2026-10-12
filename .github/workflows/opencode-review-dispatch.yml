@@ -2656,6 +2656,7 @@ jobs:
           update-environment: false
 
       - name: Provision contextual-orchestrator review sidecar
+        if: needs.validate-pr-metadata.outputs.is_private == 'true'
         env:
           SIDECAR_PYTHON: ${{ steps.sidecar_python.outputs.python-path }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -3757,6 +3758,9 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          EXPECTED_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
+          LLM_GATEWAY_API_KEY: ${{ needs.validate-pr-metadata.outputs.is_private == 'false' && secrets.LLM_GATEWAY_API_KEY || '' }}
+          LLM_GATEWAY_MODEL: ${{ vars.LLM_GATEWAY_MODEL || '' }}
         run: |
           set -euo pipefail
           mkdir -p "$OPENCODE_REVIEW_WORKDIR"
@@ -4099,11 +4103,44 @@ jobs:
           cp "$GITHUB_WORKSPACE/ci-review-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/ci-review-prompt.md"
           cp "$GITHUB_WORKSPACE/code-reviewer-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/code-reviewer-prompt.md"
 
-          jq -n '{
+          if [ "$EXPECTED_IS_PRIVATE" = true ]; then
+            review_model="contextual-orchestrator/orchestrator/free"
+            model_provider="contextual-orchestrator"
+            model_id="orchestrator/free"
+            provider_name="Contextual Orchestrator"
+            base_url="{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1"
+            api_key="{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+            model_name="Orchestrator Free (ZDR-first zero-cost pool)"
+          elif [ "$EXPECTED_IS_PRIVATE" = false ]; then
+            if [ "$LLM_GATEWAY_MODEL" != auto ] || [ -z "$LLM_GATEWAY_API_KEY" ]; then
+              echo '::error::Public OpenCode review requires LLM_GATEWAY_MODEL=auto and LLM_GATEWAY_API_KEY.'
+              exit 1
+            fi
+            printf '::add-mask::%s\n' "$LLM_GATEWAY_API_KEY"
+            review_model="litellm-poinnetworks/${LLM_GATEWAY_MODEL}"
+            model_provider="litellm-poinnetworks"
+            model_id="$LLM_GATEWAY_MODEL"
+            provider_name="PoinNetworks LiteLLM"
+            base_url="https://litellm.poinnetworks.net/v1"
+            api_key='{env:LLM_GATEWAY_API_KEY}'
+            model_name="Auto"
+          else
+            echo '::error::OpenCode review refuses unknown target visibility.'
+            exit 1
+          fi
+
+          jq -n \
+            --arg review_model "$review_model" \
+            --arg model_provider "$model_provider" \
+            --arg model_id "$model_id" \
+            --arg provider_name "$provider_name" \
+            --arg base_url "$base_url" \
+            --arg api_key "$api_key" \
+            --arg model_name "$model_name" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "contextual-orchestrator/orchestrator/free",
-            "small_model": "contextual-orchestrator/orchestrator/free",
-            "enabled_providers": ["contextual-orchestrator"],
+            "model": $review_model,
+            "small_model": $review_model,
+            "enabled_providers": [$model_provider],
             "lsp": false,
             "mcp": {},
             "permission": {
@@ -4179,49 +4216,29 @@ jobs:
                 }
               }
             },
-            "provider": {}
-          }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
-
-          gateway_config="${OPENCODE_REVIEW_WORKDIR}/opencode.gateway.jsonc"
-          jq '
-            .model = "contextual-orchestrator/orchestrator/free" |
-            .small_model = "contextual-orchestrator/orchestrator/free" |
-            .enabled_providers = ["contextual-orchestrator"] |
-            .provider = {
-              "contextual-orchestrator": {
+            "provider": {
+              ($model_provider): {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "Contextual Orchestrator",
-                "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
-                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
-                },
+                "name": $provider_name,
+                "options": {"baseURL": $base_url, "apiKey": $api_key},
                 "models": {
-                "orchestrator/free": {
-                  "name": "Orchestrator Free (ZDR-first zero-cost pool)",
-                  "tool_call": true,
-                  "reasoning": true,
-                  "options": {
-                    "reasoningEffort": "high"
-                  },
-                  "variants": {
-                    "high": {
-                      "reasoningEffort": "high"
-                    }
-                  },
-                  "limit": {
-                    "context": 200000,
-                    "output": 32768
-                    }
-                  }
+                  ($model_id): (
+                    {"name": $model_name, "tool_call": true} +
+                    (if $model_provider == "contextual-orchestrator" then {
+                      "reasoning": true,
+                      "options": {"reasoningEffort": "high"},
+                      "variants": {"high": {"reasoningEffort": "high"}},
+                      "limit": {"context": 200000, "output": 32768}
+                    } else {} end)
+                  )
                 }
               }
             }
-          ' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" >"$gateway_config"
-          mv -- "$gateway_config" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
+          }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
-          if ! grep -Fq 'contextual-orchestrator/orchestrator/free' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
-            || ! grep -Fq 'CONTEXTUAL_ORCHESTRATOR_BASE_URL' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
-            echo '::error::Generated isolated opencode.jsonc is missing the contextual-orchestrator gateway route.'
+          if ! grep -Fq "\"$review_model\"" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
+            || ! grep -Fq "\"$model_provider\"" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Generated isolated opencode.jsonc is missing its visibility-scoped model route.'
             exit 1
           fi
           printf 'Prepared isolated OpenCode review workspace: %s\n' "$OPENCODE_REVIEW_WORKDIR"
@@ -4234,7 +4251,8 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"
+          OPENCODE_MODEL_CANDIDATES: ${{ needs.validate-pr-metadata.outputs.is_private == 'true' && 'contextual-orchestrator/orchestrator/free' || format('litellm-poinnetworks/{0}', vars.LLM_GATEWAY_MODEL) }}
+          LLM_GATEWAY_API_KEY: ${{ needs.validate-pr-metadata.outputs.is_private == 'false' && secrets.LLM_GATEWAY_API_KEY || '' }}
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -4272,7 +4290,14 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+          if [ "$OPENCODE_MODEL_CANDIDATES" = contextual-orchestrator/orchestrator/free ]; then
+            source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+          elif [ "$OPENCODE_MODEL_CANDIDATES" = litellm-poinnetworks/auto ] && [ -n "$LLM_GATEWAY_API_KEY" ]; then
+            printf '::add-mask::%s\n' "$LLM_GATEWAY_API_KEY"
+          else
+            echo '::error::OpenCode model route or credential is unavailable.'
+            exit 1
+          fi
           set +e
           bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
           pool_status=$?
@@ -4852,7 +4877,8 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: contextual-orchestrator/orchestrator/free
+          MODEL: ${{ needs.validate-pr-metadata.outputs.is_private == 'true' && 'contextual-orchestrator/orchestrator/free' || format('litellm-poinnetworks/{0}', vars.LLM_GATEWAY_MODEL) }}
+          LLM_GATEWAY_API_KEY: ${{ needs.validate-pr-metadata.outputs.is_private == 'false' && secrets.LLM_GATEWAY_API_KEY || '' }}
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -6214,8 +6240,11 @@ jobs:
               printf 'Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair; using collected current-head failed-check logs/SARIF fallback so the publish step stays bounded.\n' >&2
               return 1
             fi
-            source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
-            if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+            if [ "$MODEL" = contextual-orchestrator/orchestrator/free ]; then
+              source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+            elif [ "$MODEL" = litellm-poinnetworks/auto ] && [ -n "$LLM_GATEWAY_API_KEY" ]; then
+              printf '::add-mask::%s\n' "$LLM_GATEWAY_API_KEY"
+            else
               return 1
             fi
             if ! python3 "$GITHUB_WORKSPACE/scripts/ci/assert_opencode_reasoning_effort.py" \

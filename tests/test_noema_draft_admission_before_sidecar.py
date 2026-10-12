@@ -84,7 +84,12 @@ def test_model_heavy_steps_are_gated_on_the_live_draft_output() -> None:
     workflow = workflow_text("noema-review.yml")
     for name in GATED_MODEL_STEPS:
         step = workflow_step(workflow, name)
-        assert f"if: env.PR_NUMBER != '' && {DRAFT_GATE}\n" in step, name
+        visibility_gate = (
+            " && steps.target_visibility.outputs.require_zdr == 'true'"
+            if name == "Provision contextual-orchestrator review sidecar"
+            else ""
+        )
+        assert f"if: env.PR_NUMBER != '' && {DRAFT_GATE}{visibility_gate}\n" in step, name
 
 
 def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> None:

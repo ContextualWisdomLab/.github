@@ -26,7 +26,8 @@ jobs the model call itself runs synchronously, in-job:
   `opencode run` for base-merge conflict resolution, later in the same job).
 - `noema-review`'s "Prepare Noema model verdict" step runs
   `python3 .github/actions/noema-review/two_phase.py ...`, which itself
-  calls the model (`NOEMA_LLM_API_URL`, `NOEMA_LLM_MODEL=orchestrator/free`)
+  calls the model (`NOEMA_LLM_API_URL`, using `orchestrator/free` for
+  private/internal targets or configured `auto` for public targets)
   and blocks until it returns.
 
 A job-level `timeout-minutes` on either job does not merely bound "how long

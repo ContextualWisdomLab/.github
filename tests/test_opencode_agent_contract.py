@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
+from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
 def load_opencode_jsonc() -> dict:
@@ -89,284 +90,99 @@ def test_code_reviewer_subagent_contract_is_configured():
             )
 
 
-def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
-    """Guard every review-pool candidate against silent reasoning-effort drift."""
-    config = load_opencode_jsonc()
-    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    github_models = config["provider"]["github-models"]["models"]
-    candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
+def _opencode_config_route_script() -> str:
+    """Extract the live workflow's routing and jq config block for execution."""
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    step = workflow_step(workflow, "Prepare isolated OpenCode review workspace")
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    start = script.index('if [ "$EXPECTED_IS_PRIVATE" = true ]; then')
+    end = script.index("printf 'Prepared isolated OpenCode review workspace:", start)
+    return script[start:end]
 
-    assert candidates_match is not None
-    conditional_public_candidate = (
-        "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
-        "nvidia-nim/meta/llama-3.3-70b-instruct "
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
-        "opencode-free/nemotron-3-ultra-free "
-        "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
-        "opencode-free/ling-3.0-flash-free "
-        "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/hy3-free "
-        "opencode-free/minimax-m3-free "
-        "opencode-free/glm-5-free "
-        "opencode-free/kimi-k2.5-free "
-        "opencode-free/qwen3.6-plus-free ' || '' }}"
-    )
-    candidates_text = candidates_match.group(1)
-    if candidates_text == "contextual-orchestrator/orchestrator/free":
-        assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
-        assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
-        assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
-        return
-    assert candidates_text.startswith(conditional_public_candidate)
-    candidates = [
-        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
-        "nvidia-nim/meta/llama-3.3-70b-instruct",
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro",
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1",
-        "opencode-free/nemotron-3-ultra-free",
-        "opencode-free/deepseek-v4-flash-free",
-        "opencode-free/north-mini-code-free",
-        "opencode-free/laguna-s-2.1-free",
-        "opencode-free/ling-3.0-flash-free",
-        "opencode-free/big-pickle",
-        "opencode-free/mimo-v2.5-free",
-        "opencode-free/hy3-free",
-        "opencode-free/minimax-m3-free",
-        "opencode-free/glm-5-free",
-        "opencode-free/kimi-k2.5-free",
-        "opencode-free/qwen3.6-plus-free",
-        *candidates_text.removeprefix(conditional_public_candidate).split(),
-    ]
-    candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
-    direct_openai_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "openai"
-    ]
-    zen_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "opencode"
-    ]
-    openrouter_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "openrouter"
-    ]
-    github_candidate_models = [
-        model_name
-        for provider, model_name in candidate_pairs
-        if provider == "github-models"
-    ]
 
-    assert candidate_pairs
-    assert all(
-        not candidate.startswith("nvidia-nim/")
-        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
+def _run_opencode_config_route(
+    tmp_path: Path, *, name: str, private: str, model: str, key: str
+):
+    workdir = tmp_path / name / "review"
+    workdir.mkdir(parents=True)
+    result = subprocess.run(  # noqa: S603, S607
+        [shutil.which("bash") or "/bin/bash", "-c", _opencode_config_route_script()],
+        env={
+            **os.environ,
+            "OPENCODE_REVIEW_WORKDIR": str(workdir),
+            "EXPECTED_IS_PRIVATE": private,
+            "LLM_GATEWAY_MODEL": model,
+            "LLM_GATEWAY_API_KEY": key,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert candidate_pairs == [
-        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
-        ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
-        ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
-        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
-        ["nvidia-nim", "meta/llama-3.3-70b-instruct"],
-        ["nvidia-nim", "deepseek-ai/deepseek-v4-pro"],
-        ["nvidia-nim", "mistralai/codestral-22b-instruct-v0.1"],
-        ["opencode-free", "nemotron-3-ultra-free"],
-        ["opencode-free", "deepseek-v4-flash-free"],
-        ["opencode-free", "north-mini-code-free"],
-        ["opencode-free", "laguna-s-2.1-free"],
-        ["opencode-free", "ling-3.0-flash-free"],
-        ["opencode-free", "big-pickle"],
-        ["opencode-free", "mimo-v2.5-free"],
-        ["opencode-free", "hy3-free"],
-        ["opencode-free", "minimax-m3-free"],
-        ["opencode-free", "glm-5-free"],
-        ["opencode-free", "kimi-k2.5-free"],
-        ["opencode-free", "qwen3.6-plus-free"],
-        ["opencode", "gpt-5.6-terra"],
-        ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.4"],
-        ["openrouter", "deepseek/deepseek-v3.2"],
-        ["openrouter", "qwen/qwen3-coder"],
-        ["github-models", "openai/gpt-4.1"],
-        ["github-models", "openai/gpt-5"],
-        ["github-models", "openai/gpt-5-chat"],
-        ["github-models", "openai/o3"],
-        ["github-models", "deepseek/deepseek-r1-0528"],
-        ["github-models", "deepseek/deepseek-r1"],
-    ]
-    assert zen_models == ["gpt-5.6-terra"]
-    assert direct_openai_models == ["gpt-5.4"]
-    assert openrouter_models == [
-        "deepseek/deepseek-v3.2",
-        "qwen/qwen3-coder",
-    ]
-    assert set(github_candidate_models).issubset(set(github_models))
-    assert '"context": 256000' in workflow
-    assert '"output": 64000' in workflow
-    generated_config_match = re.search(
-        r"jq -n '(\{.*?\})' >\"\$\{OPENCODE_REVIEW_WORKDIR\}/opencode\.jsonc\"",
-        workflow,
-        re.DOTALL,
+    config_path = workdir / "opencode.jsonc"
+    return result, json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else None
+
+
+def test_opencode_model_route_is_visibility_scoped_and_fails_closed(tmp_path: Path):
+    """Execute the jq route block for public, private, unknown, and invalid config."""
+    assert shutil.which("jq") is not None
+
+    public_key = "synthetic-public-key"
+    public, public_config = _run_opencode_config_route(
+        tmp_path, name="public", private="false", model="auto", key=public_key
     )
-    assert generated_config_match is not None
-    generated_config = json.loads(generated_config_match.group(1))
-    nvidia_provider = generated_config["provider"]["nvidia-nim"]
-    assert nvidia_provider["options"] == {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "{env:NVIDIA_API_KEY}",
+    assert public.returncode == 0
+    assert public_config["model"] == "litellm-poinnetworks/auto"
+    assert public_config["small_model"] == "litellm-poinnetworks/auto"
+    assert public_config["enabled_providers"] == ["litellm-poinnetworks"]
+    public_provider = public_config["provider"]["litellm-poinnetworks"]
+    assert public_provider["name"] == "PoinNetworks LiteLLM"
+    assert public_provider["options"] == {
+        "baseURL": "https://litellm.poinnetworks.net/v1",
+        "apiKey": "{env:LLM_GATEWAY_API_KEY}",
     }
-    assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
-        "limit"
-    ] == {"context": 131072, "output": 8192}
-    scoped_provider_binding = (
-        "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
-    )
-    jobs_text = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
-    job_headers = list(
-        re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs_text, re.MULTILINE)
-    )
-    job_blocks = {
-        match.group(1): jobs_text[
-            match.start() : (
-                job_headers[index + 1].start()
-                if index + 1 < len(job_headers)
-                else len(jobs_text)
-            )
-        ]
-        for index, match in enumerate(job_headers)
-    }
-    privileged_review_job = job_blocks["opencode-review-target"]
+    assert public_provider["models"]["auto"] == {"name": "Auto", "tool_call": True}
+    assert public_key not in json.dumps(public_config)
+    assert f"::add-mask::{public_key}" in public.stdout
 
-    assert privileged_review_job.count(scoped_provider_binding) == 2
-    assert (
-        privileged_review_job.count(
-            "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+    private, private_config = _run_opencode_config_route(
+        tmp_path, name="private", private="true", model="unused", key=""
+    )
+    assert private.returncode == 0
+    assert private_config["model"] == "contextual-orchestrator/orchestrator/free"
+    assert private_config["small_model"] == private_config["model"]
+    assert private_config["enabled_providers"] == ["contextual-orchestrator"]
+    private_provider = private_config["provider"]["contextual-orchestrator"]
+    assert private_provider["options"] == {
+        "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
+        "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}",
+    }
+    private_model = private_provider["models"]["orchestrator/free"]
+    assert private_model["reasoning"] is True
+    assert private_model["options"]["reasoningEffort"] == "high"
+    assert private_model["variants"]["high"]["reasoningEffort"] == "high"
+    assert private_model["limit"] == {"context": 200000, "output": 32768}
+
+    for name, visibility, model, key, error in (
+        ("unknown", "unknown", "auto", public_key, "refuses unknown target visibility"),
+        ("keymissing", "false", "auto", "", "requires LLM_GATEWAY_MODEL=auto and LLM_GATEWAY_API_KEY"),
+        ("modelnotauto", "false", "gpt-4.1", public_key, "requires LLM_GATEWAY_MODEL=auto and LLM_GATEWAY_API_KEY"),
+    ):
+        result, config = _run_opencode_config_route(
+            tmp_path, name=name, private=visibility, model=model, key=key
         )
-        == 2
-    )
-    for job_name, job_block in job_blocks.items():
-        if job_name == "opencode-review-target":
-            continue
-        assert "secrets.NVIDIA_NIM_API_KEY" not in job_block, job_name
-        assert "secrets.NVIDIA_API_KEY" not in job_block, job_name
-    assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
-    free_models = generated_config["provider"]["opencode-free"]["models"]
-    paid_zen_models = generated_config["provider"]["opencode"]["models"]
-    assert set(free_models) == {
-        "nemotron-3-ultra-free",
-        "deepseek-v4-flash-free",
-        "north-mini-code-free",
-        "laguna-s-2.1-free",
-        "ling-3.0-flash-free",
-        "big-pickle",
-        "mimo-v2.5-free",
-        "hy3-free",
-        "minimax-m3-free",
-        "glm-5-free",
-        "kimi-k2.5-free",
-        "qwen3.6-plus-free",
-    }
-    assert set(paid_zen_models) == {"gpt-5.6-terra"}
-    terra_model = paid_zen_models["gpt-5.6-terra"]
-    assert terra_model["tool_call"] is True
-    assert terra_model["reasoning"] is True
-    assert terra_model["options"]["reasoningEffort"] == "high"
-    assert terra_model["variants"]["high"]["reasoningEffort"] == "high"
-    assert terra_model["limit"] == {"context": 1000000, "output": 128000}
-    nemotron_model = free_models["nemotron-3-ultra-free"]
-    deepseek_model = free_models["deepseek-v4-flash-free"]
-    north_model = free_models["north-mini-code-free"]
-    assert nemotron_model["tool_call"] is True
-    assert nemotron_model["limit"] == {"context": 1000000, "output": 128000}
-    assert "response_format" not in nemotron_model.get("options", {})
-    assert deepseek_model["tool_call"] is True
-    assert deepseek_model["limit"] == {"context": 200000, "output": 128000}
-    assert "response_format" not in deepseek_model.get("options", {})
-    assert north_model["tool_call"] is True
-    assert "response_format" not in north_model["options"]
-    assert free_models["laguna-s-2.1-free"]["limit"] == {
-        "context": 256000,
-        "output": 32000,
-    }
-    assert free_models["ling-3.0-flash-free"]["limit"] == {
-        "context": 262144,
-        "output": 32768,
-    }
-    assert free_models["big-pickle"]["limit"] == {
-        "context": 200000,
-        "output": 32000,
-    }
-    assert free_models["mimo-v2.5-free"]["limit"] == {
-        "context": 200000,
-        "output": 32000,
-    }
-    for model_name, model_config in free_models.items():
-        # Every free-pool candidate must declare tool_call support: the reviewer
-        # drives CodeGraph/web-search tooling, so a non-tool_call model in the
-        # pool cannot produce a structured review and would burn its failover
-        # slot before yielding. Guard the whole pool, not just a hand-picked few.
-        assert model_config["tool_call"] is True, model_name
-        if model_config.get("reasoning") is True:
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
-    assert github_candidate_models == [
-        "deepseek/deepseek-v3-0324",
-        "openai/gpt-4.1",
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/o3",
-        "deepseek/deepseek-r1-0528",
-        "deepseek/deepseek-r1",
-    ]
-    banned_review_candidates = {
-        "gpt-5-nano",
-        "openai/gpt-5-nano",
-        "openai/o3-mini",
-    }
-    assert banned_review_candidates.isdisjoint(
-        set(direct_openai_models) | set(openrouter_models) | set(github_candidate_models)
-    )
-    assert '"opencode": {' in workflow
-    assert '"apiKey": "{env:OPENCODE_API_KEY}"' in workflow
-    assert "OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}" in workflow
-    assert '"openai": {' in workflow
-    assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
-    assert '"openrouter": {' in workflow
-    assert '"apiKey": "{env:OPENROUTER_API_KEY}"' in workflow
-    for model_name in direct_openai_models + openrouter_models + github_candidate_models:
-        assert f'"{model_name}": {{' in workflow
+        assert result.returncode != 0
+        assert config is None
+        assert error in result.stdout
 
-    def is_reasoning_capable(model_name: str) -> bool:
-        return (
-            model_name.startswith("gpt-5")
-            or model_name.startswith("openai/gpt-5")
-            or model_name.startswith("openai/o3")
-            or model_name.startswith("openai/o4")
-            or model_name.startswith("deepseek/deepseek-r1")
-        )
 
-    for model_name in github_candidate_models:
-        model_config = github_models[model_name]
-        if is_reasoning_capable(model_name):
-            assert model_config["reasoning"] is True, model_name
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
-        else:
-            assert model_config.get("reasoning") is not True, model_name
-            assert "reasoningEffort" not in model_config.get("options", {}), model_name
-            assert "variants" not in model_config, model_name
-
+def test_opencode_model_pool_uses_visibility_scoped_model_names():
+    """The reviewer and diagnostic jobs select the same private or auto route."""
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    assert "needs.validate-pr-metadata.outputs.is_private == 'true'" in workflow
+    assert "litellm-poinnetworks/{0}" in workflow
+    assert "LLM_GATEWAY_MODEL" in workflow
+    assert "LLM_GATEWAY_API_KEY" in workflow
+    assert 'MODEL: ${{ needs.validate-pr-metadata.outputs.is_private' in workflow
 
 def test_model_pool_cannot_synthesize_approval_after_provider_exhaustion():
     """Provider exhaustion must remain exhausted without a command-only reviewer."""
@@ -2076,7 +1892,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair"
         in workflow
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert "OPENCODE_MODEL_CANDIDATES: ${{ needs.validate-pr-metadata.outputs.is_private" in workflow
+    assert "litellm-poinnetworks/{0}" in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
@@ -2113,7 +1930,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
         not in publish_step
     )
-    assert "MODEL: contextual-orchestrator/orchestrator/free" in publish_step
+    assert "MODEL: ${{ needs.validate-pr-metadata.outputs.is_private" in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' not in publish_step
     assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" not in publish_step
     assert (
@@ -2192,7 +2009,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
-    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert "OPENCODE_MODEL_CANDIDATES: ${{ needs.validate-pr-metadata.outputs.is_private" in workflow
+    assert "litellm-poinnetworks/{0}" in workflow
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(
         r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"',
@@ -3230,3 +3048,85 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert (
         "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
     )
+
+
+@pytest.mark.parametrize(
+    "repository_metadata,expected",
+    [
+        pytest.param({"visibility": "public"}, "false", id="public"),
+        pytest.param({"visibility": "private"}, "true", id="private"),
+        pytest.param({"visibility": "internal"}, "true", id="internal"),
+        pytest.param({}, None, id="missing"),
+        pytest.param({"visibility": None}, None, id="null"),
+        pytest.param({"visibility": "unknown"}, None, id="unknown"),
+        pytest.param({"visibility": 0}, None, id="number"),
+        pytest.param({"visibility": []}, None, id="array"),
+        pytest.param({"visibility": {}}, None, id="object"),
+        pytest.param({"private": True}, None, id="no-boolean-fallback-true"),
+        pytest.param({"private": False}, None, id="no-boolean-fallback-false"),
+    ],
+)
+def test_opencode_live_visibility_metadata_fails_closed(
+    tmp_path: Path, repository_metadata: dict, expected: str | None
+) -> None:
+    """Execute the sibling metadata admission shell with real jq and no network."""
+    assert shutil.which("jq") is not None
+    repository = "ContextualWisdomLab/example"
+    metadata = {
+        "state": "open",
+        "base": {"repo": {"full_name": repository, **repository_metadata}, "ref": "main", "sha": "a" * 40},
+        "head": {"repo": {"full_name": repository}, "ref": "feature", "sha": "b" * 40},
+    }
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("opencode-review-dispatch.yml"),
+            "Bind workflow inputs to live organization pull request metadata",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\n'
+        'test "$1" = api\ntest "$2" = repos/ContextualWisdomLab/example/pulls/7\n'
+        'test "$#" = 2\nprintf called >> "$FAKE_GH_CALLS"\n'
+        'printf "%s" "$FAKE_METADATA"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    calls = tmp_path / "gh-calls"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(tmp_path),
+            "GITHUB_OUTPUT": str(output),
+            "GH_TOKEN": "synthetic-review-token",
+            "EVENT_NAME": "repository_dispatch",
+            "DISPATCH_ACTOR": "synthetic-bot",
+            "DISPATCH_SENDER": "synthetic-bot",
+            "ALLOWED_DISPATCH_ACTOR": "synthetic-bot",
+            "ALLOWED_DISPATCH_TARGETS": repository,
+            "TARGET_REPOSITORY": repository,
+            "PR_NUMBER": "7",
+            "SUPPLIED_BASE_REF": "main",
+            "SUPPLIED_BASE_SHA": "a" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+            "FAKE_METADATA": json.dumps(metadata),
+            "FAKE_GH_CALLS": str(calls),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    assert calls.read_text(encoding="utf-8") == "called"
+    assert "synthetic-review-token" not in result.stdout + result.stderr
+    if expected is None:
+        assert result.returncode != 0
+        assert not output.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert values["is_private"] == expected

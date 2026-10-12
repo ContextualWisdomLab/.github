@@ -1234,8 +1234,8 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
-def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
-    """Require explicit reviewer credentials and the trusted orchestrator sidecar."""
+def test_noema_review_credentials_and_visibility_model_routes_fail_closed() -> None:
+    """Require review credentials and route private/public targets by visibility."""
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
@@ -1277,10 +1277,9 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
-    assert (
-        "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
-        in workflow
-    )
+    assert "contextual-orchestrator ZDR sidecar must be provisioned before private Noema review." in workflow
+    assert "Public Noema review requires the configured auto model and LiteLLM key." in workflow
+    assert "Noema review refuses unknown target visibility." in workflow
     assert "BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}" in workflow
     assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}" in workflow
@@ -1346,6 +1345,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         **os.environ,
         "PR_NUMBER": "1",
         "GH_TOKEN": "synthetic-review-token",
+        "REQUIRE_ZDR": "true",
     }
     for key in (
         "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
@@ -1366,7 +1366,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         check=False,
     )
     assert noema.returncode == 1
-    assert "sidecar must be provisioned before Noema LLM review" in noema.stdout
+    assert "ZDR sidecar must be provisioned before private Noema review" in noema.stdout
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:

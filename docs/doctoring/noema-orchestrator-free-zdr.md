@@ -1,16 +1,16 @@
-# Doctoring record: Required reviews through the vendored orchestrator sidecar
+# Doctoring record: ZDR sidecar for private reviews, configured gateway for public reviews
 
 - **Date:** 2026-08-28
-- **Subject:** Required Noema, OpenCode dispatch, and Strix reviews no longer
-  select direct provider model routes. They use the same vendored
-  `contextual-orchestrator` sidecar (`orchestrator/free`, ZDR-first
-  auto-discovery).
+- **Subject:** Private/internal Noema and OpenCode dispatch plus Strix use the
+  vendored `contextual-orchestrator` sidecar (`orchestrator/free`, ZDR-first
+  auto-discovery). Public Noema/OpenCode targets use the configured PoinNetworks
+  LiteLLM `auto` route, per the 2026-10-10 amendment below.
 - **Decision record:** [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](../adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 - **Related:** [`docs/doctoring/contextual-orchestrator-vendored-sidecar.md`](contextual-orchestrator-vendored-sidecar.md)
 
 ## What changed
 
-`.github/workflows/noema-review.yml` provisions
+For private/internal targets, `.github/workflows/noema-review.yml` provisions
 `scripts/ci/contextual_orchestrator_review_sidecar.sh` with the five provider
 secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
 `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) and points `NOEMA_LLM_API_URL` at the
@@ -20,6 +20,11 @@ bearer. The public-repo `integrate.api.nvidia.com` /
 `nvidia/nemotron-3-ultra-550b-a55b` hardcode is deleted. There is no sequential
 OpenAI or Azure fallback hop.
 
+For public targets, Noema uses the existing `LLM_GATEWAY_MODEL=auto` variable
+and `LLM_GATEWAY_API_KEY` secret with the LiteLLM base URL. OpenCode's generated
+configuration has the same visibility split. The key is available only to
+trusted model-call steps and is never copied into configuration.
+
 `scripts/ci/noema_review_gate.py` `call_llm` still rejects `localhost` and
 arbitrary private, link-local, multicast, and unspecified targets. It allows
 only `127.0.0.1` / `::1` when that origin matches the exact configured
@@ -27,9 +32,8 @@ only `127.0.0.1` / `::1` when that origin matches the exact configured
 marker is metadata only and never widens the allowlist.
 
 Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
-OIDC. Review mutation is still not `github.token`. Required OpenCode and Strix
-use the same gateway model and do not add direct-provider fallback paths. The
-hourly-review-repair roster is untouched.
+OIDC. Review mutation is still not `github.token`. Strix continues to use the
+ZDR sidecar route. The hourly-review-repair roster is untouched.
 
 ## Verification contract
 
@@ -82,3 +86,12 @@ is not Noema review evidence.
 For GitHub App credentials, reviewer identity is bound to the pinned token
 mint action's app slug and numeric installation ID. PAT and OIDC credentials
 continue to resolve their actor through GitHub's authenticated API.
+
+## 2026-10-10 public-target gateway routing
+
+The central repository already held `LLM_GATEWAY_MODEL=auto` and the
+`LLM_GATEWAY_API_KEY` secret, but Noema and OpenCode did not use them. Public
+repository reviews now use `https://litellm.poinnetworks.net` with that model
+and key. Private/internal reviews still use the attested-ZDR sidecar; unknown
+visibility and a missing public gateway configuration fail closed. The API
+key value is read only by trusted review jobs and is never printed or committed.
