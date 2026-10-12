@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-10-07 stale-dispatch stack reconciliation delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-STALE-DISPATCH-STACK-01 | **Proposed — `.github#2382` source repair complete; hosted acceptance pending** | Canonical prerequisite `.github#2385` merged and ordinary two-parent merge `ca3fe966c0508a0274be7435ad4642756db2ac49` preserved both parents. Fresh review found that a proven descendant head could retire the run before base SHA/ref identity was checked, masking unrelated metadata drift. RED `d7d82dbf` reproduces the mixed moved-head/base-SHA mismatch in both CodeQL and OpenCode validators; GREEN `f7de3e2c` validates live shape and stable base/head-ref identity before stale retirement and advances the reviewed OpenCode workflow blob pin. Exact tree evidence is 132 passed and 1 skipped in both local and Actions mode, plus 5,177 passed, 11 skipped, and 40 subtests in the warnings-as-errors repository suite. | Central `.github` owns dispatch retirement and runner admission. Publish only by expected-head, non-force fast-forward; then re-fetch the new exact head, reviews, threads, and hosted Checks. Ready status does not authorize merge: terminal source-executing hosted Checks, no unresolved actionable review, qualifying independent approval, and ordinary protected integration remain mandatory. |
+
 ### 2026-09-19 exact-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
