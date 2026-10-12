@@ -22,6 +22,7 @@ WORKFLOW = Path(".github/workflows/opencode-review.yml")
 DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 STATUS_HELPER = Path("scripts/ci/opencode_dispatch_status.py")
 RECEIPT_HELPER = Path("scripts/ci/opencode_review_receipt_gate.py")
+INFLIGHT_HELPER = Path("scripts/ci/opencode_inflight_dispatch_gate.py")
 
 
 def request_review_script() -> str:
@@ -53,10 +54,19 @@ def admission_script() -> str:
 
 
 def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
-    """A delayed old synchronize event is retired by live-head admission."""
+    """A delayed old synchronize event is retired from bounded live metadata."""
+    calls = tmp_path / "gh-calls"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
-        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$FAKE_GH_CALLS"
+if [[ "$*" != api\\ graphql* ]]; then
+  echo "unbounded pull-request REST read rejected" >&2
+  exit 91
+fi
+printf '%s' '{"data":{"repository":{"pullRequest":{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"OPEN"}}}}'
+""",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -68,6 +78,7 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "GH_TOKEN": "synthetic-token",
             "GITHUB_OUTPUT": str(output),
+            "FAKE_GH_CALLS": str(calls),
             "TARGET_REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "7",
             "EXPECTED_HEAD_SHA": HEAD,
@@ -80,17 +91,26 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
     assert result.returncode == 0, result.stderr
     assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
     assert "retired a stale event" in result.stdout
+    invocation = calls.read_text(encoding="utf-8")
+    assert invocation.startswith("api graphql ")
+    assert "headRefOid state" in invocation
+    assert "repos/ContextualWisdomLab/example/pulls/7" not in invocation
 
 
-def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
-    """PR and repository_dispatch review jobs compute the same group text."""
+def test_opencode_dispatch_groups_exact_heads_before_pr_scoped_review() -> None:
+    """Exact heads queue independently before the review job retires stale work."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "opencode-review-${{" in required
     assert "opencode-review-${{" in dispatched
     assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
-    assert workflow_level_cancels_in_progress(dispatched)
+    concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    assert "github.event.client_payload.pr_head_sha || github.run_id" in concurrency
+    assert "queue: max" in concurrency
+    assert "cancel-in-progress:" not in concurrency
     assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
 
 
@@ -138,7 +158,6 @@ def test_runtime_required_verdict_accepts_only_formal_current_head_states(
         [],
         [review(state="COMMENTED")],
         [review(state="APPROVED", commit_id="b" * 40)],
-        [review(state="APPROVED", body="deterministic fallback approval")],
     ),
 )
 def test_runtime_required_verdict_rejects_nonpassing_evidence(
@@ -146,6 +165,71 @@ def test_runtime_required_verdict_rejects_nonpassing_evidence(
 ) -> None:
     """Status-only, fallback, and predecessor evidence remain non-passing."""
     assert runtime_verdict(reviews) == ""
+
+
+FALLBACK_CHANGES_REQUESTED_BODY = (
+    "## Pull request overview\n\nOpenCode could not approve from deterministic current-head evidence "
+    "because GitHub Checks have failed.\n\n- Root cause: The model-unavailable evidence fallback is "
+    "allowed only when peer GitHub Checks are complete and clean."
+)
+
+
+@pytest.mark.parametrize(
+    "fallback",
+    (
+        review(state="CHANGES_REQUESTED", body=FALLBACK_CHANGES_REQUESTED_BODY),
+        review(state="APPROVED", body="deterministic fallback approval"),
+        review(state="CHANGES_REQUESTED", body="Model-pool outcome: `unknown`"),
+    ),
+)
+def test_runtime_required_verdict_never_counts_a_model_unavailable_fallback(fallback) -> None:
+    """RED on main: a fallback CHANGES_REQUESTED made the required check green with no model verdict.
+
+    Run 34931908846 ended with the model pool exhausted (model=none), yet the
+    fallback's deterministic blocker review satisfied this check. Any review
+    carrying a fallback marker now yields MODEL_OUTPUT_UNAVAILABLE instead.
+    """
+    assert runtime_verdict([fallback]) == "MODEL_OUTPUT_UNAVAILABLE"
+    # A later real model verdict on the same head still passes.
+    assert runtime_verdict([fallback, review(state="CHANGES_REQUESTED", body="## Verdict\nFix the race.")]) == "CHANGES_REQUESTED"
+
+
+def test_fail_closed_step_reports_model_unavailable_explicitly(tmp_path: Path) -> None:
+    """The step exits 1 with a MODEL_OUTPUT_UNAVAILABLE error, never success, for a fallback-only head."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$*" == *"/reviews"* ]]; then printf \'%s\' "$FAKE_REVIEWS"; else printf \'%s\' "$LIVE_PR_JSON"; fi\n',
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    result = subprocess.run(
+        [bash, "-c", fail_closed_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "PR_ACTION": "synchronize",
+            "PR_DRAFT": "false",
+            "LIVE_PR_JSON": json.dumps({"draft": False, "head": {"sha": HEAD}, "state": "open"}),
+            "FAKE_REVIEWS": json.dumps([review(state="CHANGES_REQUESTED", body=FALLBACK_CHANGES_REQUESTED_BODY)]),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MODEL_OUTPUT_UNAVAILABLE" in result.stdout
+    assert "Current-head OpenCode verdict" not in result.stdout
 
 
 @pytest.mark.parametrize("state", ("APPROVED", "CHANGES_REQUESTED"))
@@ -315,12 +399,17 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
     assert "scripts/ci/opencode_review_receipt_gate.py" in dispatch_step
+    assert "scripts/ci/opencode_inflight_dispatch_gate.py" in dispatch_step
     assert "github.workflow_sha" in dispatch_step
     assert "evaluate_receipts" in dispatch_step
     assert dispatch_step.index("evaluate_receipts") < dispatch_step.index(
         "exchange_github_app_token"
     )
+    assert dispatch_step.index("opencode_inflight_dispatch_gate.py") < dispatch_step.index(
+        "repos/ContextualWisdomLab/.github/dispatches"
+    )
     assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
+    assert "Exact-head OpenCode Review Dispatch already queued or running" in dispatch_step
     assert "while :; do" not in target_job
     assert "poll_interval_seconds" not in target_job
     assert "180 minutes of polling" not in target_job
@@ -693,6 +782,10 @@ if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
   printf '%s' "$LIVE_PR_JSON"
 elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
+elif [[ "$*" == *"contents/scripts/ci/opencode_inflight_dispatch_gate.py"* ]]; then
+  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_INFLIGHT_HELPER"
+elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
+  printf '{"workflow_runs":[]}'
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
@@ -715,6 +808,7 @@ fi
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "REAL_RECEIPT_HELPER": str(RECEIPT_HELPER.resolve()),
+        "REAL_INFLIGHT_HELPER": str(INFLIGHT_HELPER.resolve()),
         "FAKE_REVIEWS": json.dumps(reviews),
         "DISPATCH_CALLS": str(calls),
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
@@ -741,6 +835,74 @@ fi
     assert result.returncode == 0, result.stderr
     actual = calls.read_text(encoding="utf-8").count("dispatch") if calls.exists() else 0
     assert actual == dispatches
+
+
+def test_scheduler_wake_skips_dispatch_when_same_head_already_inflight(
+    tmp_path: Path,
+) -> None:
+    """Exact-head queued central dispatch must not be cancelled by a duplicate POST."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "dispatches"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  printf '%s' "$LIVE_PR_JSON"
+elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
+  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
+elif [[ "$*" == *"contents/scripts/ci/opencode_inflight_dispatch_gate.py"* ]]; then
+  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_INFLIGHT_HELPER"
+elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
+  printf '{"workflow_runs":[{"id":99,"display_title":"OpenCode Review Dispatch owner/repo#7@%s","status":"queued"}]}' "$HEAD_SHA"
+elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
+  printf '[]'
+elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
+  printf 'dispatch\n' >>"$DISPATCH_CALLS"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/usr/bin/env bash
+[[ "$*" == *"exchange_github_app_token"* ]] && printf '{"token":"app"}' || printf '{"value":"oidc"}'
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "REAL_RECEIPT_HELPER": str(RECEIPT_HELPER.resolve()),
+        "REAL_INFLIGHT_HELPER": str(INFLIGHT_HELPER.resolve()),
+        "DISPATCH_CALLS": str(calls),
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://api.opencode.ai",
+        "TARGET_REPOSITORY": "owner/repo",
+        "PR_NUMBER": "7",
+        "HEAD_SHA": HEAD,
+        "PR_DRAFT": "false",
+        "BASE_BRANCH": "main",
+        "BASE_SHA": "b" * 40,
+        "HEAD_REF": "feature-branch",
+        "WORKFLOW_SHA": "c" * 40,
+        "GH_TOKEN": "token",
+        "GITHUB_RUN_ID": "123456789",
+        "LIVE_PR_JSON": json.dumps(
+            {"draft": False, "head": {"sha": HEAD}, "state": "open"}
+        ),
+    }
+    result = subprocess.run(
+        ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "duplicate repository_dispatch skipped" in result.stdout
+    assert not calls.exists() or calls.read_text(encoding="utf-8").count("dispatch") == 0
 
 
 def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> None:
