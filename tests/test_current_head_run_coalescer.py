@@ -685,7 +685,8 @@ def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) ->
         run_record(100, 10),
         run_record(101, 10, pr_number=2),
         run_record(102, 10, pr_number=2),
-        run_record(103, 10, pr_number=999, head_sha="b" * 40),
+        run_record(103, 10, pr_number=3),
+        run_record(104, 10, pr_number=999, head_sha="b" * 40),
     ]
     result = module._associated_prs(
         "o/r",
@@ -695,8 +696,8 @@ def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) ->
         branch="feature/current",
         head_sha="a" * 40,
     )
-    assert list(result) == [2]
-    assert calls == [2]
+    assert sorted(list(result)) == [2, 3]
+    assert sorted(calls) == [2, 3]
 
 
 def test_refresh_siblings_refetches_only_same_workflow_head_peers(monkeypatch) -> None:
@@ -714,16 +715,19 @@ def test_refresh_siblings_refetches_only_same_workflow_head_peers(monkeypatch) -
     ) == []
     calls: list[int] = []
     monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: calls.append(run_id) or sibling)
+    sibling2 = run_record(104, 10)
     refreshed = module._refresh_siblings(
         "o/r",
-        [candidate, sibling, other_workflow, other_head],
+        [candidate, sibling, sibling2, other_workflow, other_head],
         100,
         repository="ContextualWisdomLab/.github",
         branch="feature/current",
         head_sha="a" * 40,
     )
-    assert [item["id"] for item in refreshed] == [101]
-    assert calls == [101]
+    assert len(refreshed) == 2
+    assert refreshed[0] == sibling
+    assert refreshed[1] == sibling
+    assert sorted(calls) == [101, 104]
 
 
 def test_coalesce_validates_inputs_rechecks_each_candidate_and_preserves_races(monkeypatch, capsys) -> None:

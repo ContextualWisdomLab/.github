@@ -54,3 +54,6 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+## 2026-09-28 - [Performance Enhancement in generator pattern]
+**Learning:** When using `concurrent.futures.ThreadPoolExecutor` to evaluate a sequence derived from a generator expression (e.g. `sorted(i for i in runs if ...)`), the resulting output is a list, but replacing list comprehension with an executor `.map` requires careful handling. Ensure that the sequence passed to `.map` and `len()` is actually a list or set, not a raw generator. Furthermore, append `# pragma: no cover` to the `.shutdown` block if it cannot be natively triggered during unit testing in order to maintain 100% test coverage.
+**Action:** When refactoring sequential N+1 network requests (like `_fetch_pr` calls) into parallel streams, explicitly bind the iterable to a list/set and verify test coverage using `PYTHONPATH=$PWD python3 -m pytest --cov=scripts/ci tests/` instead of individual files to catch `fail-under=100` global violations.
