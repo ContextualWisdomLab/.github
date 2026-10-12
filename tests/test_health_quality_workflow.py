@@ -170,8 +170,8 @@ class HealthQualityTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertEqual(output.read_text(), "")
 
-    def test_admission_outputs_bind_merge_candidate_and_reject_controls(self):
-        """Only full admission emits the event SHA, never a PR head fallback."""
+    def test_admission_outputs_bind_event_specific_identity_and_reject_controls(self):
+        """Full admission emits the validated PR head or branch event SHA."""
         step = workflow()["jobs"]["quality"]["steps"][0]
         for key, expression in {
             "CALLER_PR_STATE": "${{ github.event.pull_request.state }}",
@@ -256,9 +256,80 @@ class HealthQualityTests(unittest.TestCase):
                 self.assertEqual(result.returncode == 0, admitted, result.stderr)
                 self.assertEqual(
                     output.read_text(),
-                    "expected_sha=" + base["CALLER_SHA"] + "\nadmitted=true\n"
+                    "expected_sha="
+                    + (
+                        base["CALLER_PR_HEAD_SHA"]
+                        if override.get("CALLER_EVENT", base["CALLER_EVENT"])
+                        == "pull_request"
+                        else base["CALLER_SHA"]
+                    )
+                    + "\nadmitted=true\n"
                     if admitted
                     else "",
+                )
+
+    def test_pr_checkout_identity_is_exact_head_without_event_fallback(self):
+        """PR execution binds the validated head, not the synthetic merge SHA."""
+        step = workflow()["jobs"]["quality"]["steps"][0]
+        base = {
+            "CALLER_REPOSITORY": "ContextualWisdomLab/health-evidence",
+            "CALLER_PRIVATE": "true",
+            "CALLER_EVENT": "pull_request",
+            "CALLER_HEAD_REPOSITORY": "ContextualWisdomLab/health-evidence",
+            "CALLER_PR_STATE": "open",
+            "CALLER_PR_HEAD_SHA": "a" * 40,
+            "CALLER_SHA": "b" * 40,
+            "CALLER_REF": "refs/pull/8/merge",
+            "HEALTH_GATE": "rust",
+        }
+        cases = [
+            ({}, "a" * 40),
+            ({"CALLER_PR_HEAD_SHA": ""}, None),
+            ({"CALLER_PR_HEAD_SHA": "A" * 40}, None),
+            ({"CALLER_PR_HEAD_SHA": "a" * 39}, None),
+            ({"CALLER_SHA": ""}, None),
+            ({"CALLER_SHA": "B" * 40}, None),
+            ({"CALLER_HEAD_REPOSITORY": "outsider/fork"}, None),
+            ({"CALLER_PR_STATE": "closed"}, None),
+        ]
+        for event in ("push", "workflow_dispatch"):
+            cases.append(
+                (
+                    {
+                        "CALLER_EVENT": event,
+                        "CALLER_REF": "refs/heads/feature/valid",
+                        "CALLER_PR_HEAD_SHA": "",
+                        "CALLER_HEAD_REPOSITORY": "",
+                        "CALLER_PR_STATE": "",
+                    },
+                    "b" * 40,
+                )
+            )
+        for override, expected in cases:
+            with (
+                self.subTest(override=override),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                output = Path(directory) / "outputs"
+                output.touch()
+                result = subprocess.run(
+                    ["bash", "-c", step["run"]],
+                    env={
+                        **os.environ,
+                        **base,
+                        **override,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                self.assertEqual(
+                    result.returncode == 0, expected is not None, result.stderr
+                )
+                self.assertEqual(
+                    output.read_text(),
+                    f"expected_sha={expected}\nadmitted=true\n" if expected else "",
                 )
 
     def test_job_guard_precedes_runner_and_requires_metadata(self):

@@ -33,6 +33,16 @@ PyYAML entry는 기존 `requirements-bandit-ci-hashes.txt`의 생성된6.0.3 has
 - full repository gate, 현재 head의 self-hosted execution과 qualifying App review는 미완료다. 기존 persistent `health-source` checkout 경계는 이 admission 수리로 해결되지 않는다. startup_failure/account admission도 해결됐다고 주장하지 않는다.
 - 증거: `/Users/seonghobae/.hermes/health-evidence-runs/20261010-2220-central-resume/producer-admission/`. 아래 최초 구현 이력은 역사적 결과로 보존한다.
 
+## 2026-10-12 exact-head 실행 계약 수리
+
+이번 후보는 PR 이벤트의 검토 대상과 실제 checkout 대상을 일치시킨다. 이전 구현은 head SHA의 형식과 저장소를 검사했지만 `github.sha`인 merge candidate를 실행했다. PR head가 `a…`, event SHA가 `b…`인 실제 admission shell 회귀에서 기대 `a…` 대신 `b…` 출력으로 실패를 확인했다.
+
+- PR은 유효한 event SHA, same-repository, open 상태, 정상 merge ref와 PR head SHA를 모두 검사한 뒤 검증한 PR head를 `expected_sha`로 출력한다. head가 없거나 잘못되면 event SHA로 대체하지 않는다.
+- push/manual은 기존 branch ref와 event SHA 계약을 그대로 사용한다. token·runner·gate·toolchain·실패 전파·모든 기존 검증 명령을 변경하지 않는다.
+- checkout과 checkout 후 identity assertion은 같은 `expected_sha`를 소비한다. 별도 merge-candidate 실행이나 base 통합 검증을 이번 exact-head 결과로 주장하지 않는다.
+- 중앙 직접 dispatch를 추가하지 않는다. private startup failure, 기존 persistent checkout 격리, 실제 Linux 실행, private auto/App 승인과 정상 merge는 별도 미완료다. 수리는 새 producer full SHA에 대한 독립 검토와 발행 이후 caller pin 및 policy를 함께 결합해야 적용된다.
+- 본 후보의 계약은 위 actual admission shell RED와 이벤트별 fixture로 검증한다. 외부 GitHub 문서는 이 실행에서 아직 조회하지 않았으므로 조회일·공식 문서 확인을 검증 근거로 주장하지 않는다.
+
 ## TDD와 검증
 
 - 새 계약 시험을 먼저 실행: 중앙 producer 파일 없음으로3 errors, exit1. 기능 부재 RED다.

@@ -59,18 +59,20 @@ jobs:
             push|workflow_dispatch)
               [[ "$CALLER_REF" == refs/heads/* && "$CALLER_REF" != refs/heads/ ]] || exit 1
               git check-ref-format "$CALLER_REF" || exit 1
+              EXPECTED_SHA="$CALLER_SHA"
               ;;
             pull_request)
               [[ "$CALLER_HEAD_REPOSITORY" == "$CALLER_REPOSITORY" ]] || exit 1
               [[ "$CALLER_PR_STATE" == 'open' ]] || exit 1
               [[ "$CALLER_PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
               [[ "$CALLER_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]] || exit 1
+              EXPECTED_SHA="$CALLER_PR_HEAD_SHA"
               ;;
             *) exit 1 ;;
           esac
           case "$HEALTH_GATE" in documentation|rust|pwa) ;; *) exit 1 ;; esac
-          # PRs validate head metadata but execute the event's merge candidate.
-          printf 'expected_sha=%s\nadmitted=true\n' "$CALLER_SHA" >> "$GITHUB_OUTPUT"
+          # Validate the event SHA too, but execute the exact PR head for PR events.
+          printf 'expected_sha=%s\nadmitted=true\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
