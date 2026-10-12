@@ -9,6 +9,7 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -809,6 +810,30 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
     monkeypatch.setattr(materializer, "TRUSTED_UV_DOWNLOAD_MAX_BYTES", 4)
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+
+
+def test_download_trusted_uv_archive_closes_transformed_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The downloader owns and closes an HTTP response once it transforms the error."""
+    error_body = io.BytesIO(b"private body")
+    provider_error = HTTPError(
+        materializer.TRUSTED_UV_ARCHIVE_URL,
+        503,
+        "private body",
+        {},
+        error_body,
+    )
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(provider_error),
+    )
+
+    with pytest.raises(RuntimeError, match="download failed: HTTPError"):
+        materializer._download_trusted_uv_archive()
+
+    assert error_body.closed
 
 
 def test_verified_uv_binary_accepts_exact_archive(

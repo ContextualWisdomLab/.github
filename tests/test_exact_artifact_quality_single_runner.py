@@ -30,7 +30,12 @@ def test_exact_artifact_quality_uses_one_runner_boot() -> None:
 
     workflow = _workflow_text()
 
-    assert workflow.count("runs-on:") == 1
+    from tests.test_agent_review_runtime_quality_consolidation import (
+        _candidate_execution_job,
+    )
+
+    # Both Python versions execute in the candidate, never the refusal job.
+    assert "runs-on" in _candidate_execution_job(workflow)
     assert workflow.count("step-security/harden-runner@") == 1
     assert workflow.count("actions/checkout@") == 1
     assert workflow.count('python-version: "3.10"') == 1
@@ -93,6 +98,39 @@ def test_successor_keeps_exact_head_hash_lock_and_read_only_permissions() -> Non
     assert "requirements-opencode-review-ci-hashes.txt" in workflow
 
 
+def _exact_artifact_steps(workflow: str) -> str:
+    """Select only steps guarded by the exact-artifact suite output."""
+    return "\n".join(
+        step
+        for step in workflow.split("      - name:")[1:]
+        if "if: steps.affected_suites.outputs.exact_artifact == 'true'" in step
+    )
+
+
+def test_exact_artifact_step_scope_excludes_unrelated_compile() -> None:
+    """An adjacent suite cannot inflate the exact-artifact compiler count."""
+    workflow = _workflow_text()
+    scoped = _exact_artifact_steps(workflow)
+    unrelated = (
+        "\n      - name: Unrelated syntax control\n"
+        "        if: steps.affected_suites.outputs.ghas == 'true'\n"
+        "        run: python -m compileall -q unrelated_control.py\n"
+    )
+    assert _exact_artifact_steps(workflow + unrelated) == scoped
+    assert scoped.count("compileall -q") == 2
+    assert "tests/test_codeql_ghas_analyses_pagination.py" not in scoped
+    # Removing a compiler in the actual guarded slice remains observable.
+    compile_step = "Compile exact-artifact production and contracts on Python 3.10"
+    start = workflow.index("      - name: " + compile_step)
+    stop = workflow.index("      - name:", start + 1)
+    mutated = (
+        workflow[:start]
+        + workflow[start:stop].replace("compileall -q", "missing_compile")
+        + workflow[stop:]
+    )
+    assert _exact_artifact_steps(mutated).count("compileall -q") == 1
+
+
 def test_successor_preserves_all_exact_artifact_contracts() -> None:
     """Retain every predecessor test, coverage, docstring, and syntax gate."""
 
@@ -110,11 +148,7 @@ def test_successor_preserves_all_exact_artifact_contracts() -> None:
     assert "coverage run --branch" in workflow
     assert "--fail-under=100" in workflow
     assert "interrogate --fail-under=100" in workflow
-    exact_artifact_steps = workflow[
-        workflow.index(
-            "- name: Set up minimum supported Python for exact-artifact contracts"
-        ) : workflow.index("- name: Verify consolidated workflow contract")
-    ]
+    exact_artifact_steps = _exact_artifact_steps(workflow)
     assert exact_artifact_steps.count("compileall -q") == 2
 
 

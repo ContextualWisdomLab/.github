@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -671,6 +672,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
         sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
 
     assert exc_info.value.code == 302
+    exc_info.value.close()
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
@@ -693,6 +695,43 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "web.log")
 
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service) is False
+
+
+def test_wait_for_url_closes_redirect_response(monkeypatch, tmp_path):
+    """A rejected readiness redirect releases its file-like HTTP response."""
+
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    ticks = iter([0, 0, 2])
+    error_body = BytesIO()
+    redirect_error = sandboxed_web_e2e.urllib.error.HTTPError(
+        "http://127.0.0.1:8000/health", 302, "Found", {}, error_body
+    )
+
+    class RedirectingOpener:
+        def open(self, url, timeout):
+            raise redirect_error
+
+    monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        sandboxed_web_e2e.urllib.request,
+        "build_opener",
+        lambda *args: RedirectingOpener(),
+    )
+    service = sandboxed_web_e2e.Service(
+        "web", "serve", RunningProcess(), tmp_path / "web.log"
+    )
+
+    assert (
+        sandboxed_web_e2e.wait_for_url(
+            "http://127.0.0.1:8000/health", 1, service
+        )
+        is False
+    )
+    assert error_body.closed
 
 
 def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
@@ -1571,7 +1610,42 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
         )
 
 
-def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(monkeypatch, tmp_path):
+@pytest.fixture
+def modeled_host_home(monkeypatch, tmp_path):
+    """Keep the modeled host home separate from path-resolution workspaces.
+
+    Approved runner scratch may itself be beneath the real HOME. Model only
+    Path.home for these tests; leave HOME and the production denial unchanged.
+    """
+    home = tmp_path.parent / f"{tmp_path.name}-host-home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
+def test_isolated_command_rejects_workspace_inside_modeled_home(monkeypatch, modeled_host_home):
+    """Workspace admission must not override the host-home executable denial."""
+    sandbox = modeled_host_home / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "launch.sh"
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match=re.escape("host home directory")):
+        sandboxed_web_e2e.isolated_command(
+            "./launch.sh",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A ./gradlew-style repository launcher resolves against the sandboxed cwd.
 
     ``shutil.which`` resolves any command string containing a path separator
@@ -1602,7 +1676,9 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(mon
     assert command.endswith("./gradlew build")
 
 
-def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypatch, tmp_path):
+def test_isolated_command_resolves_bare_command_via_relative_path_entry(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A bare command resolves when PATH itself has a relative entry.
 
     ``shutil.which`` joins a relative ``PATH`` entry with the *calling
@@ -1635,7 +1711,9 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypa
     assert command.endswith("tool")
 
 
-def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(monkeypatch, tmp_path):
+def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """An absolute copied-repo launcher path is rewritten to its /workspace equivalent.
 
     ``isolated_command`` binds ``sandbox_root`` at ``SANDBOX_MOUNT`` inside
@@ -1681,6 +1759,23 @@ def test_which_relative_to_cwd_returns_none_for_empty_path(tmp_path):
     assert result is None
 
 
+def test_isolated_command_rejects_explicit_host_home_even_inside_workspace(monkeypatch, tmp_path):
+    """An allowed scratch workspace cannot turn a host-home executable into code."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "launch.sh"
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    with pytest.raises(RuntimeError, match="host home directory"):
+        sandboxed_web_e2e.isolated_command(
+            str(launcher), backend="/usr/bin/bwrap", cwd=repo,
+            sandbox_root=sandbox, env={"PATH": "/usr/bin"},
+        )
+
+
 def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypatch, tmp_path):
     """A relative PATH entry cannot be used to search the real host filesystem outside the copy.
 
@@ -1704,7 +1799,9 @@ def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypat
         )
 
 
-def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
+def test_isolated_command_rejects_repo_local_path_traversal(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
@@ -1724,7 +1821,9 @@ def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_pat
         )
 
 
-def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
+def test_isolated_command_rejects_explicit_external_path(
+    monkeypatch, tmp_path, modeled_host_home
+):
     """An explicit absolute path outside the workspace and bind roots is still rejected."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"

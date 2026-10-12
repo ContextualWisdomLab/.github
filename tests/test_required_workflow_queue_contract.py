@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 2),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -1276,7 +1275,21 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' not in prepare
+    personal, sidecar = prepare.split("          else\n", 1)
+    assert 'if [ "${PERSONAL_ROUTE_SELECTED:-}" = \'true\' ]; then' in personal
+    assert 'test -n "${LLM_GATEWAY_API_KEY:-}"' in personal
+    assert 'export NOEMA_LLM_MODEL="auto"' in personal
+    assert 'https://litellm.poinnetworks.net/v1/chat/completions' in personal
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in sidecar
+    admission = workflow_step(workflow, "Admit existing personal LiteLLM auto route")
+    assert 'scripts.ci.personal_review_route' in admission
+    assert '--zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED"' in admission
+    assert '--zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED"' in admission
+    assert '--private-target "$PRIVATE_TARGET"' in admission
+    assert "vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false'" in admission
+    assert "vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false'" in admission
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
@@ -1392,15 +1405,15 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     """
     workflow = workflow_text("noema-review.yml")
 
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert 'NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || \'\' }}' in workflow
     assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
     assert (
         "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
         in workflow
     )
-    # The review step must prefer the PAT over the exchanged app token.
+    # Non-kcsap consumers retain PAT preference; k-csap is App-only.
     assert (
-        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        "GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}"
         in workflow
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
@@ -1700,12 +1713,12 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
 
     assert workflow.count("--allow-no-lockfiles") == 4
     assert workflow.count("path: source") == 2
-    assert workflow.count("--output-file=old-results.json") == 2
-    assert workflow.count("--output-file=new-results.json") == 2
+    assert workflow.count("old-results.json --") == 2
+    assert workflow.count("new-results.json --") == 2
     assert workflow.count("source/") == 4
     assert "clean: false" not in workflow
-    assert "test -s old-results.json" in workflow
-    assert "test -s new-results.json" in workflow
+    assert 'python3 "${{ steps.osv_prepare.outputs.control }}/validate.py" require' in workflow
+    assert "OSV_ROOT: ${{ steps.osv_prepare.outputs.root }}" in workflow
 
 
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
@@ -1741,7 +1754,7 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "Retry head OSV without transitive resolution" in workflow
     assert workflow.count("timeout-minutes: 8") == 2
     assert workflow.count("timeout-minutes: 4") == 2
-    assert workflow.count("\n            --no-resolve\n") == 4
+    assert workflow.count("--no-resolve --allow-no-lockfiles -r source/") == 4
     assert workflow.count("failed or timed out before reporter output was trusted") == 2
     assert (
         "Direct manifest and lockfile vulnerability evidence remains enforced"
@@ -1750,16 +1763,15 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert (
         "external transitive registry resolution is intentionally avoided" in workflow
     )
-    assert (
-        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true"
-        in workflow
-    )
-    assert (
-        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
-        in workflow
-    )
-    assert "--output-file=old-results.json" in workflow
-    assert "--output-file=new-results.json" in workflow
+    import yaml
+    steps = yaml.safe_load(workflow)['jobs']['osv-scan']['steps']
+    for side in ('base', 'head'):
+        retry = next(step for step in steps if step.get('id') == f'osv_{side}_retry')
+        assert retry['if'] == f"steps.osv_{side}.outcome == 'failure'"
+        assert retry['continue-on-error'] is True
+        assert retry['env']['OSV_CONTROL'] == '${{ steps.osv_prepare.outputs.control }}'
+    assert "old-results.json --" in workflow
+    assert "new-results.json --" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
@@ -1783,11 +1795,11 @@ def test_osv_scan_uses_current_output_flags_and_binds_sarif_checkout_path() -> N
     # Check each named scanner/reporter step on its own, so a flag removed from
     # one step cannot hide behind the same string appearing elsewhere.
     for step_name, output_flag in (
-        ("Scan base with OSV", "--output-file=old-results.json"),
-        ("Retry base OSV without transitive resolution", "--output-file=old-results.json"),
-        ("Scan head with OSV", "--output-file=new-results.json"),
-        ("Retry head OSV without transitive resolution", "--output-file=new-results.json"),
-        ("Report PR-introduced OSV findings", "--output-files=results.sarif"),
+        ("Scan base with OSV", "old-results.json --"),
+        ("Retry base OSV without transitive resolution", "old-results.json --"),
+        ("Scan head with OSV", "new-results.json --"),
+        ("Retry head OSV without transitive resolution", "new-results.json --"),
+        ("Report PR-introduced OSV findings", "--output-files=${{ steps.osv_prepare.outputs.relative }}/results.sarif"),
     ):
         step = workflow_step(workflow, step_name)
         assert output_flag in step, step_name
@@ -1802,47 +1814,20 @@ def test_osv_scan_uses_current_output_flags_and_binds_sarif_checkout_path() -> N
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
     tmp_path: Path,
 ) -> None:
-    """Mark a clean OSV comparison as comprehensive for code-scanning closure."""
-    workflow = workflow_text("security-scan.yml")
-    step = "      - name: Mark clean OSV SARIF as comprehensive\n"
-    start = workflow.index(step)
-    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
-    run_end = workflow.index("\n      - name:", run_start)
-    script = textwrap.dedent(
-        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
-    )
-    sarif_path = tmp_path / "results.sarif"
-    sarif_path.write_text(
-        json.dumps(
-            {
-                "version": "2.1.0",
-                "runs": [
-                    {
-                        "tool": {
-                            "driver": {
-                                "name": "osv-scanner",
-                                "isComprehensive": False,
-                            }
-                        },
-                        "results": [],
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    updated = json.loads(sarif_path.read_text(encoding="utf-8"))
-
-    assert updated["runs"][0]["tool"]["driver"]["isComprehensive"] is True
-    assert "marked the code-scanning analysis comprehensive" in result.stdout
+    """Only a current admitted comparison can close clean alerts."""
+    import yaml
+    steps = yaml.safe_load(workflow_text('security-scan.yml'))['jobs']['osv-scan']['steps']
+    admission = next(s for s in steps if s.get('id') == 'osv_sarif_admission')
+    upload = next(s for s in steps if s.get('id') == 'upload_osv_sarif')
+    assert "steps.osv_require.outcome == 'success'" in admission['if']
+    assert "steps.osv_prepare.outcome == 'success'" in upload['if']
+    assert "steps.osv_sarif_admission.outcome == 'success'" in upload['if']
+    assert "steps.osv_sarif_admission.outputs.admitted == 'true'" in upload['if']
+    assert admission['env']['OSV_REPORTER_OUTCOME'] == '${{ steps.osv_reporter.outcome }}'
+    # Executable clean/failure/schema controls live in the lifecycle module.
+    prepare = next(s for s in steps if s.get('id') == 'osv_prepare')['run']
+    assert "driver['isComprehensive'] = outcome == 'success'" in prepare
+    assert "require(outcome == 'success' or total > 0" in prepare
 
 
 def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
@@ -1854,12 +1839,30 @@ def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
     assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' not in workflow
     assert "commit_oid is not a merge commit" in upload_step
     assert "github/codeql-action/upload-sarif" in upload_step
-    assert "sarif_file: results.sarif" in upload_step
+    assert "sarif_file: ${{ steps.osv_prepare.outputs.root }}/results.sarif" in upload_step
     assert "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload_step
     assert "sha: ${{ github.event.pull_request.head.sha }}" in upload_step
     assert "category:" not in upload_step
     assert "continue-on-error: true" in upload_step
     assert "wait-for-processing: false" in upload_step
+
+
+def test_osv_debug_artifact_quota_does_not_fail_the_scanner_gate() -> None:
+    """Keep optional debug evidence from overriding a completed OSV gate."""
+    workflow = workflow_text("security-scan.yml")
+    upload_step = workflow_step(workflow, "Upload OSV debug artifacts")
+
+    assert "actions/upload-artifact" in upload_step
+    assert "continue-on-error: true" in upload_step
+
+
+def test_trivy_scan_does_not_restore_runner_specific_binary_cache() -> None:
+    """Install the pinned Trivy binary on each heterogeneous runner."""
+    workflow = workflow_text("security-scan.yml")
+    scan_step = workflow_step(workflow, "Trivy filesystem scan")
+
+    assert "aquasecurity/trivy-action" in scan_step
+    assert "cache: false" in scan_step
 
 
 def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
@@ -1927,6 +1930,7 @@ def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
+        env={**os.environ, "OSV_ROOT": str(tmp_path)},
         check=True,
         capture_output=True,
         text=True,

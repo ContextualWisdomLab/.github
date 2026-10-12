@@ -38,7 +38,9 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    runs-on: ubuntu-latest
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
     steps:
@@ -72,7 +74,9 @@ jobs:
   codeql:
     name: CodeQL periodic (${{ matrix.language }})
     needs: detect-languages
-    runs-on: ubuntu-latest
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       actions: read
       contents: read
@@ -102,7 +106,9 @@ jobs:
 
   trivy-fs:
     name: Trivy filesystem (periodic)
-    runs-on: ubuntu-latest
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     permissions:
       contents: read
       security-events: write

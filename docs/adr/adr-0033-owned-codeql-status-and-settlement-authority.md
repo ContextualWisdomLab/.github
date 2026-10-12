@@ -1,5 +1,5 @@
 ---
-title: "ADR-0032: Owned CodeQL status and settlement authority"
+title: "ADR-0033: Owned CodeQL status and settlement authority"
 status: Proposed
 date: "2026-09-27"
 authors: "Codex"
@@ -8,7 +8,7 @@ supersedes: ""
 superseded_by: ""
 ---
 
-# ADR-0032: Owned CodeQL status and settlement authority
+# ADR-0033: Owned CodeQL status and settlement authority
 
 ## Status
 

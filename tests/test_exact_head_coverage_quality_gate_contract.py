@@ -5,6 +5,77 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+import yaml
+
+
+def _pyyaml_pin(requirements: str) -> tuple[str, set[str]]:
+    """Read one logical requirement, ignoring lock generator comments."""
+    logical = requirements.replace("\\\n", " ")
+    pins = re.findall(r"(?mi)^pyyaml==([^\n]+)", logical)
+    assert len(pins) == 1, "install lock must contain exactly one PyYAML pin"
+    tokens = pins[0].split()
+    return tokens[0], set(re.findall(r"--hash=sha256:([0-9a-f]{64})", pins[0]))
+
+
+def _installed_gate_requirements(workflow: str) -> str:
+    """Extract the actual parsed installation step's consumed heredoc."""
+    document = yaml.load(workflow, Loader=yaml.BaseLoader)
+    steps = document["jobs"]["quality-gate"]["steps"]
+    installs = [
+        step for step in steps
+        if step.get("name") == "Install exact hash-verified quality dependencies"
+    ]
+    assert len(installs) == 1, "expected one dependency installation step"
+    shell = installs[0]["run"]
+    target = "${RUNNER_TEMP}/exact-head-coverage-quality-gate-requirements.txt"
+    match = re.search(
+        rf"(?m)^cat >\"{re.escape(target)}\" <<'EOF'\n(.*?)^EOF$",
+        shell, re.DOTALL,
+    )
+    assert match is not None, "missing installation requirements heredoc"
+    install = shell[match.end():].replace("\\\n", " ")
+    assert "python -m pip install" in install
+    assert "--require-hashes" in install
+    assert f'-r "{target}"' in install, "pip must consume the extracted lock"
+    return match.group(1)
+
+
+def _assert_installed_pyyaml(workflow: str) -> None:
+    """Bind the runtime lock to the separately admitted repository hash set."""
+    declared = _pyyaml_pin(_text(ROOT / "requirements-opencode-review-ci-hashes.txt"))
+    assert declared[0] == "6.0.3"
+    assert len(declared[1]) == 73, "admitted PyYAML lock must retain all artifacts"
+    installed = _pyyaml_pin(_installed_gate_requirements(workflow))
+    assert installed == declared, "installed PyYAML version/hash set differs from admission"
+
+
+def test_gate_installs_admitted_pyyaml_for_yaml_contracts() -> None:
+    """The all-tests caller needs the YAML parser in its actual installed lock."""
+    _assert_installed_pyyaml(_text(GATE_WORKFLOW))
+
+
+@pytest.mark.parametrize("mutation", ["missing-pin", "missing-hash", "wrong-version"])
+def test_gate_pyyaml_install_contract_rejects_mutations(mutation: str) -> None:
+    """Each independent lock-policy weakening must be rejected by the oracle."""
+    workflow = _text(GATE_WORKFLOW)
+    requirements = _installed_gate_requirements(workflow)
+    stanza = re.search(r"(?mi)^pyyaml==[^\n]*(?:\n[ \t]+[^\n]*)*", requirements)
+    assert stanza is not None, "positive source must include the installed pin"
+    if mutation == "missing-pin":
+        indented = "\n".join("          " + line for line in stanza.group().splitlines())
+        assert indented in workflow
+        mutated = workflow.replace(indented, "", 1)
+    elif mutation == "missing-hash":
+        digest = re.search(r"--hash=sha256:[0-9a-f]{64}", stanza.group())
+        assert digest is not None
+        mutated = workflow.replace(digest.group(), "", 1)
+    else:
+        mutated = workflow.replace("pyyaml==6.0.3", "pyyaml==6.0.2", 1)
+    assert mutated != workflow, "mutation must change actual workflow bytes"
+    with pytest.raises(AssertionError, match="PyYAML"):
+        _assert_installed_pyyaml(mutated)
+
 ROOT = Path(__file__).resolve().parents[1]
 GATE_WORKFLOW = ROOT / ".github/workflows/exact-head-coverage-quality-gate.yml"
 JS_CALLER = ROOT / ".github/workflows/javascript-coverage-quality-ci.yml"
