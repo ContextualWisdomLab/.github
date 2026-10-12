@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import runpy
+import shlex
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -100,8 +103,17 @@ def test_offline_maturin_build_places_the_extension_for_pytest() -> None:
         Path(__file__).resolve().parents[1] / ".github/workflows/opencode-review-dispatch.yml"
     ).read_text(encoding="utf-8")
     build = workflow.split("build_maturin_extension_if_needed() {", 1)[1].split("\n          }", 1)[0]
-    assert 'python3 "$2" "$dist_dir"/*.whl .' in build
-    assert '"${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"' in build
+    operand = build.split("bash -c ", 1)[1].rsplit(' bash "$project_dir"', 1)[0]
+    expanded = subprocess.run(
+        ["bash", "-eu", "-c", "printf '%s' " + operand],
+        env={"PATH": os.defpath}, capture_output=True, text=True, timeout=10,
+    )
+    assert expanded.returncode == 0, expanded.stderr
+    assert 'python3 "$2" "$dist_dir"/*.whl .' in expanded.stdout
+    command = shlex.split(build.split("bash -c ", 1)[1])
+    assert command[1:] == [
+        "bash", "$project_dir", "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
+    ]
 
 
 def test_cli_rejects_wrong_arity_and_reports_placement_failure(

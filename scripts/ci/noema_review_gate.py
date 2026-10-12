@@ -357,6 +357,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       number
       title
       body
+      author { login }
       isDraft
       state
       headRefOid
@@ -524,6 +525,18 @@ def current_actor() -> str:
         if identity:
             return f"{identity}{suffix}"
     return ""
+
+
+def require_distinct_pr_author(pr: dict[str, Any], actor: str) -> str:
+    """Require a known PR author distinct from the active reviewer actor."""
+    author = pr.get("author")
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str) or not login.strip():
+        raise RuntimeError("Noema pull request author identity could not be verified")
+    normalized = login.strip().casefold()
+    if not actor or actor.strip().casefold() == normalized:
+        raise RuntimeError("Noema reviewer actor must be distinct from the pull request author")
+    return normalized
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
@@ -1606,7 +1619,7 @@ def call_llm(
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/free"
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/auto"
     if not api_url or not api_key:
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
@@ -1882,6 +1895,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
+    require_distinct_pr_author(pr, actor)
     if actor in PRIMARY_REVIEW_AUTHORS:
         raise RuntimeError(
             f"Current token actor {actor!r} is already a primary review actor; "
@@ -1904,6 +1918,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     except RuntimeError:
         print("Pull request closed or its head changed during review; stale verdict was not published.")
         return 0
+    require_distinct_pr_author(current_pr, actor)
     submit_review(repo, number, current_pr, actor, verdict)
     return 0
 

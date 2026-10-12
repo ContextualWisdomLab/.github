@@ -1,0 +1,177 @@
+[
+  {
+    "before": "'cd \"$1\" && corepack npm run build'",
+    "after": "\"cd \\\"\\$1\\\" && corepack npm run build\"",
+    "expected": "cd \"$1\" && corepack npm run build",
+    "literal_sha256": "5b75beac7d183f624302beeede5ef80ebdae5220c68d4e62e8fef76b1f7d95ae",
+    "count": 1
+  },
+  {
+    "before": "'cd \"$1\" && corepack pnpm run build'",
+    "after": "\"cd \\\"\\$1\\\" && corepack pnpm run build\"",
+    "expected": "cd \"$1\" && corepack pnpm run build",
+    "literal_sha256": "e322a3754c05bac3697ef5148b8d91fc821f772bbb825a65ef216789652671a9",
+    "count": 1
+  },
+  {
+    "before": "'cd \"$1\" && yarn build'",
+    "after": "\"cd \\\"\\$1\\\" && yarn build\"",
+    "expected": "cd \"$1\" && yarn build",
+    "literal_sha256": "7a32a0647a33e794473ad69fecd80c09b0ff0c9e07f48bbe4ac9fdc5985b0e57",
+    "count": 1
+  },
+  {
+    "before": "'set -eu\n                cd \"$1\"\n                dist_dir=\"$(mktemp -d)\"\n                python3 -m maturin build --offline --release -o \"$dist_dir\"\n                python3 -m pip install --user --no-index --no-deps --force-reinstall \"$dist_dir\"/*.whl\n                python3 \"$2\" \"$dist_dir\"/*.whl .\n                rm -rf \"$dist_dir\"'",
+    "after": "\"set -eu\n                cd \\\"\\$1\\\"\n                dist_dir=\\\"\\$(mktemp -d)\\\"\n                python3 -m maturin build --offline --release -o \\\"\\$dist_dir\\\"\n                python3 -m pip install --user --no-index --no-deps --force-reinstall \\\"\\$dist_dir\\\"/*.whl\n                python3 \\\"\\$2\\\" \\\"\\$dist_dir\\\"/*.whl .\n                rm -rf \\\"\\$dist_dir\\\"\"",
+    "expected": "set -eu\n                cd \"$1\"\n                dist_dir=\"$(mktemp -d)\"\n                python3 -m maturin build --offline --release -o \"$dist_dir\"\n                python3 -m pip install --user --no-index --no-deps --force-reinstall \"$dist_dir\"/*.whl\n                python3 \"$2\" \"$dist_dir\"/*.whl .\n                rm -rf \"$dist_dir\"",
+    "literal_sha256": "4bba65aefcb59292fa58d0c47228faa9de663c1be54f4fdcfc30e37e234ad82e",
+    "count": 1
+  },
+  {
+    "before": "'cd \"$1\" && PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing'",
+    "after": "\"cd \\\"\\$1\\\" && PYTHONPATH=\\\"\\$([ -d src ] && printf src:. || printf .)\\\" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing\"",
+    "expected": "cd \"$1\" && PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing",
+    "literal_sha256": "8328238f7e8a9efdf50a7d5c1f7bf2e3e9d407b93736b459cc49a720d0dbe253",
+    "count": 1
+  },
+  {
+    "before": "'PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'",
+    "after": "\"PYTHONPATH=\\\"\\$([ -d src ] && printf src:. || printf .)\\\" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing\"",
+    "expected": "PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing",
+    "literal_sha256": "5b8f66d840e67514ded7204289d8d6544f8d9e9b51783bcc5e1f5e99ba45c103",
+    "count": 1
+  },
+  {
+    "before": "'cd \"$1\" && PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m pytest tests/test_docstrings.py'",
+    "after": "\"cd \\\"\\$1\\\" && PYTHONPATH=\\\"\\$([ -d src ] && printf src:. || printf .)\\\" python3 -m pytest tests/test_docstrings.py\"",
+    "expected": "cd \"$1\" && PYTHONPATH=\"$([ -d src ] && printf src:. || printf .)\" python3 -m pytest tests/test_docstrings.py",
+    "literal_sha256": "f6e4b346d6c2285ecff7172605110fedcd34b0e7119695918a3c683adc9edb83",
+    "count": 1
+  },
+  {
+    "before": "'- Preferred review language: `%s`\\n'",
+    "after": "\"- Preferred review language: \\`%s\\`\\\\n\"",
+    "expected": "- Preferred review language: `%s`\\n",
+    "literal_sha256": "a55f9a0314aca4f2919688735698b948e4eb3c6fb5b9a764343626111edff099",
+    "count": 1
+  },
+  {
+    "before": "'- PR title: `%s`\\n'",
+    "after": "\"- PR title: \\`%s\\`\\\\n\"",
+    "expected": "- PR title: `%s`\\n",
+    "literal_sha256": "990a7ab75683f7fc6ebb36792ac611d816bc67aa456f96ba5f40e33641c6c6d4",
+    "count": 1
+  },
+  {
+    "before": "'- PR body excerpt: `%s`\\n'",
+    "after": "\"- PR body excerpt: \\`%s\\`\\\\n\"",
+    "expected": "- PR body excerpt: `%s`\\n",
+    "literal_sha256": "068807903f94d5f4944b5dd5afc54a62face32538f66d1b09d177b986bebb1da",
+    "count": 1
+  },
+  {
+    "before": "'- PR body excerpt: `[empty]`\\n'",
+    "after": "\"- PR body excerpt: \\`[empty]\\`\\\\n\"",
+    "expected": "- PR body excerpt: `[empty]`\\n",
+    "literal_sha256": "3daa3390c09d66fccc34f340c3142b8b1f2de29a23c30e8caa73b62e1617ddab",
+    "count": 1
+  },
+  {
+    "before": "'Unable to collect %s from `%s` to `%s`; continue review from available changed-file evidence and direct file inspection.\\n'",
+    "after": "\"Unable to collect %s from \\`%s\\` to \\`%s\\`; continue review from available changed-file evidence and direct file inspection.\\\\n\"",
+    "expected": "Unable to collect %s from `%s` to `%s`; continue review from available changed-file evidence and direct file inspection.\\n",
+    "literal_sha256": "31eccf9ccdc69d89d9033eac2d0c10beaa644ecdab06f53305d0904a267de44a",
+    "count": 1
+  },
+  {
+    "before": "'Merge-base discovery failed for `%s` and `%s`; falling back to base SHA for bounded diff evidence.\\n\\n'",
+    "after": "\"Merge-base discovery failed for \\`%s\\` and \\`%s\\`; falling back to base SHA for bounded diff evidence.\\\\n\\\\n\"",
+    "expected": "Merge-base discovery failed for `%s` and `%s`; falling back to base SHA for bounded diff evidence.\\n\\n",
+    "literal_sha256": "3520ee4d10ac9a7f302555dabdc7f8370a0c821ffda3694ffd3aab3daf135c5d",
+    "count": 1
+  },
+  {
+    "before": "'All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA `%s`.\\n\\n'",
+    "after": "\"All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA \\`%s\\`.\\\\n\\\\n\"",
+    "expected": "All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA `%s`.\\n\\n",
+    "literal_sha256": "a62108037c8187ed5baa230d394c788909c36cbb2489fbd292c8c6d7f74eca39",
+    "count": 1
+  },
+  {
+    "before": "'\n            def self_check:\n              (.name // \"\") as $n\n              | [\"opencode-review\", \"coverage-evidence\", \"coverage-source-tree\", \"required-workflow-bootstrap\", \"metadata-only gate evaluation\", \"scan-pr-queue\"] | index($n);\n            def latest_peer_checks:\n              [\n                (.check_runs // [])[]\n                | select(self_check | not)\n                | . + {\n                    checkedAt: (\n                      if ((.started_at // \"\") != \"\") then .started_at\n                      else (.completed_at // \"\")\n                      end\n                    )\n                  }\n              ]\n              | sort_by(.app.slug // \"\", .name // \"\", .checkedAt // \"\", .id // 0)\n              | group_by([.app.slug // \"\", .name // \"\"])\n              | map(last)\n              | .[];\n          '",
+    "after": "\"\n            def self_check:\n              (.name // \\\"\\\") as \\$n\n              | [\\\"opencode-review\\\", \\\"coverage-evidence\\\", \\\"coverage-source-tree\\\", \\\"required-workflow-bootstrap\\\", \\\"metadata-only gate evaluation\\\", \\\"scan-pr-queue\\\"] | index(\\$n);\n            def latest_peer_checks:\n              [\n                (.check_runs // [])[]\n                | select(self_check | not)\n                | . + {\n                    checkedAt: (\n                      if ((.started_at // \\\"\\\") != \\\"\\\") then .started_at\n                      else (.completed_at // \\\"\\\")\n                      end\n                    )\n                  }\n              ]\n              | sort_by(.app.slug // \\\"\\\", .name // \\\"\\\", .checkedAt // \\\"\\\", .id // 0)\n              | group_by([.app.slug // \\\"\\\", .name // \\\"\\\"])\n              | map(last)\n              | .[];\n          \"",
+    "expected": "\n            def self_check:\n              (.name // \"\") as $n\n              | [\"opencode-review\", \"coverage-evidence\", \"coverage-source-tree\", \"required-workflow-bootstrap\", \"metadata-only gate evaluation\", \"scan-pr-queue\"] | index($n);\n            def latest_peer_checks:\n              [\n                (.check_runs // [])[]\n                | select(self_check | not)\n                | . + {\n                    checkedAt: (\n                      if ((.started_at // \"\") != \"\") then .started_at\n                      else (.completed_at // \"\")\n                      end\n                    )\n                  }\n              ]\n              | sort_by(.app.slug // \"\", .name // \"\", .checkedAt // \"\", .id // 0)\n              | group_by([.app.slug // \"\", .name // \"\"])\n              | map(last)\n              | .[];\n          ",
+    "literal_sha256": "aee9423e1e806ca41f083a4ab8ae311c6c423c67a4750a05f6aceff961c29321",
+    "count": 1
+  },
+  {
+    "before": "'\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))\n                  | group_by(.name // \"\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \"\" | ascii_downcase) as $n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index($n)) | not)\n                  | select((.status // \"\") == \"completed\")\n                  | select((.conclusion // \"\" | ascii_upcase) as $c | [\"FAILURE\",\"TIMED_OUT\",\"ACTION_REQUIRED\",\"CANCELLED\",\"STARTUP_FAILURE\"] | index($c))\n                  | select((.name // \"\") != \"scan-pr-queue\")\n                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and ((.name // \"\") | contains(\"$\" + \"{{\"))) | not)\n                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and (.name // \"\") == \"noema-review\") | not)\n                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.conclusion // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)\n                '",
+    "after": "\"\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \\\"\\\"), (.id // 0))\n                  | group_by(.name // \\\"\\\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \\\"\\\" | ascii_downcase) as \\$n | [\\\"opencode-review\\\",\\\"coverage-evidence\\\",\\\"metadata-only gate evaluation\\\"] | index(\\$n)) | not)\n                  | select((.status // \\\"\\\") == \\\"completed\\\")\n                  | select((.conclusion // \\\"\\\" | ascii_upcase) as \\$c | [\\\"FAILURE\\\",\\\"TIMED_OUT\\\",\\\"ACTION_REQUIRED\\\",\\\"CANCELLED\\\",\\\"STARTUP_FAILURE\\\"] | index(\\$c))\n                  | select((.name // \\\"\\\") != \\\"scan-pr-queue\\\")\n                  | select(((.conclusion // \\\"\\\" | ascii_downcase) == \\\"cancelled\\\" and ((.name // \\\"\\\") | contains(\\\"\\$\\\" + \\\"{{\\\"))) | not)\n                  | select(((.conclusion // \\\"\\\" | ascii_downcase) == \\\"cancelled\\\" and (.name // \\\"\\\") == \\\"noema-review\\\") | not)\n                  | \\\"- \\\" + (if (.name // \\\"\\\") == \\\"strix\\\" then \\\"Strix Security Scan/strix\\\" else ((.name // \\\"check\\\") + \\\" check run\\\") end) + \\\": \\\" + (.conclusion // \\\"unknown\\\") + (if (.details_url // .html_url // \\\"\\\") != \\\"\\\" then \\\" (\\\" + (.details_url // .html_url) + \\\")\\\" else \\\"\\\" end)\n                \"",
+    "expected": "\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))\n                  | group_by(.name // \"\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \"\" | ascii_downcase) as $n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index($n)) | not)\n                  | select((.status // \"\") == \"completed\")\n                  | select((.conclusion // \"\" | ascii_upcase) as $c | [\"FAILURE\",\"TIMED_OUT\",\"ACTION_REQUIRED\",\"CANCELLED\",\"STARTUP_FAILURE\"] | index($c))\n                  | select((.name // \"\") != \"scan-pr-queue\")\n                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and ((.name // \"\") | contains(\"$\" + \"{{\"))) | not)\n                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and (.name // \"\") == \"noema-review\") | not)\n                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.conclusion // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)\n                ",
+    "literal_sha256": "6c4a46c21e26f6edff27c80ec673a1587677626d749ac929899db7d8c6c13613",
+    "count": 1
+  },
+  {
+    "before": "'\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))\n                  | group_by(.name // \"\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \"\" | ascii_downcase) as $n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index($n)) | not)\n                  | select((.name // \"\") != \"scan-pr-queue\")\n                  | select((.status // \"\") != \"completed\")\n                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.status // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)\n                '",
+    "after": "\"\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \\\"\\\"), (.id // 0))\n                  | group_by(.name // \\\"\\\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \\\"\\\" | ascii_downcase) as \\$n | [\\\"opencode-review\\\",\\\"coverage-evidence\\\",\\\"metadata-only gate evaluation\\\"] | index(\\$n)) | not)\n                  | select((.name // \\\"\\\") != \\\"scan-pr-queue\\\")\n                  | select((.status // \\\"\\\") != \\\"completed\\\")\n                  | \\\"- \\\" + (if (.name // \\\"\\\") == \\\"strix\\\" then \\\"Strix Security Scan/strix\\\" else ((.name // \\\"check\\\") + \\\" check run\\\") end) + \\\": \\\" + (.status // \\\"unknown\\\") + (if (.details_url // .html_url // \\\"\\\") != \\\"\\\" then \\\" (\\\" + (.details_url // .html_url) + \\\")\\\" else \\\"\\\" end)\n                \"",
+    "expected": "\n                  [.[].check_runs[]?]\n                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))\n                  | group_by(.name // \"\")\n                  | map(last)\n                  | .[]?\n                  | select(((.name // \"\" | ascii_downcase) as $n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index($n)) | not)\n                  | select((.name // \"\") != \"scan-pr-queue\")\n                  | select((.status // \"\") != \"completed\")\n                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.status // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)\n                ",
+    "literal_sha256": "3c98f8ca91cdb37939293cd06808463e69bad6e1c015cafa05d07fb2d5a036ce",
+    "count": 1
+  },
+  {
+    "before": "'\n                query($owner:String!,$name:String!,$number:Int!) {\n                  repository(owner:$owner,name:$name) {\n                    pullRequest(number:$number) {\n                      statusCheckRollup {\n                        contexts(first: 100) {\n                          nodes {\n                            __typename\n                            ... on CheckRun {\n                              name\n                              status\n                              conclusion\n                              completedAt\n                              detailsUrl\n                              checkSuite {\n                                workflowRun {\n                                  workflow {\n                                    name\n                                  }\n                                }\n                              }\n                            }\n                          }\n                        }\n                      }\n                    }\n                  }\n                }\n              '",
+    "after": "\"\n                query(\\$owner:String!,\\$name:String!,\\$number:Int!) {\n                  repository(owner:\\$owner,name:\\$name) {\n                    pullRequest(number:\\$number) {\n                      statusCheckRollup {\n                        contexts(first: 100) {\n                          nodes {\n                            __typename\n                            ... on CheckRun {\n                              name\n                              status\n                              conclusion\n                              completedAt\n                              detailsUrl\n                              checkSuite {\n                                workflowRun {\n                                  workflow {\n                                    name\n                                  }\n                                }\n                              }\n                            }\n                          }\n                        }\n                      }\n                    }\n                  }\n                }\n              \"",
+    "expected": "\n                query($owner:String!,$name:String!,$number:Int!) {\n                  repository(owner:$owner,name:$name) {\n                    pullRequest(number:$number) {\n                      statusCheckRollup {\n                        contexts(first: 100) {\n                          nodes {\n                            __typename\n                            ... on CheckRun {\n                              name\n                              status\n                              conclusion\n                              completedAt\n                              detailsUrl\n                              checkSuite {\n                                workflowRun {\n                                  workflow {\n                                    name\n                                  }\n                                }\n                              }\n                            }\n                          }\n                        }\n                      }\n                    }\n                  }\n                }\n              ",
+    "literal_sha256": "a1f6ebee2275c7fb64e9c80219b8102ded1c712d19d40c867ee72f16f79839aa",
+    "count": 1
+  },
+  {
+    "before": "'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id}}}'",
+    "after": "\"query(\\$owner:String!,\\$name:String!,\\$number:Int!){repository(owner:\\$owner,name:\\$name){pullRequest(number:\\$number){id}}}\"",
+    "expected": "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id}}}",
+    "literal_sha256": "286a6960231d8dfb8ff7781de00eea84606a9da93dba3bacf96062e541f8ef77",
+    "count": 1
+  },
+  {
+    "before": "'\n                  [\n                    .[]\n                    | {\n                        number: (.number // 0),\n                        rule: (.rule.id // .rule.name // \"unknown\"),\n                        tool: (.tool.name // \"code-scanning\"),\n                        severity: (.rule.security_severity_level // .rule.severity // \"unknown\"),\n                        url: (.html_url // \"\")\n                      }\n                    | select((.severity | ascii_downcase) as $s | [\"medium\",\"high\",\"critical\",\"warning\",\"error\"] | index($s))\n                  ]\n                  | .[]\n                  | \"- \" + .tool + \"/\" + .rule + \": \" + .severity + \" alert #\" + (.number | tostring) + (if .url != \"\" then \" (\" + .url + \")\" else \"\" end)\n                '",
+    "after": "\"\n                  [\n                    .[]\n                    | {\n                        number: (.number // 0),\n                        rule: (.rule.id // .rule.name // \\\"unknown\\\"),\n                        tool: (.tool.name // \\\"code-scanning\\\"),\n                        severity: (.rule.security_severity_level // .rule.severity // \\\"unknown\\\"),\n                        url: (.html_url // \\\"\\\")\n                      }\n                    | select((.severity | ascii_downcase) as \\$s | [\\\"medium\\\",\\\"high\\\",\\\"critical\\\",\\\"warning\\\",\\\"error\\\"] | index(\\$s))\n                  ]\n                  | .[]\n                  | \\\"- \\\" + .tool + \\\"/\\\" + .rule + \\\": \\\" + .severity + \\\" alert #\\\" + (.number | tostring) + (if .url != \\\"\\\" then \\\" (\\\" + .url + \\\")\\\" else \\\"\\\" end)\n                \"",
+    "expected": "\n                  [\n                    .[]\n                    | {\n                        number: (.number // 0),\n                        rule: (.rule.id // .rule.name // \"unknown\"),\n                        tool: (.tool.name // \"code-scanning\"),\n                        severity: (.rule.security_severity_level // .rule.severity // \"unknown\"),\n                        url: (.html_url // \"\")\n                      }\n                    | select((.severity | ascii_downcase) as $s | [\"medium\",\"high\",\"critical\",\"warning\",\"error\"] | index($s))\n                  ]\n                  | .[]\n                  | \"- \" + .tool + \"/\" + .rule + \": \" + .severity + \" alert #\" + (.number | tostring) + (if .url != \"\" then \" (\" + .url + \")\" else \"\" end)\n                ",
+    "literal_sha256": "0f75e1d5894b2b73171b4eb30786e20af5178dda107f415b3c80de0af1f69fe2",
+    "count": 1
+  },
+  {
+    "before": "'- Problem: Failed same-head checks remain for `%s`.\\n'",
+    "after": "\"- Problem: Failed same-head checks remain for \\`%s\\`.\\\\n\"",
+    "expected": "- Problem: Failed same-head checks remain for `%s`.\\n",
+    "literal_sha256": "f65b717a34c174fb8de45a0c7a004762a1e300a8010b3c7d0a3f816512bd5ccd",
+    "count": 1
+  },
+  {
+    "before": "'- Result: `EXISTING_CURRENT_HEAD_APPROVAL`\\n'",
+    "after": "\"- Result: \\`EXISTING_CURRENT_HEAD_APPROVAL\\`\\\\n\"",
+    "expected": "- Result: `EXISTING_CURRENT_HEAD_APPROVAL`\\n",
+    "literal_sha256": "8423de58f35ef3649d71f174e789b7fdde0c794d6c471f79a13eb5e9f18c828c",
+    "count": 1
+  },
+  {
+    "before": "'- Head SHA: `%s`\\n'",
+    "after": "\"- Head SHA: \\`%s\\`\\\\n\"",
+    "expected": "- Head SHA: `%s`\\n",
+    "literal_sha256": "840f8302400a82c3ba04fc0ed8e5b4d230fe277cb276c0a043d61a0a025a5b65",
+    "count": 2
+  },
+  {
+    "before": "'- Model-pool outcome: `%s`\\n'",
+    "after": "\"- Model-pool outcome: \\`%s\\`\\\\n\"",
+    "expected": "- Model-pool outcome: `%s`\\n",
+    "literal_sha256": "5b8ec084e8d6b976374a8332b42978c39f0222d6f12183d3683b001d44d83899",
+    "count": 1
+  },
+  {
+    "before": "'```json\\n%s\\n```\\n\\n'",
+    "after": "\"\\`\\`\\`json\\\\n%s\\\\n\\`\\`\\`\\\\n\\\\n\"",
+    "expected": "```json\\n%s\\n```\\n\\n",
+    "literal_sha256": "1fd318239f7f84df9676717e141bd7ca8ef672b4c585e01f942ce3aa15349fee",
+    "count": 1
+  }
+]
