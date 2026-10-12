@@ -981,3 +981,146 @@ def test_paid_provider_does_not_gain_an_implicit_schema_repair_attempt(
     assert "attempt 1/1" in result.stdout
     assert "schema-repair attempt" not in result.stdout
     assert "attempt 2/" not in result.stdout
+
+
+def test_non_orchestrator_candidate_does_not_receive_checkpoint_continuation(
+    tmp_path: Path,
+) -> None:
+    """Checkpoint continuation remains scoped to the pinned orchestrator/free route."""
+    prompt_capture = tmp_path / "prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="github-models/openai/gpt-5",
+        prompt_capture=prompt_capture,
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [{"type": "text", "text": "partial review"}],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "0",
+            "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "same-model continuation attempt" not in result.stdout
+    assert "Same-model continuation (host checkpoint" not in prompt_capture.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_latest_retry_replaces_prior_checkpoint_appendix(tmp_path: Path) -> None:
+    """Each retry prompt carries one latest checkpoint appendix, not accumulated history."""
+    prompt_capture = tmp_path / "prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="contextual-orchestrator/orchestrator/free",
+        prompt_capture=prompt_capture,
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [{"type": "text", "text": "partial review"}],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "3",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "0",
+            "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
+            "OPENCODE_SESSION_CONTINUATION_BUDGET": "3",
+        },
+    )
+
+    assert result.returncode == 1
+    assert prompt_capture.read_text(encoding="utf-8").count(
+        "Same-model continuation (host checkpoint"
+    ) == 1
+
+
+def test_missing_continuation_budget_fails_closed_without_appendix(tmp_path: Path) -> None:
+    """Missing calibrated budget authority cannot select a continuation count."""
+    prompt_capture = tmp_path / "prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="contextual-orchestrator/orchestrator/free",
+        prompt_capture=prompt_capture,
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [{"type": "text", "text": "partial review"}],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "0",
+            "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "continuation budget authority is not configured" in result.stdout
+    assert "Same-model continuation (host checkpoint" not in prompt_capture.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_same_model_retry_appends_host_checkpoint_continuation(tmp_path: Path) -> None:
+    """A second same-model attempt reuses bounded checkpoint context instead of restarting blind."""
+    prompt_capture = tmp_path / "prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="contextual-orchestrator/orchestrator/free",
+        prompt_capture=prompt_capture,
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "partial review without control block"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "0",
+            "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
+            "OPENCODE_SESSION_CONTINUATION_BUDGET": "2",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "same-model continuation attempt 2/2" in result.stdout
+    prompt_text = prompt_capture.read_text(encoding="utf-8")
+    assert "Same-model continuation (host checkpoint" in prompt_text
+    assert "partial review without control block" not in prompt_text
+    assert "contextual-orchestrator/orchestrator/free" in prompt_text
+    assert "Termination reason: `invalid-control`" in prompt_text

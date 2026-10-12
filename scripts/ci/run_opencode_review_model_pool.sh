@@ -190,6 +190,54 @@ PY
 	} >"$prompt_file"
 }
 
+record_session_checkpoint() {
+	local model_candidate="$1"
+	local attempt="$2"
+	local checkpoint_file="$3"
+	local json_file="$4"
+	local export_file="$5"
+	local exit_code="$6"
+	local stderr_file="$7"
+	local log_hint=""
+	if [ "$exit_code" -eq 3 ]; then
+		log_hint="invalid-control-output"
+	fi
+	PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_session_checkpoint.py" record \
+		--checkpoint "$checkpoint_file" \
+		--model-candidate "$model_candidate" \
+		--attempt "$attempt" \
+		--head-sha "$HEAD_SHA" \
+		--run-id "$RUN_ID" \
+		--run-attempt "$RUN_ATTEMPT" \
+		--json-path "$json_file" \
+		--export-path "$export_file" \
+		--exit-code "$exit_code" \
+		--log-hint "$log_hint" \
+		${stderr_file:+--stderr-path "$stderr_file"} \
+		|| true
+}
+
+append_same_model_continuation() {
+	local prompt_file="$1"
+	local checkpoint_file="$2"
+	local budget="${OPENCODE_SESSION_CONTINUATION_BUDGET:-}"
+	local remaining
+
+	if ! is_non_negative_integer "$budget"; then
+		printf 'OpenCode continuation budget authority is not configured; checkpoint appendix injection fails closed.\n'
+		return 1
+	fi
+	remaining="$(python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_session_checkpoint.py" append-continuation \
+		--prompt "$prompt_file" \
+		--checkpoint "$checkpoint_file" \
+		--budget "$budget" 2>/dev/null || printf '0\n')"
+	if [ "${remaining:-0}" -le 0 ]; then
+		return 1
+	fi
+	printf 'OpenCode same-model continuation appended; budget remaining after this attempt=%s.\n' "$remaining"
+	return 0
+}
+
 write_schema_repair_prompt() {
 	local model_candidate="$1"
 	local prompt_file="$2"
@@ -536,6 +584,7 @@ main() {
 			candidate_output_file="${RUNNER_TEMP}/opencode-review-${safe_model}.md"
 			opencode_json_file="${candidate_output_file}.jsonl"
 			opencode_export_file="${candidate_output_file}.session.json"
+			checkpoint_file="${RUNNER_TEMP}/opencode-checkpoint-${safe_model}.json"
 			write_prompt "$model_candidate" "$prompt_file"
 			effective_attempts="$attempts"
 			if is_schema_repair_candidate "$model_candidate"; then
@@ -546,6 +595,18 @@ main() {
 					write_schema_repair_prompt "$model_candidate" "$prompt_file"
 					printf 'OpenCode %s schema-repair attempt %s/%s will re-review from trusted evidence with a non-replayable control checklist.\n' \
 						"$model_candidate" "$attempt" "$effective_attempts"
+				elif [ "$attempt" -gt 1 ]; then
+					write_prompt "$model_candidate" "$prompt_file"
+					if [ "$model_candidate" = "contextual-orchestrator/orchestrator/free" ] \
+						&& [ -f "$checkpoint_file" ]; then
+						if append_same_model_continuation "$prompt_file" "$checkpoint_file"; then
+							printf 'OpenCode %s same-model continuation attempt %s/%s reuses host checkpoint evidence under contextual-orchestrator/orchestrator/free.\n' \
+								"$model_candidate" "$attempt" "$effective_attempts"
+						else
+							printf 'OpenCode %s same-model continuation budget exhausted; retry proceeds without checkpoint appendix.\n' \
+								"$model_candidate"
+						fi
+					fi
 				fi
 				if [ "$max_total_attempts" -gt 0 ] && [ "$total_attempts" -ge "$max_total_attempts" ]; then
 					printf 'OpenCode model pool reached the per-run provider attempt ceiling of %s attempts; ending the pool to bound provider spend. Set OPENCODE_POOL_MAX_TOTAL_ATTEMPTS=0 to disable.\n' "$max_total_attempts"
@@ -568,6 +629,12 @@ main() {
 					exit 0
 				else
 					run_status=$?
+				fi
+				if [ "$model_candidate" = "contextual-orchestrator/orchestrator/free" ] \
+					&& [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
+					record_session_checkpoint "$model_candidate" "$attempt" "$checkpoint_file" \
+						"$opencode_json_file" "$opencode_export_file" "$run_status" \
+						"${opencode_json_file}.stderr"
 				fi
 				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
 					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
