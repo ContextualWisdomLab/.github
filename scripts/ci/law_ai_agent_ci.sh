@@ -135,14 +135,14 @@ run_ci() {
   mkdir -p "$private/socket" "$scratch/source" "$scratch/out" "$scratch/outside"
   chmod 700 "$scratch" "$private" "$private/socket"
   # Consumer safety code requires this exact cluster/socket identity and test database.
-  export LAW_AGENT_TEST_DATABASE_URL="dbname=law_agent_test user=$LAW_AGENT_POSTGRES_USER host=$private/socket port=$LAW_AGENT_POSTGRES_PORT"
+  export LAW_AGENT_TEST_DATABASE_URL="dbname=law_agent_test user=$LAW_AGENT_POSTGRES_USER host='$private/socket' port=$LAW_AGENT_POSTGRES_PORT"
   unset LAW_AGENT_DATABASE_URL PGHOSTADDR PGSERVICE PGSERVICEFILE PGSYSCONFDIR PGOPTIONS PYTHONPATH PYTHONHOME VIRTUAL_ENV
   export UV_CACHE_DIR="$scratch/uv-cache" UV_PROJECT_ENVIRONMENT="$scratch/venv"
   export UV_PYTHON="$LAW_CI_PYTHON_VERSION" UV_NO_CACHE=1
   printf '%s\n' 'law-ci: fresh native test cluster'
   "$pg_bin/initdb" -D "$private/cluster" -A trust -U "$LAW_AGENT_POSTGRES_USER" --encoding=UTF8 --no-locale > "$scratch/initdb.log"
   "$pg_bin/pg_ctl" -D "$private/cluster" -l "$scratch/server.log" \
-    -o "-k $private/socket -p $LAW_AGENT_POSTGRES_PORT -c listen_addresses='' -c shared_buffers=32MB -c max_connections=15 -c statement_timeout=10s -c lock_timeout=2s" -w start
+    -o "-k \"$private/socket\" -p $LAW_AGENT_POSTGRES_PORT -c listen_addresses='' -c shared_buffers=32MB -c max_connections=15 -c statement_timeout=10s -c lock_timeout=2s" -w start
   "$pg_bin/createdb" -h "$private/socket" -p "$LAW_AGENT_POSTGRES_PORT" law_agent_test
   git -C "$LAW_CI_SOURCE" archive "$LAW_CI_SOURCE_SHA" | tar -x -C "$scratch/source"
   cd "$scratch/source"

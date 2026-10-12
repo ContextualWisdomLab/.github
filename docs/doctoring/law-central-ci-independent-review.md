@@ -74,3 +74,16 @@ Coordinator가 `/Users/seonghobae/orca/projects/law-ai-agent-pg-moa/tests/test_c
 - image SHA, container limits/mounts와 sudo 거부는 provisioning 문서와 Coordinator producer 영수증이다. 문서는 egress 방화벽 미검증, VM 수준 격리 아님, apt 재빌드 결과 가변, ephemeral 이후 새 등록 필요를 명확히 기록했다. 현재 source 검토가 이를 보안 인증으로 확대하지 않는다.
 - inherited PGOPTIONS는 helper에서 제거된다. native server timeout 10s/2s를 유지한다. 단일 job 20분은 품질 lane이며 중앙 모델 검토 timeout 변경이 아니다.
 - 실제 소비 thin SHA caller, 원격 current-head required checks, ordinary protected merge/publish가 남았다. 중앙 기존 review/security gate는 변경하지 않았다. 중앙 이관은 billing/permission gate 우회가 아니다.
+
+
+## 후속 공백 경로 수리 — scratch 검증, 미게시
+
+위 14:44–14:46의 helper `7ee3d7d…` 및 test `8afd78b8…` 값은 당시 frozen source의 역사적 receipt다. 이후 a55 source의 migration inventory·ancestor admission 수리 bytes와 같다는 주장이 아니다. 당시 producer의 DB/wheel 관측을 이 후속 후보의 실행으로 전이하지 않는다.
+
+현재 scratch는 a55 head의 source에 공백 경로용 두 줄 수정과 별도 회귀 테스트를 추가했다. helper SHA-256은 `67b7b11968eed60745537d9e000a5c834f1cfbc22409d8321f16191ac25355f6`이며, 기존 test SHA-256은 `cbc5fa07cb6f004ff32f4f8a89f91d16dbcb4e944f9850af14d64c10e7311a25`, 추가 test SHA-256은 `736eb442735e1d40744edb554a65c087f825079eb91f5dc7650a679d6d3b8800`다.
+
+- RED: 실제 helper에서 추출한 pg_ctl 호출과 conninfo 할당을 실행했다. 공백이 든 path를 shlex token seam으로 확인한 2개 assertion이 실패했다.
+- 최소 GREEN: pg_ctl server option의 socket 값을 double quote하고 conninfo host 값을 single quote했다. 같은 두 assertion은 2 passed, Bash syntax exit 0이다.
+- pg_ctl executable은 합성 capture stub이다. shlex token seam은 실제 libpq parser 또는 native PostgreSQL startup이 아니다. 현재 host PATH에는 PostgreSQL 실행 파일이 없어 실제 native startup은 NOT_RUN이다.
+- 이 후보는 공백 경로만 검증했다. quote/backslash 등 별도 경로 문자에 대한 전체 escaping acceptance를 주장하지 않는다. 실제 native startup과 독립 검토 전 canonical adoption·게시·App 승인으로 확대하지 않는다.
+- 새 base362fed와의 조합은 아직 실행하지 않았다. a55의 이전 full gate를 이 수정이나 새 base의 결과로 전이하지 않는다.
