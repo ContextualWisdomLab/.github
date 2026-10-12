@@ -1,0 +1,46 @@
+name: Deploy Pages Input Security CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-pages.yml"
+      - ".github/workflows/deploy-pages-input-security-ci.yml"
+      - "tests/test_deploy_pages_input_shell_boundary.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pages-input-security-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pages_input_shell_boundary:
+    name: pages-input-shell-boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Verify exact-head Pages shell-input boundary
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python -m unittest -q tests/test_deploy_pages_input_shell_boundary.py
+          python -m compileall -q tests/test_deploy_pages_input_shell_boundary.py

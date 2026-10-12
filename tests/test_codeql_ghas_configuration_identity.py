@@ -495,3 +495,25 @@ def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")
+
+
+def test_request_json_refuses_a_non_github_api_url():
+    """The opener is pinned to https://api.github.com before the request is built.
+
+    `_request_json` takes its URL as a plain string. Every caller builds an
+    api.github.com URL, but the function is what has to enforce it -- an
+    unexpected caller must not be able to make it fetch another host or another
+    scheme. The lookalike host matters as much as the scheme: a prefix check
+    would accept `api.github.com.evil.example`.
+    """
+    assert (
+        identity._require_github_api_url("https://api.github.com/repos/o/r")
+        == "https://api.github.com/repos/o/r"
+    )
+    for rejected in (
+        "http://api.github.com/repos/o/r",
+        "https://api.github.com.evil.example/repos/o/r",
+        "file:///etc/passwd",
+    ):
+        with pytest.raises(identity.ConfigurationIdentityError):
+            identity._require_github_api_url(rejected)

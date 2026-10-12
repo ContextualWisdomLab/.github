@@ -82,6 +82,24 @@ def test_controller_is_idempotent_bounded_and_rejects_stale_or_out_of_order() ->
     assert delayed.rejections[request("opencode", HEAD_3, 1).identity] == "out_of_order"
 
 
+def test_controller_unlimited_budget_dispatches_every_eligible_worker() -> None:
+    """The explicit -1 operator value removes only the per-run admission cap."""
+    requests = [request(component) for component in ("opencode", "noema", "strix")]
+
+    plan = plan_dispatches(
+        ControllerState.empty(),
+        requests,
+        live_heads={(requests[0].repository, requests[0].pull_request): HEAD_2},
+        dispatch_budget=-1,
+    )
+
+    assert [lease.request.component for lease in plan.dispatches] == [
+        "opencode",
+        "noema",
+        "strix",
+    ]
+
+
 def test_worker_boundaries_remain_separate_and_publish_requires_live_head_cas() -> None:
     assert ADMISSION_PERMISSIONS == ("contents: read", "pull-requests: read")
     assert set(WORKER_BOUNDARIES) == {"opencode", "noema", "strix"}
@@ -395,8 +413,8 @@ def test_state_file_rejects_corruption_symlinks_and_nonregular_paths(tmp_path) -
 def test_update_and_dispatch_reject_invalid_transitions(tmp_path) -> None:
     with pytest.raises(TypeError, match="must return ControllerState"):
         update_state_file(tmp_path / "state.json", lambda state: object())
-    with pytest.raises(ValueError, match="budget must not be negative"):
-        plan_dispatches(ControllerState.empty(), [], live_heads={}, dispatch_budget=-1)
+    with pytest.raises(ValueError, match="budget must be -1 or greater"):
+        plan_dispatches(ControllerState.empty(), [], live_heads={}, dispatch_budget=-2)
 
     item = request("opencode", HEAD_2, 2)
     lease = DispatchLease(item, WORKER_BOUNDARIES["opencode"])
