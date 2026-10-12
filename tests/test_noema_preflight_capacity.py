@@ -307,3 +307,13 @@ def test_invalid_retry_counter_exhausts_budget(tmp_path, monkeypatch, attempt):
     assert outputs['transport_capacity_unavailable'] == 'true'
     assert outputs['transport_retry_eligible'] == 'false'
     assert 'transport_retry_next_attempt' not in outputs
+
+
+def test_preflight_reader_refuses_a_symlinked_parent(tmp_path):
+    """A regular receipt reached through a linked parent is not trusted evidence."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "report.json").write_text(json.dumps(_all_429()))
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+    assert capacity.load_preflight_report(linked / "report.json") is None

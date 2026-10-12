@@ -89,3 +89,22 @@ def test_offline_maturin_build_places_the_extension_for_pytest() -> None:
     build = workflow.split("build_maturin_extension_if_needed() {", 1)[1].split("\n          }", 1)[0]
     assert 'python3 "$2" "$dist_dir"/*.whl .' in build
     assert '"${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"' in build
+
+
+def test_extension_cli_and_configuration_failures(tmp_path, monkeypatch, capsys):
+    """The CLI preserves validation failures and prints only placed source paths."""
+    import runpy
+    import sys
+    project = _project(tmp_path, "python")
+    wheel = _wheel(tmp_path, {f"pkg/{_SO}": b"ELF"})
+    assert placer.main([]) == 2
+    assert placer.main([str(wheel), str(tmp_path / "absent")]) == 1
+    assert placer.main([str(wheel), str(project)]) == 0
+    assert "Placed built extension" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["place", str(wheel), str(project)])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(placer.__file__, run_name="__main__")
+    assert result.value.code == 0
+    (project / "pyproject.toml").write_text('[tool.maturin]\npython-source = 3\n')
+    with pytest.raises(ValueError, match="must be a string"):
+        placer.place(wheel, project)

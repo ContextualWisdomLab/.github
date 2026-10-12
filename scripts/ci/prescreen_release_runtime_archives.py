@@ -109,6 +109,7 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
                 raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} metadata is ambiguous")
             metadata_root = PurePosixPath(metadata[0]).parent
             def read_file(path: str) -> bytes:
+                """Read one size-bounded package text member from the captured archive."""
                 entry = members.get(f"{name}/{path}")
                 if entry is None or entry.file_size > 4 * 1024 * 1024:
                     raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} text file is missing or oversized")
@@ -282,6 +283,26 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
             or len(scope["verified_scope_evidence"]) != 13
             or not isinstance(variants, list) or len(variants) != 3):
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope evidence is incomplete")
+    versions = ("3.12", "3.13", "3.14")
+    expected_legs = {f"{target}-py{version}" for target in TARGET_ARCHES for version in versions} | {"sdist"}
+    expected_variants = {f"universal2-apple-darwin-py{version}" for version in versions}
+    for items, expected, variant in (
+        (scope["verified_scope_evidence"], expected_legs, False),
+        (variants, expected_variants, True),
+    ):
+        if any(not isinstance(item, Mapping) or not isinstance(item.get("leg"), str)
+               or not re.fullmatch(r"[A-Za-z0-9_.+-]+", item["leg"])
+               or item["leg"] in {".", ".."} for item in items):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
+        legs = [item["leg"] for item in items]
+        if len(set(legs)) != len(legs):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
+        if set(legs) != expected:
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
+        if variant and any(item.get("arch") != "x86_64"
+                           or item.get("artifact_name") != f"repro-macos-x86-{item['leg']}"
+                           or not isinstance(item.get("archives"), list) for item in items):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     build_rows: dict[str, dict[str, Any]] = {}
     tool_rows: dict[str, dict[str, Any]] = {}
@@ -300,8 +321,6 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                 or not isinstance(item.get("archives"), list)):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
         leg = item["leg"]
-        if leg != "sdist" and leg.rpartition("-py")[0] not in TARGET_ARCHES:
-            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
         runtime_architecture = None
         if leg != "sdist":
             runtime_name = f"{leg}.runtime.json"
@@ -391,17 +410,16 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                               "native_properties": native_properties,
                               "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
                               "legs": [leg]}
-    if (len(seen_legs) != 13 or "sdist" not in seen_legs
-            or seen_variants != {f"universal2-apple-darwin-py{version}"
-                                 for version in ("3.12", "3.13", "3.14")}
-            or not rows):
-        raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
+    # Exact leg sets were required before I/O. Each of the twelve non-sdist
+    # primary legs requires a nonempty archive list and inserts or merges a row,
+    # so successful traversal cannot produce an empty runtime inventory.
     return {"archives": sorted(rows.values(), key=lambda row: (row["key"], row["source_sha256"])),
             "build_packages": sorted(build_rows.values(), key=lambda row: row["key"]),
             "build_tools": sorted(tool_rows.values(), key=lambda row: row["key"])}
 
 
 def main() -> None:
+    """Validate captured runtime archive licenses and write the prescreen report."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--verified-scope", required=True)
     parser.add_argument("--scope-root", required=True)

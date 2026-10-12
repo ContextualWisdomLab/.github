@@ -81,3 +81,19 @@ def test_invalid_base_sha_is_rejected(tmp_path: Path) -> None:
 
 def test_central_release_is_itself_exact() -> None:
     assert resolver.EXACT_RELEASE_RE.fullmatch(resolver.CENTRAL_RUST_TOOLCHAIN)
+
+
+def test_toolchain_cli_prints_exact_release_and_rejects_bad_sha(tmp_path, monkeypatch, capsys):
+    """The real parser and entry point retain the exact-base authority check."""
+    import runpy
+    import sys
+    base = _commit(tmp_path, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.97.1"\n'})
+    args = ["--repo-root", str(tmp_path), "--base-sha", base]
+    assert resolver.main(args) == 0
+    assert capsys.readouterr().out.strip() == "1.97.1"
+    assert resolver.main(["--repo-root", str(tmp_path), "--base-sha", "HEAD"]) == 1
+    assert "full 40-character" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "argv", ["resolve", *args])
+    with pytest.raises(SystemExit) as result:
+        runpy.run_path(resolver.__file__, run_name="__main__")
+    assert result.value.code == 0
