@@ -68,7 +68,8 @@ def test_unavailable_pool_fails_closed_within_the_probe_budget():
         """Return explicit provider rate-limit responses."""
         def proxy_send_once(self, agent, endpoint, payload):
             calls.append(agent.id)
-            raise HTTPError('https://provider.invalid', 429, 'private body', {}, None)
+            with HTTPError('https://provider.invalid', 429, 'private body', {}, None) as error:
+                raise error
 
     with pytest.raises(namespace['ReviewPreflightError']) as error:
         namespace['_preflight_review_agents_concurrently'](agents(24), client=Client())
@@ -106,7 +107,8 @@ def test_completed_transient_routes_are_deferred_only_with_a_ready_route():
         """Provide one ready route, a rate limit, and a permanent denial."""
         def proxy_send_once(self, agent, endpoint, payload):
             if agent.id != '2':
-                raise HTTPError('https://provider.invalid', 429 if agent.id == '0' else 401, 'private', {}, None)
+                with HTTPError('https://provider.invalid', 429 if agent.id == '0' else 401, 'private', {}, None) as error:
+                    raise error
             return text_response()
 
     viable, report = namespace['_preflight_review_agents_concurrently'](agents(3), client=Client())
@@ -132,7 +134,8 @@ def test_parallel_fallback_keeps_the_shared_escalation_budget():
                 return {'choices': [{'finish_reason': 'length', 'message': {'reasoning': 'pending'}}]}
             if agent.id.startswith('fallback-'):
                 return text_response()
-            raise HTTPError('https://provider.invalid', 400, 'rejected', {}, None)
+            with HTTPError('https://provider.invalid', 400, 'rejected', {}, None) as error:
+                raise error
 
     viable, report, used = namespace['_preflight_with_fallback'](
         primary, fallback, client=Client(), preflight=namespace['_preflight_review_agents_concurrently'],
