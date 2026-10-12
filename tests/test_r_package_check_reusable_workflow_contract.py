@@ -140,3 +140,15 @@ def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
     assert '"$PRE_CHECK_TEST_FILE" == *".."*' in workflow
     assert '"$PRE_CHECK_TEST_FILE" == /*' in workflow
     assert 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))' in workflow
+
+
+def test_current_routing_document_matches_linux_only_admission() -> None:
+    """Current coverage must not claim unsupported platforms are queued checks."""
+    source = Path('docs/doctoring/all-self-hosted-runner-routing-20261003.md').read_text()
+    paragraph = next(p for p in source.split('\n\n') if p.startswith('R reusable jobs'))
+    assert 'Linux/x64-only' in paragraph
+    assert 'ubuntu-latest' in paragraph and 'ubuntu-24.04' in paragraph
+    assert 'STOP' in paragraph and 'unsupported-only' in paragraph
+    assert 'not platform coverage' in paragraph
+    assert 'remain queued' not in paragraph
+    assert 'entire R-version matrix' not in paragraph

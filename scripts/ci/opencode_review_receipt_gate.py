@@ -149,12 +149,24 @@ def evaluate_receipts(
     if not SHA_RE.fullmatch(head_sha):
         return None, "receipt gate requires a 40-character head SHA"
     stale_hits = 0
+    dismissed_publishers: set[str] = set()
     for review in reversed(list(reviews)):
         if not isinstance(review, Mapping):
             continue
         commit = review_commit(review)
         if commit and commit.lower() != head_sha.lower():
             stale_hits += 1
+            continue
+        author = review_author(review)
+        if author in dismissed_publishers:
+            continue
+        if (
+            author in FORMAL_AUTHORS
+            and str(review.get("state") or "").upper() == "DISMISSED"
+            and review_matches_head(review, head_sha)
+            and review.get("id")
+        ):
+            dismissed_publishers.add(author)
             continue
         ok, reason = is_formal_receipt(review, head_sha, is_draft=is_draft)
         if ok:
@@ -166,6 +178,8 @@ def evaluate_receipts(
         if reason.startswith("stale"):
             stale_hits += 1
             continue
+    if dismissed_publishers:
+        return None, "current-head OpenCode publisher review was dismissed"
     if stale_hits:
         return (
             None,

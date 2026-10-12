@@ -16,7 +16,7 @@ def install_fixture(tmp_path, monkeypatch, typed, suffix, unsafe):
     selector = {'group':'${{ ('+expression+').group }}','labels':'${{ ('+expression+').labels }}'} if typed else '${{ '+expression+' }}'
     workflows = tmp_path/'.github/workflows'
     workflows.mkdir(parents=True)
-    (workflows/f'example.{suffix}').write_text(yaml.safe_dump({'jobs':{f'job{n}':{'runs-on':selector} for n in range(22)}}, width=10000))
+    (workflows/f'example.{suffix}').write_text(yaml.safe_dump({'jobs':{f'job{n}':{'runs-on':selector} for n in range(29)}}, width=10000))
     monkeypatch.chdir(tmp_path)
 
 

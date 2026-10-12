@@ -10,15 +10,7 @@ Existing restricted control, CodeQL and OpenCode groups stay intact. Existing ex
 
 PR code must execute on disposable, job-isolated machines without production credentials, privileged Docker sockets, internal-network access or state shared with trusted control jobs. Rebuild the job environment after each job. Secret-bearing trusted jobs need separate disposable instances from untrusted PR jobs. Labels are mutable metadata and GitHub does not validate that the `linux` and `x64` labels match the runner machine; label-only routing therefore cannot prove the authority boundary. The dedicated group is the repository-access boundary, while the labels express the required platform and isolation capability inside it. Keep current token permissions, environment approvals, immutable artifact checks, exact-head review and required merge gates. This patch declares the required group but does not widen runner-group allowlists, register runners, alter secrets or bypass protection.
 
-R reusable jobs execute only matrices whose every requested leg names the
-admitted `ubuntu-latest` or `ubuntu-24.04` Linux/x64 image alias. Admission
-fails the complete matrix if any macOS, Windows, ARM, unknown, empty, or
-malformed leg is present. It never filters an unsupported required leg and
-lets a remaining Ubuntu leg report success. Both the admission and check jobs
-use the fixed `CWL CI isolated` group and Linux/x64 labels; the caller's `os`
-value selects neither the runner nor an alternate platform. A self-hosted
-Linux machine must still provide Ubuntu 24.04-compatible userspace and the
-existing CI dependencies; labels do not install packages or attest the image.
+R reusable jobs use Linux/x64-only admission: every requested leg must name `ubuntu-latest` or `ubuntu-24.04`. R versions and other fields remain unchanged for an admitted matrix. Any unsupported or malformed leg stops the complete matrix with STOP / nonzero, including mixed and unsupported-only matrices; no requested check is dropped to manufacture success. Admission and R execution both use the fixed `CWL CI isolated` group with `self-hosted`, `Linux`, `X64`, and `cwlab-ci-isolated` labels. Windows, macOS, ARM and unknown images are not platform coverage, and stopped legs have no queued R check. Linux instances still need compatible userspace and CI dependencies; labels do not install packages or attest the image.
 
 The first group-scoped R selector encoded its runner object with unescaped
 literal JSON braces inside GitHub's `format()` expression. GitHub requires

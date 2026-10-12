@@ -39,5 +39,33 @@ class Admission(unittest.TestCase):
         self.assertEqual(emitted, (ROOT / 'scripts/ci/r_isolated_matrix.py').read_text())
 
 
+def test_supported_matrix_and_cli_branches_are_exercised_in_process(monkeypatch, capsys):
+    """Cover actual admission and CLI errors without executing native R jobs."""
+    import pytest
+    import runpy
+    from scripts.ci.r_isolated_matrix import admit
+
+    rows = [{'os': 'ubuntu-latest', 'r': 'release'},
+            {'os': 'ubuntu-24.04', 'r': '4.4'}]
+    assert admit(json.dumps(rows)) == rows
+    for value in ({}, [], [None], [{'os': 1, 'r': 'release'}],
+                  [{'os': 'ubuntu-latest', 'r': ''}],
+                  [{'os': 'ubuntu-latest', 'r': 1}],
+                  [{'os': 'windows-latest', 'r': 'release'}]):
+        with pytest.raises(ValueError):
+            admit(json.dumps(value))
+    script = str(ROOT / 'scripts/ci/r_isolated_matrix.py')
+    monkeypatch.setattr(sys, 'argv', [script, json.dumps(rows)])
+    runpy.run_path(script, run_name='__main__')
+    assert json.loads(capsys.readouterr().out) == rows
+    for argv in ([script], [script, 'not-json']):
+        monkeypatch.setattr(sys, 'argv', argv)
+        with pytest.raises(SystemExit) as error:
+            runpy.run_path(script, run_name='__main__')
+        assert error.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == '' and captured.err
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -71,19 +71,12 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assertNotIn("cwlab-control", review)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:
-        """Require OpenCode dispatch jobs to use the compatible dedicated group.
-
-        This is the workflow the required `opencode-review` check's
-        `repository_dispatch` actually lands on to run the OpenCode CLI and
-        post the exact-head verdict; a starved floating image here queues
-        the real review work for hours just as surely as on the required
-        check itself (see docs/product-technical-gap-baseline.md's
-        2026-09-01 entry, whose own "Residual" note flagged this exact
-        follow-up sweep as still open).
-        """
+        """Keep trusted OpenCode jobs separate from isolated PR test execution."""
         workflow = OPENCODE_REVIEW_DISPATCH.read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("group: CWL central OpenCode"), 3)
-        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 3)
+        self.assertEqual(workflow.count("group: CWL central OpenCode"), 2)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 2)
+        self.assertEqual(workflow.count("group: CWL CI isolated"), 1)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]"), 1)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
 
