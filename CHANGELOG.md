@@ -1,3 +1,7 @@
+### Noema DOCX and HWPX figures preserve document relationship order
+
+- `scripts/ci/noema_review_document.py` resolves embedded DOCX figures through `word/_rels/document.xml.rels` and HWPX figures through `Contents/content.hpf` plus each spine-ordered section's `binaryItemIDRef`. Both paths preserve semantic source order, ignore orphaned archive media, bind stable relationship/media locators, and fail closed on duplicate, unresolved, external, traversal, malformed, or unreadable relationships. The immutable contextual-orchestrator multimodal release/pin and protected merge remain Proposed dependencies of `.github#2281`; this entry does not claim release completion.
+
 ### Intel macOS native archives are bound to x86_64 bytes
 
 - The release prescreener now requires every native member in an Intel macOS
