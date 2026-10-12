@@ -890,7 +890,7 @@ def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
     path.write_text("untrusted working-tree replacement")
     capture = tmp_path / "capture"
-    gate.capture_license_selections(source, sha, capture)
+    assert gate.main(["capture-license-selections", "--source", str(source), "--source-sha", sha, "--capture", str(capture)]) == 0
     assert (capture / "license-selections.json").read_bytes() == payload
     with pytest.raises(gate.GateError, match="already exists"):
         gate.capture_license_selections(source, sha, capture)
@@ -1036,7 +1036,7 @@ def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> N
 
 @pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
                                       "changed_manifest", "changed_lock", "captured_lock",
-                                      "symlink", "identity", "missing_dev"])
+                                      "symlink", "identity", "missing_dev", "invalid_sha", "outside_workspace", "workspace_version", "wrong_dev_lock", "bound_dev_lock"])
 def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
     import subprocess
 
@@ -1046,12 +1046,15 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     core = source / "crates/core/Cargo.toml"
     wheel.mkdir(parents=True)
     core.parent.mkdir(parents=True)
-    core.write_text('[package]\nname = "local-core"\nversion = "1.0.0"\n')
+    core.write_text('[package]\nname = "local-core"\nversion.workspace = true\n' if mutation == "workspace_version" else '[package]\nname = "local-core"\nversion = "1.0.0"\n')
     (wheel / "Cargo.toml").write_text('[package]\nname = "fast-mlsirm"\nversion = "0.11.5"\n')
+    if mutation == "workspace_version":
+        with (wheel / "Cargo.toml").open("a") as stream:
+            stream.write('[workspace.package]\nversion = "1.0.0"\n')
     lock = capture / "cargo/Cargo.lock"
     lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
     (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
-    if mutation == "missing_dev":
+    if mutation in ("missing_dev", "wrong_dev_lock", "bound_dev_lock"):
         (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
     def git(*args):
         return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
@@ -1068,7 +1071,11 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
                                  "source": None, "manifest_path": str(core)})
     metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "local-id"})
     metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id"}]})
-    if mutation == "wrong_sha":
+    if mutation == "invalid_sha":
+        sha = "main"
+    elif mutation == "outside_workspace":
+        metadata["workspace_root"] = str(tmp_path / "outside")
+    elif mutation == "wrong_sha":
         sha = "a" * 40
     elif mutation == "foreign_path":
         metadata["packages"][-1]["manifest_path"] = str(tmp_path / "foreign/Cargo.toml")
@@ -1087,14 +1094,25 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     elif mutation == "identity":
         metadata["packages"][-1]["name"] = "foreign-core"
     _write(path, metadata)
-    if mutation == "missing_dev":
+    if mutation in ("missing_dev", "wrong_dev_lock", "bound_dev_lock"):
+        if mutation != "missing_dev":
+            dev = capture / "cargo-dev"
+            dev.mkdir()
+            (dev / "Cargo.lock").write_bytes((source / "Cargo.lock").read_bytes() if mutation == "bound_dev_lock" else lock.read_bytes())
+            dev_metadata = json.loads(path.read_text())
+            dev_metadata["workspace_root"] = str(source)
+            _write(dev / "metadata.json", dev_metadata)
         release = json.loads((capture / "release.json").read_text())
         release["source_sha"] = sha
         _write(capture / "release.json", release)
-        with pytest.raises(gate.GateError, match="development Cargo graph is missing"):
-            gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
+        if mutation == "bound_dev_lock":
+            assert gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source).passed
+        else:
+            message = "development Cargo graph is missing" if mutation == "missing_dev" else "development Cargo lock differs"
+            with pytest.raises(gate.GateError, match=message):
+                gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
         return
-    if mutation is not None:
+    if mutation not in (None, "workspace_version"):
         with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
             gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
                                   source_sha=sha)
@@ -1272,3 +1290,45 @@ def test_attribution_candidate_reads_remain_bounded(monkeypatch, limit):
     with pytest.raises(gate.GateError) as error:
         gate.archive_license_evidence(raw, "cargo")
     assert error.value.code == gate.CAPTURE_INCOMPLETE
+
+
+@pytest.mark.parametrize("mode", ["invalid-sha", "absent", "symlink", "oversized-payload"])
+def test_selection_capture_rejects_untrusted_git_content(tmp_path, monkeypatch, mode):
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    path = source / "docs/release-license-selections.json"
+    path.parent.mkdir()
+    if mode == "symlink":
+        path.symlink_to("missing")
+    else:
+        path.write_text("[]")
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "selection"], cwd=source, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    capture = tmp_path / "capture"
+    if mode == "absent":
+        subprocess.run(["git", "rm", str(path)], cwd=source, check=True, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "commit", "-qm", "absent"], cwd=source, check=True)
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+        gate.capture_license_selections(source, sha, capture)
+        assert not capture.exists()
+        return
+    if mode == "oversized-payload":
+        original = subprocess.check_output
+        def changed_transport(args, **kwargs):
+            if args[1:3] == ["cat-file", "blob"]:
+                return b" " * (gate._MAX_METADATA_BYTES + 1)
+            return original(args, **kwargs)
+        monkeypatch.setattr(gate.subprocess, "check_output", changed_transport)
+    with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
+        gate.capture_license_selections(source, "main" if mode == "invalid-sha" else sha, capture)
+    assert not capture.exists()
+
+
+def test_ordinary_rust_source_is_not_an_install_hook():
+    assert gate.detect_install_hooks({"src/lib.rs": "pub fn sum(a: u32, b: u32) -> u32 { a + b }"}) == []

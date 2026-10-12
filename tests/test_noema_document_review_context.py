@@ -278,10 +278,14 @@ def test_docx_visible_controls_and_ragged_tables_are_preserved():
     assert "| short |  |" in text
 
 
-def test_invalid_github_base64_content_fails_closed(monkeypatch):
+@pytest.mark.parametrize("response,message", [
+    ("{", "response was malformed"),
+    (json.dumps({"content": "not/base64!", "encoding": "base64", "size": 1}), "malformed base64"),
+])
+def test_invalid_github_base64_content_fails_closed(monkeypatch, response, message):
     """Malformed GitHub file data must not reach the document reader."""
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: json.dumps({"content": "not/base64!", "encoding": "base64", "size": 1}))
-    with pytest.raises(RuntimeError, match="malformed base64"):
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: response)
+    with pytest.raises(RuntimeError, match=message):
         noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")
 
 

@@ -1565,3 +1565,39 @@ def test_build_native_packages_require_the_build_interpreter_architecture(tmp_pa
     monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [{"arch": wrong_arch, "needed": []}])
     with pytest.raises(gate.GateError, match="requires aarch64 architecture"):
         _build_packages(row, folder)
+
+
+@pytest.mark.parametrize("mutation,message", [
+    ("oversized", "runtime receipt is oversized"),
+    ("changed", "runtime receipt changed after transport"),
+    ("architecture", "architecture"),
+])
+def test_prescreen_rechecks_transported_runtime_receipts(tmp_path, mutation, message):
+    root, rows = _prescreen_case(tmp_path)
+    scope = _scope_with_variants(rows, root)
+    row = rows[0]
+    path = root / row["artifact_name"] / f"{row['leg']}.runtime.json"
+    if mutation == "oversized":
+        path.write_bytes(b" " * (1024 * 1024 + 1))
+    elif mutation == "changed":
+        path.write_bytes(path.read_bytes() + b" ")
+    else:
+        runtime = json.loads(path.read_bytes())
+        runtime["machine"] = "unknown"
+        path.write_text(json.dumps(runtime))
+        row["members"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(gate.GateError, match=message):
+        prescreen(scope, root)
+
+
+@pytest.mark.parametrize("build_env", [None, "runner:macos/15/macOS/unknown"])
+def test_build_packages_reject_unknown_universal_interpreter(tmp_path, build_env):
+    root, rows = _prescreen_case(tmp_path)
+    row = next(row for row in rows if row["leg"].startswith("universal2-"))
+    folder = root / row["artifact_name"]
+    path = folder / f"{row['leg']}.build-first.json"
+    receipt = json.loads(path.read_bytes())
+    receipt["build_env"] = build_env
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(gate.GateError, match="build interpreter architecture is missing"):
+        _build_packages(row, folder)
