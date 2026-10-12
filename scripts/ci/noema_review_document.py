@@ -158,7 +158,7 @@ def _extract_hwp_with_reviewed_reader(path: str, raw: bytes) -> str:
         handle.flush()
         try:
             completed = subprocess.run(
-                ["node", reader, source, handle.name],
+                [os.environ.get("NOEMA_NODE_EXECUTABLE") or "node", reader, source, handle.name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,

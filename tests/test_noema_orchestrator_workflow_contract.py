@@ -204,12 +204,16 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in workflow
     prepare = workflow_step(workflow, "Prepare Noema model verdict")
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
-    assert '.github/actions/noema-review/two_phase.py' in prepare
-    assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert 'scripts/ci/premerge_review_tooling.py' in prepare
+    assert '--prepare-production' in prepare
+    assert '--verdict-file "$verdict_file"' in prepare
+    assert '--tooling-root "$RUNNER_TEMP/noema-immutable-tooling"' in prepare
     assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
     assert "toJSON(github.event.client_payload.transport_retry_attempt)" in prepare
-    assert '.github/actions/noema-review/two_phase.py' in publish
-    assert '--publish-verdict-file "$verdict_file"' in publish
+    assert 'scripts/ci/premerge_review_tooling.py' in publish
+    assert '--publish-production' in publish
+    assert '--verdict-file "$verdict_file"' in publish
+    assert '--tooling-root "$RUNNER_TEMP/noema-immutable-tooling"' in publish
     redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
     assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in workflow
     assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in workflow
