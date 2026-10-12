@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request
 from urllib.response import addinfourl
 
@@ -44,6 +45,7 @@ class _SyntheticRedirectTransport:
         """Store the redirect target and initialize the observed request ledger."""
         self.target = target
         self.calls: list[tuple[str, str | None]] = []
+        self.responses: list[Any] = []
 
     def https_open(self, request: Request) -> Any:
         """Return a synthetic redirect response without contacting a network target."""
@@ -52,6 +54,7 @@ class _SyntheticRedirectTransport:
         headers["Location"] = self.target
         response = addinfourl(BytesIO(b""), headers, request.full_url, code=302)
         response.msg = "Found"
+        self.responses.append(response)
         return response
 
 
@@ -69,6 +72,20 @@ class _JsonResponse:
     def read(self) -> bytes:
         """Return an empty JSON array payload."""
         return b"[]"
+
+
+class _ReadSizeRecordingBody(BytesIO):
+    """Record the requested byte limit for one synthetic HTTP error body."""
+
+    def __init__(self, payload: bytes) -> None:
+        """Store the payload and initialize the read-size ledger."""
+        super().__init__(payload)
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        """Record the caller's bound before returning response bytes."""
+        self.read_sizes.append(size)
+        return super().read(size)
 
 
 def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
@@ -165,6 +182,8 @@ def test_production_openers_reject_redirect_without_forwarding_bearer(
     assert transport.calls == [
         (CANONICAL_GITHUB_API_URL, "Bearer test-token"),
     ]
+    assert len(transport.responses) == 1
+    assert transport.responses[0].closed
 
 
 @pytest.mark.parametrize("target", REDIRECT_TARGETS)
@@ -229,6 +248,37 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert binding.default_github_opener(CANONICAL_GITHUB_API_URL, "test-token") == []
     assert identity_calls == [CANONICAL_GITHUB_API_URL]
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
+
+
+def test_codeql_identity_client_bounds_http_error_diagnostic_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hostile GitHub error body cannot force an unbounded diagnostic read."""
+    body = _ReadSizeRecordingBody(b"x" * 8_192)
+    error = HTTPError(
+        CANONICAL_GITHUB_API_URL,
+        502,
+        "Bad Gateway",
+        Message(),
+        body,
+    )
+
+    def raise_http_error(*_args: Any, **_kwargs: Any) -> Any:
+        """Raise the synthetic response at the authenticated opener boundary."""
+        raise error
+
+    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", raise_http_error)
+
+    with pytest.raises(identity.ConfigurationIdentityError, match="HTTP 502"):
+        identity._request_json(
+            CANONICAL_GITHUB_API_URL,
+            token="test-token",
+            timeout_seconds=1,
+        )
+
+    assert body.read_sizes
+    assert all(0 < size <= 400 for size in body.read_sizes)
+    assert body.closed
 
 
 def test_documented_opener_lineage_references_published_commits() -> None:

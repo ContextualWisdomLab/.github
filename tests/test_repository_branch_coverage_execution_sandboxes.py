@@ -38,18 +38,19 @@ def test_merge_scheduler_conflict_summary_without_changed_file_hints() -> None:
     assert "Changed files to inspect first:" not in lines
 
 
-def test_merge_scheduler_restamp_summary_ignores_unrelated_notes() -> None:
-    """Only notes describing the last-push refresh are rendered as restamp evidence."""
+def test_merge_scheduler_source_neutral_wait_keeps_notes_without_mutation_guidance() -> None:
+    """An unchanged-head approval wait remains a plain non-mutating decision."""
 
     decision = merge_scheduler.Decision(
         pr=8,
-        action="restamp",
-        reason="last-push approval head refresh required",
+        action="wait",
+        reason="obtain independent approval on the unchanged head; source-neutral head refresh is forbidden",
         notes=("unrelated note",),
     )
-    lines = merge_scheduler.last_push_approval_restamp_summary([decision])
-    assert any("PR #8" in line for line in lines)
-    assert "  - unrelated note" not in lines
+    entry = merge_scheduler.decision_contract_entry(decision)
+    assert entry["contract_decision"] == "WAIT"
+    assert entry["notes"] == ["unrelated note"]
+    assert "guidance" not in entry
 
 
 def test_r_description_indented_line_before_suggests_is_ignored() -> None:

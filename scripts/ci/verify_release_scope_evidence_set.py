@@ -55,6 +55,7 @@ ARCHIVE_KEYS = {"file", "size", "sha256", "name", "version"}
 
 def _build_python_snapshot(folder: Path, leg: str, source_sha: str,
                            members: Mapping[str, str]) -> None:
+    """Verify repeated build receipts against the exact Python snapshot ZIP."""
     first = _json_bytes((folder / f"{leg}.build-first.json").read_bytes())
     second = _json_bytes((folder / f"{leg}.build-second.json").read_bytes())
     snapshot = folder / f"{leg}.build-python.zip"
@@ -119,6 +120,7 @@ def _build_python_snapshot(folder: Path, leg: str, source_sha: str,
 
 
 def _wheel_identity(path: Path) -> tuple[str, str]:
+    """Read the normalized project name and version from one runtime wheel."""
     with zipfile.ZipFile(path) as archive:
         metadata = [item for item in archive.infolist()
                     if item.filename.endswith(".dist-info/METADATA")
@@ -224,6 +226,7 @@ def _runtime_target_architecture(runtime: Any, leg: str, *, intel: bool = False)
 
 def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Mapping[str, Any],
                       members: Mapping[str, str], *, intel: bool = False) -> list[dict[str, Any]]:
+    """Verify runtime dependency archives and their selected receipt."""
     runtime = _json_bytes((folder / f"{leg}.runtime.json").read_bytes())
     if (not isinstance(runtime, Mapping) or runtime.get("source_sha") != source_sha
             or runtime.get("leg") != leg
@@ -492,6 +495,7 @@ def verify_scope_evidence_set(
 
 
 def main() -> None:
+    """Verify primary and Intel release-scope evidence from CLI inputs."""
     parser = argparse.ArgumentParser()
     for option in ("repository", "source-sha", "control-sha", "run-id", "run-attempt",
                    "record-artifact-id", "record-artifact-digest", "verified-distributions",

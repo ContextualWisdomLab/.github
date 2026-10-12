@@ -337,6 +337,7 @@ def collect_bindings(
 
 
 def main() -> None:
+    """Collect CLI inputs and write the authenticated Strix binding verdict."""
     parser = argparse.ArgumentParser()
     for name in (
         "capture", "license-report", "plan", "metadata", "attempt", "repository",
