@@ -489,6 +489,30 @@ def test_run_cargo_vendor_propagates_missing_binary(tmp_path: Path) -> None:
             materializer.materialize(repo, base_sha, tmp_path / "out")
 
 
+def test_materialize_surfaces_cargo_vendor_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stalled cargo process fails closed with its stable exception class."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
+    base_sha = _commit_all(repo)
+
+    monkeypatch.setattr(
+        materializer,
+        "_run_cargo_vendor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(["cargo", "vendor"], 900)
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="could not run trusted cargo vendor for base manifest Cargo.lock: TimeoutExpired",
+    ):
+        materializer.materialize(repo, base_sha, tmp_path / "out")
+
+
 def test_materialize_surfaces_cargo_vendor_failure_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
