@@ -48,6 +48,7 @@ import argparse
 import ast
 import email.parser
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -63,10 +64,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
-    import tomli as tomllib
+def _import_toml_parser():
+    """Return the stdlib TOML parser, or the declared Python 3.10 backport."""
+    try:
+        return importlib.import_module("tomllib")
+    except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
+        return importlib.import_module("tomli")
+
+
+tomllib = _import_toml_parser()
 
 try:
     from scripts.ci.spdx_license_policy import (

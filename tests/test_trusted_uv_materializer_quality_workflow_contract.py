@@ -49,6 +49,7 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
     ) == 2
     assert workflow.count("persist-credentials: false") == 2
     assert workflow.count("ref: ${{ github.event.pull_request.head.sha }}") == 2
+    assert workflow.count("fetch-depth: 0") == 1
 
 
 def test_minimum_python_contract_exercises_the_tomli_fallback() -> None:
