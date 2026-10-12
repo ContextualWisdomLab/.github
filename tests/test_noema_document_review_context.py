@@ -101,6 +101,8 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert package["dependencies"] == {"@rhwp/core": "0.7.7", "hwp-mcp": "0.3.0"}
     assert lock["packages"]["node_modules/hwp-mcp"]["version"] == "0.3.0"
     assert lock["packages"]["node_modules/@rhwp/core"]["version"] == "0.7.7"
+    assert lock["packages"]["node_modules/fast-uri"]["version"] == "3.1.8"
+    assert lock["packages"]["node_modules/ip-address"]["version"] == "10.7.1"
     assert "requirements-noema-document-ci-hashes.txt" in workflow
     assert "python3 -m pip install --quiet --require-hashes --no-deps" in workflow
     assert "requirements-noema-document-ci-hashes.txt" in quality_workflow
