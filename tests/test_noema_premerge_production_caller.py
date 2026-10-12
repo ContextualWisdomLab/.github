@@ -11,11 +11,13 @@ def test_workflow_phases_use_controller_and_preserve_refresh_order():
     source = (ROOT / '.github/workflows/noema-review.yml').read_text()
     prepare = source.split('      - name: Prepare Noema model verdict\n', 1)[1].split('      - name:', 1)[0]
     publish = source.split('      - name: Publish prepared Noema verdict on the exact live head\n', 1)[1].split('\n  continue-noema-transport:', 1)[0]
+    issuer = (ROOT / 'scripts/ci/noema_existing_app_issuer.cjs').read_text()
     for step, phase in [(prepare, 'prepare'), (publish, 'publish')]:
-        assert 'premerge_review_tooling.py' in step, 'phase bypasses controller'
-        assert '--' + phase + '-production' in step
-        assert '--tooling-root "$RUNNER_TEMP/noema-immutable-tooling"' in step
-        assert '--phase-issuance "$RUNNER_TEMP/noema-' + phase + '-issuance.json"' in step
+        assert 'noema_existing_app_issuer.cjs' in step, 'phase bypasses issuer/controller'
+        assert '--phase ' + phase in step
+        assert "child('premerge_review_tooling.py',args,env)" in issuer
+        assert "'--'+phase+'-production'" in issuer
+        assert "'--phase-issuance',file" in issuer
         assert '.github/actions/noema-review/two_phase.py"' not in step
     assert source.index('Prepare Noema model verdict\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n') < source.index('Publish prepared Noema verdict on the exact live head\n')
 
