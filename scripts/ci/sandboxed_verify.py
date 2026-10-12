@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -94,8 +97,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the sandboxed verification wrapper."""
     parser = argparse.ArgumentParser(
         description=(
-            "Copy the repository into a temporary workspace and run a verification "
-            "command with a scrubbed environment."
+            "Copy the repository into a temporary workspace and run a verification command with a scrubbed environment."
         )
     )
     parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
@@ -128,6 +130,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--evidence-note",
         default="",
         help="Short reviewer note explaining why network or allowed env variables are needed.",
+    )
+    parser.add_argument(
+        "--result-file",
+        type=Path,
+        help=(
+            "Write the trusted result envelope to a new file and exact command "
+            "streams to sibling .stdout/.stderr files instead of mixing evidence "
+            "with command output."
+        ),
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Verification command after --.")
     args = parser.parse_args(argv)
@@ -164,7 +175,13 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
             "XDG_DATA_HOME": str(sandbox_root / "xdg-data"),
         }
     )
-    for path_key in ("HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+    for path_key in (
+        "HOME",
+        "TMPDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    ):
         Path(env[path_key]).mkdir(parents=True, exist_ok=True)
     return env
 
@@ -208,7 +225,12 @@ def _reject_escaping_symlinks(destination: Path) -> None:
     for path in root.rglob("*"):
         if path.is_symlink():
             _resolve_symlink_components(
-                path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path
+                path.relative_to(root).parts,
+                root,
+                root,
+                set(),
+                [MAXIMUM_SYMLINK_HOPS],
+                path,
             )
 
 
@@ -274,12 +296,8 @@ def _resolve_symlink_components(
         hops_remaining[0] -= 1
         target = Path(os.readlink(step))
         if target.is_absolute():
-            raise ValueError(
-                f"workspace symlink escapes the sandbox root: {step} -> {target}"
-            )
-        resolved = _resolve_symlink_components(
-            target.parts, resolved, root, active, hops_remaining, candidate
-        )
+            raise ValueError(f"workspace symlink escapes the sandbox root: {step} -> {target}")
+        resolved = _resolve_symlink_components(target.parts, resolved, root, active, hops_remaining, candidate)
         active.discard(step)
     return resolved
 
@@ -314,9 +332,7 @@ def _ignore_with_env_template_allowlist(
         default_ignored = default_ignore(directory, names)
         extra_ignored = extra_ignore(directory, names)
         protected = {
-            name
-            for name in default_ignored
-            if name in DEFAULT_ENV_TEMPLATE_ALLOWLIST and name not in extra_ignored
+            name for name in default_ignored if name in DEFAULT_ENV_TEMPLATE_ALLOWLIST and name not in extra_ignored
         }
         return (default_ignored | extra_ignored) - protected
 
@@ -335,13 +351,14 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def run_command(
+    command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int
+) -> subprocess.CompletedProcess[bytes]:
     """Run the verification command and capture output for review evidence."""
     return subprocess.run(
         list(command),
         cwd=cwd,
         env=env,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout,
@@ -359,6 +376,152 @@ def timeout_output_text(value: str | bytes | None) -> str:
     return value
 
 
+def _output_bytes(value: str | bytes | None) -> bytes:
+    """Normalize captured command output without altering subprocess bytes."""
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    return value.encode()
+
+
+def _forward_bytes(stream: object, output: bytes) -> None:
+    """Forward command bytes exactly when the active stream exposes a buffer."""
+    if not output:
+        return
+    binary_stream = getattr(stream, "buffer", None)
+    if binary_stream is not None:
+        stream.flush()  # type: ignore[attr-defined]
+        binary_stream.write(output)
+        binary_stream.flush()
+        return
+    stream.write(output.decode(errors="replace"))  # type: ignore[attr-defined]
+    stream.flush()  # type: ignore[attr-defined]
+
+
+def _open_result_parent(parent: Path) -> int:
+    """Open/create ``parent`` component-wise without following symlinks."""
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if parent.is_absolute():
+        directory_fd = os.open(os.path.sep, directory_flags)
+        components = parent.parts[1:]
+    else:
+        directory_fd = os.open(".", directory_flags)
+        components = parent.parts
+    try:
+        for component in components:
+            if component in ("", "."):
+                continue
+            if component == "..":
+                raise ValueError(f"result file parent is not a regular directory: {parent}")
+            try:
+                next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=directory_fd)
+                except FileExistsError:
+                    pass
+                try:
+                    next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+                except OSError as exc:
+                    raise ValueError(f"result file parent is not a regular directory: {parent}") from exc
+            except OSError as exc:
+                raise ValueError(f"result file parent is not a regular directory: {parent}") from exc
+            os.close(directory_fd)
+            directory_fd = next_fd
+        return directory_fd
+    except BaseException:
+        os.close(directory_fd)
+        raise
+
+
+def _write_all(file_descriptor: int, content: bytes) -> None:
+    """Write all ``content`` to an already-open file descriptor."""
+    offset = 0
+    while offset < len(content):
+        offset += os.write(file_descriptor, content[offset:])
+
+
+def _write_result_bundle(
+    result_file: Path,
+    rendered_result: bytes,
+    stdout_bytes: bytes,
+    stderr_bytes: bytes,
+) -> None:
+    """Create both streams before atomically publishing the trusted envelope."""
+    parent_fd = _open_result_parent(result_file.parent)
+    stdout_name = result_file.name + ".stdout"
+    stderr_name = result_file.name + ".stderr"
+    stream_bundle = (
+        (stdout_name, stdout_bytes),
+        (stderr_name, stderr_bytes),
+    )
+    created_names: list[str] = []
+    staged_envelope_name = f".{result_file.name}.{secrets.token_hex(16)}.tmp"
+    staged_envelope_created = False
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        try:
+            os.stat(result_file.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError(f"result file already exists: {result_file}")
+        for file_name, content in stream_bundle:
+            try:
+                file_descriptor = os.open(file_name, file_flags, 0o600, dir_fd=parent_fd)
+            except FileExistsError as exc:
+                raise ValueError(
+                    f"result bundle file already exists: {result_file.parent / file_name}"
+                ) from exc
+            created_names.append(file_name)
+            try:
+                _write_all(file_descriptor, content)
+                os.fsync(file_descriptor)
+            finally:
+                os.close(file_descriptor)
+
+        staged_descriptor = os.open(
+            staged_envelope_name,
+            file_flags,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        staged_envelope_created = True
+        try:
+            _write_all(staged_descriptor, rendered_result)
+            os.fsync(staged_descriptor)
+        finally:
+            os.close(staged_descriptor)
+        try:
+            os.link(
+                staged_envelope_name,
+                result_file.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise ValueError(f"result file already exists: {result_file}") from exc
+        created_names.append(result_file.name)
+        os.unlink(staged_envelope_name, dir_fd=parent_fd)
+        staged_envelope_created = False
+    except BaseException:
+        if staged_envelope_created:
+            try:
+                os.unlink(staged_envelope_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        for file_name in created_names:
+            try:
+                os.unlink(file_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        os.close(parent_fd)
+
+
 def emit_result(
     *,
     command: Sequence[str],
@@ -370,8 +533,15 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    result_file: Path | None = None,
+    result_state: str = "completed",
+    timed_out: bool = False,
+    stdout_bytes: bytes = b"",
+    stderr_bytes: bytes = b"",
 ) -> None:
-    """Print a machine-readable execution evidence summary."""
+    """Write a versioned execution envelope and its exact command streams."""
+    stdout_name = result_file.name + ".stdout" if result_file is not None else None
+    stderr_name = result_file.name + ".stderr" if result_file is not None else None
     payload = {
         "allowed_env": sorted(set(allowed_env)),
         "command": list(command),
@@ -379,11 +549,38 @@ def emit_result(
         "elapsed_seconds": round(elapsed_seconds, 3),
         "evidence_note": evidence_note,
         "exit_code": exit_code,
+        "helper_id": "ContextualWisdomLab/.github:sandboxed_verify",
+        "isolation": {
+            "network_enforced": False,
+            "os_process_isolation": "none",
+            "workspace": "copy+scrubbed-env",
+        },
         "network": network,
+        "result_state": result_state,
+        "runtime": {
+            "implementation": platform.python_implementation(),
+            "python_version": platform.python_version(),
+        },
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
+        "schema": "sandboxed_verify.execution.v1",
+        "stderr": {
+            "file": stderr_name,
+            "sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+            "size_bytes": len(stderr_bytes),
+        },
+        "stdout": {
+            "file": stdout_name,
+            "sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+            "size_bytes": len(stdout_bytes),
+        },
+        "timed_out": timed_out,
     }
-    print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
+    rendered = f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}\n"
+    if result_file is None:
+        print(rendered, end="")
+        return
+    _write_result_bundle(result_file, rendered.encode(), stdout_bytes, stderr_bytes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -393,52 +590,77 @@ def main(argv: Sequence[str] | None = None) -> int:
     start = time.monotonic()
     exit_code = 1
     copied_repo = sandbox / "repo"
+    result_state = "internal_error"
+    command_stdout = b""
+    command_stderr = b""
     try:
         try:
             copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         except ValueError as exc:
             print(f"sandboxed-verify: workspace copy rejected: {exc}", file=sys.stderr)
             exit_code = 125
-            return exit_code
-        env = scrubbed_env(sandbox, args.allow_env)
-        print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
-        if args.allow_env:
-            print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
-        if args.network != "default":
-            print(f"sandboxed-verify: network={args.network}")
-        try:
-            completed = run_command(args.command, copied_repo, env, args.timeout)
-            if completed.stdout:
-                print(completed.stdout, end="")
-            if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
-            exit_code = completed.returncode
-        except subprocess.TimeoutExpired as exc:
-            stdout = timeout_output_text(exc.stdout)
-            stderr = timeout_output_text(exc.stderr)
-            if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
-            if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
-            exit_code = 124
-        return exit_code
+            result_state = "copy_rejected"
+        else:
+            env = scrubbed_env(sandbox, args.allow_env)
+            print(f"sandboxed-verify: cwd={copied_repo}")
+            print(f"sandboxed-verify: command={' '.join(args.command)}")
+            if args.allow_env:
+                print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            if args.network != "default":
+                print(f"sandboxed-verify: network={args.network}")
+            try:
+                completed = run_command(args.command, copied_repo, env, args.timeout)
+                command_stdout = _output_bytes(completed.stdout)
+                command_stderr = _output_bytes(completed.stderr)
+                _forward_bytes(sys.stdout, command_stdout)
+                _forward_bytes(sys.stderr, command_stderr)
+                exit_code = completed.returncode
+                result_state = "completed"
+            except subprocess.TimeoutExpired as exc:
+                command_stdout = _output_bytes(exc.stdout)
+                command_stderr = _output_bytes(exc.stderr)
+                _forward_bytes(sys.stdout, command_stdout)
+                _forward_bytes(sys.stderr, command_stderr)
+                print(
+                    f"sandboxed-verify: command timed out after {args.timeout}s",
+                    file=sys.stderr,
+                )
+                exit_code = 124
+                result_state = "timed_out"
     finally:
         elapsed = time.monotonic() - start
-        emit_result(
-            command=args.command,
-            copied_repo=copied_repo,
-            sandbox_root=sandbox,
-            exit_code=exit_code,
-            elapsed_seconds=elapsed,
-            kept=args.keep_sandbox,
-            allowed_env=args.allow_env,
-            network=args.network,
-            evidence_note=args.evidence_note,
-        )
-        if not args.keep_sandbox:
-            shutil.rmtree(sandbox, ignore_errors=True)
+        try:
+            emit_result(
+                command=args.command,
+                copied_repo=copied_repo,
+                sandbox_root=sandbox,
+                exit_code=exit_code,
+                elapsed_seconds=elapsed,
+                kept=args.keep_sandbox,
+                allowed_env=args.allow_env,
+                network=args.network,
+                evidence_note=args.evidence_note,
+                result_file=args.result_file,
+                result_state=result_state,
+                timed_out=result_state == "timed_out",
+                stdout_bytes=command_stdout,
+                stderr_bytes=command_stderr,
+            )
+        except (OSError, ValueError) as exc:
+            diagnostic = str(exc).splitlines()[0][:240]
+            print(
+                f"sandboxed-verify: result evidence rejected: {diagnostic}",
+                file=sys.stderr,
+            )
+            # Evidence rejection is the primary failure only when the command
+            # itself succeeded. Preserve an existing command, timeout, or copy
+            # rejection status so callers do not lose the causal exit code.
+            if exit_code == 0:
+                exit_code = 125
+        finally:
+            if not args.keep_sandbox:
+                shutil.rmtree(sandbox, ignore_errors=True)
+    return exit_code
 
 
 if __name__ == "__main__":
