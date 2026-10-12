@@ -143,6 +143,7 @@ def _run_opencode(
         "HOME": str(tmp_path / "home"),
         "XDG_CONFIG_HOME": str(config_home),
         "NO_COLOR": "1",
+        "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
         "CONTEXTUAL_ORCHESTRATOR_BASE_URL": gateway_origin,
         "CONTEXTUAL_ORCHESTRATOR_TOKEN": "stub-token",
     }
@@ -181,6 +182,29 @@ pytestmark = pytest.mark.skipif(
     shutil.which("opencode") is None,
     reason="OpenCode CLI is not installed on this runner",
 )
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected_path"),
+    [
+        ("{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1", GATEWAY_SERVED_ROUTE),
+        ("{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}", "/chat/completions"),
+    ],
+)
+def test_route_probe_ignores_ancestor_project_config(
+    gateway_stub, tmp_path, base_url, expected_path
+) -> None:
+    """Ancestor project config cannot change the probe's synthetic provider."""
+    (tmp_path / "opencode.jsonc").write_text(
+        json.dumps({"agent": {"build": {"prompt": "{file:./missing-prompt.md}"}}}),
+        encoding="utf-8",
+    )
+    probe_root = tmp_path / "probe"
+    probe_root.mkdir()
+    origin, requested_paths = gateway_stub
+    _run_opencode(probe_root, base_url, origin, requested_paths)
+    assert requested_paths, "the CLI issued no request to the gateway stub"
+    assert requested_paths[0] == expected_path
 
 
 def test_tracked_config_requests_the_gateway_served_route(gateway_stub, tmp_path) -> None:
