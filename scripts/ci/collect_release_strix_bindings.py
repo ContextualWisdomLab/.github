@@ -337,6 +337,7 @@ def collect_bindings(
 
 
 def main() -> None:
+    """Collect artifact-bound Strix release receipts from command-line inputs."""
     parser = argparse.ArgumentParser()
     for name in (
         "capture", "license-report", "plan", "metadata", "attempt", "repository",
