@@ -32,7 +32,14 @@ pin a reviewed immutable central commit SHA; a mutable branch is not publication
 Do not pass `secrets: inherit` or an environment carrying credentials.
 
 The GitHub context is the caller's context. A dedicated `admission` job runs before
-any checkout or product command. It must fail for repositories other than
+any checkout or product command. Each of the four product jobs also executes a
+trusted inline caller/event guard before its own checkout; this rejects a wrong
+repository, fork, unsupported event, empty head, or non-lowercase/non-40-character
+head. PR events require the raw `pull_request.head.sha`; push events require
+`github.sha`. The admitted raw SHA must equal the effective checkout SHA. A missing
+PR head cannot be accepted through the `github.sha` fallback, even if that fallback
+is valid. The separate admission job alone is not treated as per-job protection.
+It must fail for repositories other than
 `ContextualWisdomLab/quarantine-sandbox-runtime`, fork pull requests and
 unsupported events. The retained product jobs still require either push or a
 native same-repository pull_request. Other repositories, fork PRs,

@@ -212,7 +212,8 @@ def test_preserves_all_four_job_mechanics():
             step
             for step in job["steps"]
             if not step.get("uses", "").startswith("actions/checkout@")
-            and step.get("name") != "Verify exact checkout"
+            and step.get("name")
+            not in {"Verify exact checkout", "Verify caller and event before checkout"}
         ]
         if name == "podman-e2e-positive-lsm":
             # Only the independently reproduced baseline cleanup error is repaired.
@@ -231,19 +232,132 @@ CANDIDATE = "${{ github.event.pull_request.head.sha || github.sha }}"
 CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 
 
+def test_caller_and_event_are_checked_before_any_source_checkout():
+    """Reject a wrong caller or event before the runner reads repository bytes."""
+    expected = {
+        "name": "Verify caller and event before checkout",
+        "env": {
+            "CALLER_REPOSITORY": "${{ github.repository }}",
+            "EVENT_NAME": "${{ github.event_name }}",
+            "PR_HEAD_REPOSITORY": "${{ github.event.pull_request.head.repo.full_name || '' }}",
+            "PR_HEAD_SHA": "${{ github.event.pull_request.head.sha || '' }}",
+            "PUSH_SHA": "${{ github.sha }}",
+            "EXPECTED_HEAD_SHA": CANDIDATE,
+        },
+    }
+    for name in RETAINED_JOB_NAMES:
+        job = workflow()["jobs"][name]
+        assert job["steps"][0].get("name") == expected["name"], name
+        assert job["steps"][0]["env"] == expected["env"], name
+        script = job["steps"][0]["run"]
+        assert "ContextualWisdomLab/quarantine-sandbox-runtime" in script, name
+        assert "pull_request_target" not in script, name
+        assert 'test "$EXPECTED_HEAD_SHA" = "$PR_HEAD_SHA"' in script, name
+        assert 'test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA"' in script, name
+        assert job["steps"][1] == {
+            "uses": CHECKOUT,
+            "with": {"ref": CANDIDATE, "persist-credentials": "false"},
+        }, f"{name} needs exact checkout after admission"
+        assert job["steps"][2]["name"] == "Verify exact checkout", name
+
+
 def test_exact_event_candidate_is_checked_before_any_source_execution():
     """Do not accept caller-selected SHAs or execute code before checking HEAD."""
     for name in RETAINED_JOB_NAMES:
         job = workflow()["jobs"][name]
-        assert job["steps"][0] == {
-            "uses": CHECKOUT,
-            "with": {"ref": CANDIDATE, "persist-credentials": "false"},
-        }, f"{name} needs exact checkout first"
-        assert job["steps"][1] == {
+        assert job["steps"][2] == {
             "name": "Verify exact checkout",
             "env": {"EXPECTED_HEAD_SHA": CANDIDATE},
             "run": 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
         }, f"{name} needs fail-closed HEAD verification"
+
+
+def test_actual_per_job_precheckout_guards_reject_invalid_contexts():
+    """Execute all four trusted guards with positive and denied event tuples."""
+    repo = "ContextualWisdomLab/quarantine-sandbox-runtime"
+    sha = "5bb62ab87da489b52ac7a62096f6315b518d837d"
+    cases = [
+        (repo, "push", "", sha, 0),
+        (repo, "pull_request", repo, sha, 0),
+        (repo, "pull_request", "foreign/fork", sha, 1),
+        ("foreign/repo", "push", "", sha, 1),
+        (repo, "pull_request_target", repo, sha, 1),
+        (repo, "workflow_dispatch", "", sha, 1),
+        (repo, "repository_dispatch", "", sha, 1),
+        (repo, "", "", sha, 1),
+        (repo, "push", "", "", 1),
+        (repo, "push", "", "main", 1),
+        (repo, "push", "", "a" * 39, 1),
+        (repo, "push", "", "a" * 41, 1),
+        (repo, "push", "", "A" * 40, 1),
+        (repo, "push", "", sha + "\n", 1),
+    ]
+    for name in RETAINED_JOB_NAMES:
+        script = workflow()["jobs"][name]["steps"][0]["run"]
+        for caller, event, head, candidate, code in cases:
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", script],
+                env={
+                    "PATH": os.defpath,
+                    "CALLER_REPOSITORY": caller,
+                    "EVENT_NAME": event,
+                    "PR_HEAD_REPOSITORY": head,
+                    "PR_HEAD_SHA": candidate if event == "pull_request" else "",
+                    "PUSH_SHA": candidate if event == "push" else sha,
+                    "EXPECTED_HEAD_SHA": candidate,
+                },
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            assert result.returncode == code, (name, caller, event, head, candidate)
+
+
+def test_missing_raw_pr_head_cannot_use_valid_push_sha_fallback():
+    """Reject missing raw PR heads even when the effective fallback SHA is valid."""
+    repo = "ContextualWisdomLab/quarantine-sandbox-runtime"
+    sha = "5bb62ab87da489b52ac7a62096f6315b518d837d"
+    other = "a" * 40
+    cases = [
+        ("pull_request", None, sha, sha, 1),
+        ("pull_request", "", sha, sha, 1),
+        ("pull_request", other, sha, sha, 1),
+        ("pull_request", "a" * 39, sha, sha, 1),
+        ("pull_request", "a" * 41, sha, sha, 1),
+        ("pull_request", "A" * 40, sha, sha, 1),
+        ("pull_request", sha + "\n", sha, sha, 1),
+        ("pull_request", "A" * 40, sha, "A" * 40, 1),
+        ("pull_request", "a" * 39, sha, "a" * 39, 1),
+        ("pull_request", "a" * 41, sha, "a" * 41, 1),
+        ("pull_request", sha + "\n", sha, sha + "\n", 1),
+        ("pull_request", sha, other, sha, 0),
+        ("push", sha, None, sha, 1),
+        ("push", sha, "", sha, 1),
+        ("push", sha, other, sha, 1),
+        ("push", other, sha, sha, 0),
+    ]
+    for name in RETAINED_JOB_NAMES:
+        script = workflow()["jobs"][name]["steps"][0]["run"]
+        for event, pr_sha, push_sha, effective, expected in cases:
+            env = {
+                "PATH": os.defpath,
+                "CALLER_REPOSITORY": repo,
+                "EVENT_NAME": event,
+                "PR_HEAD_REPOSITORY": repo,
+                "EXPECTED_HEAD_SHA": effective,
+            }
+            if pr_sha is not None:
+                env["PR_HEAD_SHA"] = pr_sha
+            if push_sha is not None:
+                env["PUSH_SHA"] = push_sha
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", script],
+                env=env,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            assert result.returncode == expected, (name, event, pr_sha, push_sha)
 
 
 def test_admission_job_rejects_unsupported_callers_before_product_checkout():

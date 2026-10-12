@@ -46,6 +46,28 @@ jobs:
       group: CWL QSR hostile workload
       labels: [self-hosted, linux, cwl-hostile-workload]
     steps:
+      - name: Verify caller and event before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_SHA: ${{ github.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/quarantine-sandbox-runtime" || exit 1
+          case "$EVENT_NAME" in
+            push)
+              [[ "$PUSH_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA" || exit 1
+              ;;
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY" || exit 1
+              [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PR_HEAD_SHA" || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -86,6 +108,28 @@ jobs:
       group: CWL QSR hostile workload
       labels: [self-hosted, linux, cwl-hostile-workload]
     steps:
+      - name: Verify caller and event before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_SHA: ${{ github.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/quarantine-sandbox-runtime" || exit 1
+          case "$EVENT_NAME" in
+            push)
+              [[ "$PUSH_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA" || exit 1
+              ;;
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY" || exit 1
+              [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PR_HEAD_SHA" || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -130,6 +174,28 @@ jobs:
       group: CWL QSR hostile workload
       labels: [self-hosted, linux, cwl-hostile-workload]
     steps:
+      - name: Verify caller and event before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_SHA: ${{ github.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/quarantine-sandbox-runtime" || exit 1
+          case "$EVENT_NAME" in
+            push)
+              [[ "$PUSH_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA" || exit 1
+              ;;
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY" || exit 1
+              [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PR_HEAD_SHA" || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -184,6 +250,28 @@ jobs:
       QSR_PODMAN_E2E_IMAGE: docker.io/library/python@sha256:94457973ea8a27a799f0b8ea1fe3e3147fcbebaed63497a8af63b28195a08108
       QSR_HOST_SECRET_CANARY: must-not-enter-the-isolated-application
     steps:
+      - name: Verify caller and event before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_SHA: ${{ github.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$CALLER_REPOSITORY" = "ContextualWisdomLab/quarantine-sandbox-runtime" || exit 1
+          case "$EVENT_NAME" in
+            push)
+              [[ "$PUSH_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA" || exit 1
+              ;;
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY" || exit 1
+              [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+              test "$EXPECTED_HEAD_SHA" = "$PR_HEAD_SHA" || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
