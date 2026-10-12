@@ -40,6 +40,15 @@ review sidecar's fixed health, chat-completions, and responses paths. Never
 allowlist arbitrary request paths merely because the producer stripped queries.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
+## Operational alignment
+
+Read [`docs/governance-operating-alignment.md`](docs/governance-operating-alignment.md)
+for the current linked execution gates across PRs/issues, self-hosted migration,
+queue recovery and personal LiteLLM support. Preserve existing sole writers;
+source publication, runner registration, actual job execution, formal approval
+and protected-main integration are separate transitions. Project #1 remains
+the live work-state authority; the alignment snapshot is not merge authorization.
+
 ## Actions queue and protected-merge procedure
 
 - Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,

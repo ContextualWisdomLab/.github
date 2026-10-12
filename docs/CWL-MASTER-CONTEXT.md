@@ -124,7 +124,23 @@ A **source-agnostic artifact-analysis service**: `submit(artifact, context) → 
 ## 9. How work is tracked (dogfood the traceability)
 GitHub **Project #1** is the shared source of truth. Structure: real **Issues** (roadmap/backlog, in owning repos, custom fields Phase P0–P5/Ops/Decision + Component) and real **PRs** (delivered work, native Repository). Native workflows are ON (item added→Todo, PR merged→Done, item closed→Done). Chain: roadmap **Issue** → agent sets In Progress on pickup → implementing **PR** `Closes #N` → merge → auto Done. Operate the Project per `docs/agent-github-project-protocol.md`. Group by Phase / Component / Repository.
 
-## 10. Current state (2026-08-23)
+## Operational alignment addendum (2026-10-03)
+
+The complete live central inventory contains 392 open PRs and 220 open issues;
+389 PRs are Draft. All 87 organization repository count rows total 5,839 open
+PRs and 2,492 open issues, including one archived repository. These are snapshots,
+not a per-PR merge-readiness audit. The paginated Project #1 read contained 499
+items before the current queue issues and migration PR were linked.
+
+Use [`governance-operating-alignment.md`](governance-operating-alignment.md)
+for the existing-owner dependency map: isolated runner operations → normal
+workflow integration → repository/managed-CodeQL execution → real reviewers →
+protected integration. Central PR #2565 remains a Draft stack on #2555; personal
+LiteLLM support remains issue #2560, distinct from company gateway operations.
+Endpoint liveness and proposed selectors are not runtime normalization.
+Preserve prior observations below as history, not current authorization.
+
+## 10. Historical state (2026-08-23)
 - Live product/technical gap snapshot: [`docs/product-technical-gap-baseline.md`](product-technical-gap-baseline.md) (SHA-bound open-PR inventory; not merge authorization). Figma File ID for this control-plane repo is N/A (`docs/adr/0002-product-technical-gap-baseline.md`).
 - Standing autonomous operating directive for the continuous PR review→fix→merge→develop loop across the ecosystem: [`docs/product-goal-directive.md`](product-goal-directive.md) (full text; a `/goal` session's 4000-character field only holds a pointer to it).
 - Renames done (keyverse/wardnet/inkspan). Planning spec = ContextualWisdomLab/naruon#974. Protocol = ContextualWisdomLab/.github#363. Project #1 remains the live tracker; naruon Phase 0 issue ContextualWisdomLab/naruon#975 is Done (closed completed 2026-07-13). Next ordered phase is ContextualWisdomLab/naruon#976 (P1 Plugin SDK); execute one phase at a time.
