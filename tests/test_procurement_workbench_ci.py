@@ -73,7 +73,9 @@ def test_owned_documents_exist_and_keep_activation_separate():
 def test_product_caller_reference_identifies_the_remote_repository(path):
     """A central document must link to the product PR, not central PR4."""
     prose = (ROOT / path).read_text()
-    assert "https://github.com/ContextualWisdomLab/procurement-workbench/pull/4" in prose
+    assert (
+        "https://github.com/ContextualWisdomLab/procurement-workbench/pull/4" in prose
+    )
 
 
 def test_reusable_only_read_only_input_free():
@@ -102,19 +104,19 @@ def test_fixed_self_hosted_matrix_preserves_all_gates():
         "max-parallel": "1",
         "matrix": {"python-version": ["3.12", "3.14"]},
     }
+    commands = [
+        '"$UV_BIN" lock --check --python "$PYTHON_BIN"',
+        '"$UV_BIN" sync --frozen --group dev --python "$PYTHON_BIN"',
+        '"$UV_BIN" run --frozen --no-managed-python --python "$PYTHON_BIN" pytest -q --basetemp "$PROCUREMENT_TEST_TEMP"',
+        '"$UV_BIN" run --frozen --no-managed-python --python "$PYTHON_BIN" ruff check .',
+        '"$NODE_BIN" --check procurement/ui.js',
+    ]
     names = [
         "Verify frozen lockfile",
         "Install frozen dependencies",
         "Run full pytest suite",
         "Run Ruff",
         "Check UI JavaScript syntax",
-    ]
-    commands = [
-        "uv lock --check",
-        "uv sync --frozen --group dev",
-        'uv run pytest -q --basetemp "$PROCUREMENT_TEST_TEMP"',
-        "uv run ruff check .",
-        "node --check procurement/ui.js",
     ]
     steps = j["steps"]
     indices = []
@@ -257,15 +259,50 @@ def test_missing_or_malformed_serialized_context_rejects(tmp_path, payload):
     assert "procurement-ci:" in result.stderr
 
 
-def test_action_pins_cache_and_output_wiring():
-    """Checkout, actual cache location and cleanup consume the same producer."""
+def test_preinstalled_runner_toolchain_replaces_remote_setup_actions():
+    """The self-hosted runner owns the toolchain; remote setup actions do not run."""
     steps = job()["steps"]
     uses = [s["uses"] for s in steps if "uses" in s]
     assert uses == [
         "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-        "astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e",
-        "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
     ]
+    toolchain = next(
+        s for s in steps if s["name"] == "Verify preinstalled runner toolchain"
+    )
+    run = toolchain["run"]
+    assert "command -v uv" in run
+    for token in ("command -v uv", "python3.12", "python3.14", "node_bin", "v24"):
+        assert token in run
+    assert toolchain["id"] == "toolchain"
+    for name in (
+        "Verify frozen lockfile",
+        "Install frozen dependencies",
+        "Run full pytest suite",
+        "Run Ruff",
+    ):
+        env = next(s for s in steps if s["name"] == name)["env"]
+        assert env["UV_NO_MANAGED_PYTHON"] == "1"
+        assert env["UV_PYTHON_DOWNLOADS"] == "never"
+        assert env["PYTHON_BIN"] == "${{ steps.toolchain.outputs.python_bin }}"
+    for name in (
+        "Verify frozen lockfile",
+        "Install frozen dependencies",
+        "Run full pytest suite",
+        "Run Ruff",
+        "Check UI JavaScript syntax",
+    ):
+        step = next(s for s in steps if s["name"] == name)
+        assert "if" not in step
+        assert (
+            step["working-directory"] == "${{ steps.prepare.outputs.source_absolute }}"
+        )
+
+
+def test_action_pins_cache_and_output_wiring():
+    """Checkout, actual cache location and cleanup consume the same producer."""
+    steps = job()["steps"]
+    uses = [s["uses"] for s in steps if "uses" in s]
+    assert uses == ["actions/checkout@11d5960a326750d5838078e36cf38b85af677262"]
     assert all(re.fullmatch(r".+@[a-f0-9]{40}", s) for s in uses)
     checkout = steps[3]["with"]
     assert checkout == {
@@ -277,9 +314,6 @@ def test_action_pins_cache_and_output_wiring():
     prepare = steps[2]
     assert prepare["id"] == "prepare"
     assert "GITHUB_ENV" not in prepare["run"]
-    setup = next(s for s in steps if s["name"] == "Setup uv")["with"]
-    assert setup["cache-local-path"] == "${{ steps.prepare.outputs.job_root }}/uv-cache"
-    assert setup["enable-cache"] == setup["save-cache"] == "false"
     cleanup = steps[-1]
     assert cleanup["if"] == "${{ always() && steps.prepare.outcome == 'success' }}"
     assert (

@@ -18,7 +18,7 @@
 
 - 준비 단계는 원래 `github.workspace` 바로 아래 새 checkout 디렉터리와 `runner.temp` 바로 아래 새 private 디렉터리를 만든다. 디렉터리가 이미 있으면 실패한다. 이전 Git hooks/config를 실행하거나 지우지 않는다.
 - `GITHUB_WORKSPACE`/`RUNNER_*`를 덮어쓰지 않는다. 경로는 `steps.prepare.outputs`로 전달한다. checkout 상대 경로는 workspace 안에 있고, 품질 shell마다 `working-directory`를 명시한다.
-- setup-uv의 실제 cache-local-path는 준비 단계가 만든 private root 아래다. cache restore/save를 끈다. HOME·venv·pytest·cache는 같은 실행별 private root 아래다.
+- setup-uv/setup-node action은 제거한다. runner가 사전 설치한 uv, Python 3.12/3.14, Node 24의 경로와 버전을 검증한다. 선택된 Python 경로를 lock/sync/run에 명시하고 managed Python과 Python 다운로드를 끈다. HOME·venv·pytest·cache는 같은 실행별 private root 아래다. cache restore/save action은 없다.
 - Cleanup은 실제 준비 단계 출력과 run/attempt/matrix identity를 대조한다. 다른 경로·traversal·symlink는 거절하며 foreign sentinel을 보존한다. output 쓰기 실패 시 준비 단계가 만든 디렉터리만 rollback한다.
 - PR 원본 필드를 별도 전달한다. `|| github.repository`/`|| github.sha` fallback이 없다. PR head와 push/merge SHA를 다른 fixture로 실행해 검증한다.
 - 다섯 품질 shell의 실제 body를 합성 uv/node 실행 파일로 실행한다. 각각 exit0 및 exit37 전달을 확인한다. 이 테스트는 실제 제품 검사/Actions 실행이 아니다.
@@ -44,6 +44,6 @@ R3는 준비→출력→checkout path admission→effective cache→cleanup을 �
 
 ## 원격 리뷰의 운영 격리 지적
 
-Devin의 setup-uv/setup-node 호스트 접근 지적은 미해결 운영 경계로 유지한다. 불변 action pin과 private 디렉터리는 코드 신원·생명주기 제어일 뿐 호스트 confinement 증거가 아니다. 승인된 runner의 격리·egress·동시 writer 통제·reset 증거를 실제 canary로 확인하기 전에는 제품 caller를 활성화하지 않는다. 문서 링크 수리나 로컬 테스트 통과로 이 지적을 resolved로 표시하지 않는다.
+Devin이 지적한 setup-uv/setup-node action 실행을 이번 소스 후보에서 제거한다. runner의 사전 설치 도구 검증은 설치 action 실행을 없애지만 호스트 confinement 증거는 아니다. checkout action, 의존성 빌드와 제품 테스트의 실행 경계는 남는다. 승인된 runner의 격리·egress·동시 writer 통제·reset 증거를 실제 canary로 확인하기 전에는 제품 caller를 활성화하지 않는다. 독립 소스 재검토와 운영 격리 승인을 구분하며, 이 변경만으로 지적 전체를 resolved로 표시하지 않는다.
 
 Host 격리는 shell 디렉터리 검증만으로 증명되지 않는다. 악성 제품 code의 동시 경로 교체·호스트 조작·강제 종료 cleanup은 provisioning 격리/ephemeral reset 책임이다. Matrix skipped/missing은 원격 receipt 및 protection mapping에서 거절해야 한다.

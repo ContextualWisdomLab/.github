@@ -80,9 +80,17 @@ def test_prepare_checkout_cleanup_are_one_contiguous_lifecycle(tmp_path):
         step("Checkout admitted product source")["with"]["path"]
         == "${{ steps.prepare.outputs.source_relative }}"
     )
-    setup = step("Setup uv")["with"]
-    assert setup["cache-local-path"] == "${{ steps.prepare.outputs.job_root }}/uv-cache"
-    assert setup["enable-cache"] == "false" and setup["save-cache"] == "false"
+    for name in (
+        "Verify frozen lockfile",
+        "Install frozen dependencies",
+        "Run full pytest suite",
+        "Run Ruff",
+    ):
+        assert (
+            step(name)["env"]["UV_CACHE_DIR"]
+            == "${{ steps.prepare.outputs.job_root }}/uv-cache"
+        )
+    assert not any("cache@" in item.get("uses", "") for item in steps())
     (private / "uv-cache").mkdir()
     (private / "uv-cache" / "sentinel").write_text("current-cache")
     victim = temp / "victim"
@@ -179,11 +187,132 @@ def test_quality_shell_preserves_each_command_exit(tmp_path, name, exit_code):
     env = {
         **os.environ,
         "PATH": str(bin_dir),
+        "UV_BIN": str(bin_dir / "uv"),
+        "PYTHON_BIN": str(bin_dir / "python"),
+        "NODE_BIN": str(bin_dir / "node"),
         "PROCUREMENT_TEST_TEMP": str(tmp_path / "pytest"),
     }
     result = run(step(name)["run"], env, tmp_path)
     assert witness.read_text() == "called"
     assert result.returncode == exit_code
+
+
+@pytest.mark.parametrize("version", ["3.12", "3.14", "3.13", ""])
+def test_toolchain_selects_only_supported_matrix_python(tmp_path, version):
+    """Execute real admission against synthetic tools, including an invalid matrix."""
+    bin_dir = tmp_path / "tool chain"
+    bin_dir.mkdir()
+    versions = {
+        "uv": "uv 0.12.5 (synthetic)",
+        "python3.12": "Python 3.12.14",
+        "python3.14": "Python 3.14.7",
+        "node": "v24.21.0",
+    }
+    for name, text in versions.items():
+        executable = bin_dir / name
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{text}'\n")
+        executable.chmod(0o700)
+    output = tmp_path / "output"
+    result = run(
+        step("Verify preinstalled runner toolchain")["run"],
+        {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "PYTHON_VERSION": version,
+            "GITHUB_OUTPUT": str(output),
+        },
+        tmp_path,
+    )
+    if version in ("3.12", "3.14"):
+        assert result.returncode == 0, result.stderr
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert values == {
+            "uv_bin": str(bin_dir / "uv"),
+            "python_bin": str(bin_dir / f"python{version}"),
+            "node_bin": str(bin_dir / "node"),
+        }
+    else:
+        assert result.returncode != 0
+        assert "unsupported toolchain matrix" in result.stderr
+        assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "tool,version,exit_code",
+    [
+        ("uv", "uv 0.12.5", 37),
+        ("python3.12", "Python 3.12.14", 37),
+        ("python3.14", "Python 3.14.7", 37),
+        ("node", "v24.21.0", 37),
+        ("uv", "not uv", 0),
+        ("python3.12", "Python 3.14.7", 0),
+        ("python3.14", "Python 3.12.14", 0),
+        ("node", "v22.0.0", 0),
+        ("node", "v24.21.0\nv25.0.0", 0),
+        ("uv", "uv 0.12.5\nunexpected", 0),
+    ],
+)
+def test_toolchain_rejects_failed_or_wrong_version_before_outputs(
+    tmp_path, tool, version, exit_code
+):
+    """A matching line cannot hide a failed command or extra output."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    versions = {
+        "uv": "uv 0.12.5",
+        "python3.12": "Python 3.12.14",
+        "python3.14": "Python 3.14.7",
+        "node": "v24.21.0",
+    }
+    for name, default in versions.items():
+        text = version if name == tool else default
+        code = exit_code if name == tool else 0
+        executable = bin_dir / name
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{text}'\nexit {code}\n")
+        executable.chmod(0o700)
+    output = tmp_path / "output"
+    result = run(
+        step("Verify preinstalled runner toolchain")["run"],
+        {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "PYTHON_VERSION": "3.14",
+            "GITHUB_OUTPUT": str(output),
+        },
+        tmp_path,
+    )
+    assert result.returncode != 0
+    if exit_code:
+        assert result.returncode == exit_code
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r"])
+def test_toolchain_rejects_record_separator_in_executable_path(tmp_path, separator):
+    """Path bytes cannot inject extra GitHub output records."""
+    bin_dir = tmp_path / f"bin{separator}record"
+    bin_dir.mkdir()
+    versions = {
+        "uv": "uv 0.12.5",
+        "python3.12": "Python 3.12.14",
+        "python3.14": "Python 3.14.7",
+        "node": "v24.21.0",
+    }
+    for name, text in versions.items():
+        executable = bin_dir / name
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{text}'\n")
+        executable.chmod(0o700)
+    output = tmp_path / "output"
+    result = run(
+        step("Verify preinstalled runner toolchain")["run"],
+        {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "PYTHON_VERSION": "3.14",
+            "GITHUB_OUTPUT": str(output),
+        },
+        tmp_path,
+    )
+    assert result.returncode != 0
+    assert "unsafe tool path" in result.stderr
+    assert not output.exists()
 
 
 def test_checkout_path_is_direct_child_of_runner_workspace(tmp_path):

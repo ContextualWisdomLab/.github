@@ -60,4 +60,4 @@
 
 ## 다음 실행 조각
 
-현재 소스는 게시·검토됐다. 다음 단계는 runner 격리 증거, 실제 중앙 품질 실행, 기존 #2560 경로의 literal `auto`와 정식 App 판정을 확보하는 것이다. 제품 caller 활성화와 정상 병합은 그 조건을 충족한 뒤 진행한다. 완료한 소스 suite를 반복하는 것으로 운영 증거를 대신하지 않는다.
+현재 게시 head는 `aaccb7ad3`이다. 이번 수리에서는 setup-uv/setup-node action을 제거하고 runner 사전 설치 도구를 검증한다. Python matrix, frozen lock, 전체 pytest, Ruff와 Node 검사는 유지한다. 변경된 실제 shell의 성공·거절·exit 전달을 검증하고 독립 재검토 후 같은 PR에 게시한다. 이 수리는 호스트 격리를 증명하지 않는다. runner 격리 canary, 실제 중앙 품질 실행, 기존 #2560의 literal `auto`와 정식 App 판정은 계속 별도 조건이다. 제품 caller 활성화와 정상 병합은 조건을 충족한 뒤 진행한다.

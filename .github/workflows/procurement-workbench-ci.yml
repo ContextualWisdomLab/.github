@@ -157,70 +157,127 @@ jobs:
           actual_sha="$(git -c core.hooksPath=/dev/null -c core.fsmonitor=false rev-parse HEAD)"
           [ "$actual_sha" = "$EXPECTED_SHA" ] || { echo 'procurement-ci: checkout sha mismatch' >&2; exit 1; }
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-        with:
-          cache-local-path: ${{ steps.prepare.outputs.job_root }}/uv-cache
-          enable-cache: false
-          save-cache: false
-          python-version: ${{ matrix.python-version }}
-          working-directory: ${{ steps.prepare.outputs.source_absolute }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24'
+      - name: Verify preinstalled runner toolchain
+        id: toolchain
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail
+          unset PYTHONHOME PYTHONPATH
+          uv_bin="$(command -v uv)"
+          python312_bin="$(command -v python3.12)"
+          python314_bin="$(command -v python3.14)"
+          node_bin="$(command -v node)"
+          for tool_path in "$uv_bin" "$python312_bin" "$python314_bin" "$node_bin"; do
+            if [[ "$tool_path" == *$'\n'* || "$tool_path" == *$'\r'* ]]; then
+              echo 'procurement-ci: unsafe tool path' >&2
+              exit 1
+            fi
+          done
+          test -x "$uv_bin" && test -x "$python312_bin" && test -x "$python314_bin" && test -x "$node_bin"
+          case "$uv_bin" in /*) ;; *) echo 'procurement-ci: uv is not absolute' >&2; exit 1 ;; esac
+          case "$python312_bin" in /*) ;; *) echo 'procurement-ci: python3.12 is not absolute' >&2; exit 1 ;; esac
+          case "$python314_bin" in /*) ;; *) echo 'procurement-ci: python3.14 is not absolute' >&2; exit 1 ;; esac
+          case "$node_bin" in /*) ;; *) echo 'procurement-ci: node is not absolute' >&2; exit 1 ;; esac
+          uv_version="$("$uv_bin" --version)"
+          python312_version="$("$python312_bin" --version 2>&1)"
+          python314_version="$("$python314_bin" --version 2>&1)"
+          node_version="$("$node_bin" --version)"
+          if [[ "$uv_version$python312_version$python314_version$node_version" == *$'\n'* ]]; then
+            echo 'procurement-ci: multiline tool version' >&2
+            exit 1
+          fi
+          if ! [[ "$uv_version" =~ ^uv[[:space:]][0-9]+\.[0-9]+\.[0-9]+(\ \(.*\))?$ ]]; then
+            echo 'procurement-ci: unsupported uv version' >&2; exit 1
+          fi
+          if ! [[ "$python312_version" =~ ^Python[[:space:]]3\.12\.[0-9]+$ ]]; then
+            echo 'procurement-ci: unsupported python3.12 version' >&2; exit 1
+          fi
+          if ! [[ "$python314_version" =~ ^Python[[:space:]]3\.14\.[0-9]+$ ]]; then
+            echo 'procurement-ci: unsupported python3.14 version' >&2; exit 1
+          fi
+          if ! [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'procurement-ci: unsupported node version' >&2; exit 1
+          fi
+          case "$PYTHON_VERSION" in
+            3.12) python_bin="$python312_bin" ;;
+            3.14) python_bin="$python314_bin" ;;
+            *) echo 'procurement-ci: unsupported toolchain matrix' >&2; exit 1 ;;
+          esac
+          {
+            printf 'uv_bin=%s\n' "$uv_bin"
+            printf 'python_bin=%s\n' "$python_bin"
+            printf 'node_bin=%s\n' "$node_bin"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify frozen lockfile
         working-directory: ${{ steps.prepare.outputs.source_absolute }}
         env:
           HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_BIN: ${{ steps.toolchain.outputs.uv_bin }}
+          PYTHON_BIN: ${{ steps.toolchain.outputs.python_bin }}
+          UV_NO_MANAGED_PYTHON: '1'
+          UV_PYTHON_DOWNLOADS: never
           UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
           UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
         run: |
           set -euo pipefail
           unset PYTHONHOME PYTHONPATH
-          uv lock --check
+          "$UV_BIN" lock --check --python "$PYTHON_BIN"
 
       - name: Install frozen dependencies
         working-directory: ${{ steps.prepare.outputs.source_absolute }}
         env:
           HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_BIN: ${{ steps.toolchain.outputs.uv_bin }}
+          PYTHON_BIN: ${{ steps.toolchain.outputs.python_bin }}
+          UV_NO_MANAGED_PYTHON: '1'
+          UV_PYTHON_DOWNLOADS: never
           UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
           UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
         run: |
           set -euo pipefail
           unset PYTHONHOME PYTHONPATH
-          uv sync --frozen --group dev
+          "$UV_BIN" sync --frozen --group dev --python "$PYTHON_BIN"
 
       - name: Run full pytest suite
         working-directory: ${{ steps.prepare.outputs.source_absolute }}
         env:
           HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_BIN: ${{ steps.toolchain.outputs.uv_bin }}
+          PYTHON_BIN: ${{ steps.toolchain.outputs.python_bin }}
+          UV_NO_MANAGED_PYTHON: '1'
+          UV_PYTHON_DOWNLOADS: never
           UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
           UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
           PROCUREMENT_TEST_TEMP: ${{ steps.prepare.outputs.job_root }}/pytest
         run: |
           set -euo pipefail
           unset PYTHONHOME PYTHONPATH
-          uv run pytest -q --basetemp "$PROCUREMENT_TEST_TEMP"
+          "$UV_BIN" run --frozen --no-managed-python --python "$PYTHON_BIN" pytest -q --basetemp "$PROCUREMENT_TEST_TEMP"
 
       - name: Run Ruff
         working-directory: ${{ steps.prepare.outputs.source_absolute }}
         env:
           HOME: ${{ steps.prepare.outputs.job_root }}/home
+          UV_BIN: ${{ steps.toolchain.outputs.uv_bin }}
+          PYTHON_BIN: ${{ steps.toolchain.outputs.python_bin }}
+          UV_NO_MANAGED_PYTHON: '1'
+          UV_PYTHON_DOWNLOADS: never
           UV_PROJECT_ENVIRONMENT: ${{ steps.prepare.outputs.job_root }}/venv
           UV_CACHE_DIR: ${{ steps.prepare.outputs.job_root }}/uv-cache
         run: |
           set -euo pipefail
           unset PYTHONHOME PYTHONPATH
-          uv run ruff check .
+          "$UV_BIN" run --frozen --no-managed-python --python "$PYTHON_BIN" ruff check .
 
       - name: Check UI JavaScript syntax
         working-directory: ${{ steps.prepare.outputs.source_absolute }}
+        env:
+          NODE_BIN: ${{ steps.toolchain.outputs.node_bin }}
         run: |
           set -euo pipefail
-          node --check procurement/ui.js
+          "$NODE_BIN" --check procurement/ui.js
 
       - name: Cleanup job-private workspace
         if: ${{ always() && steps.prepare.outcome == 'success' }}
