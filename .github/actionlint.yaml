@@ -1,0 +1,6 @@
+# Source validation only; labels do not attest runtime isolation.
+self-hosted-runner:
+  labels:
+    - cwlab-ci-isolated
+    - cwlab-control
+    - k-csap-isolated
