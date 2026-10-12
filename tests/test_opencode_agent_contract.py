@@ -795,6 +795,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
+    # Vendored crate files keep their archive mode (often 0640) through COPY, so the
+    # image must make them readable by the unprivileged sandbox UID.
+    assert measure_step.index(
+        "COPY base-rust-dependencies /opt/base-rust-dependencies"
+    ) < measure_step.index("RUN chmod -R a+rX /opt/base-rust-dependencies")
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
