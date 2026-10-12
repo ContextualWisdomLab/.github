@@ -66,6 +66,16 @@ def test_owned_documents_exist_and_keep_activation_separate():
         assert phrase in prose
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["GOAL.md", "docs/doctoring/procurement-workbench-central-ci.md"],
+)
+def test_product_caller_reference_identifies_the_remote_repository(path):
+    """A central document must link to the product PR, not central PR4."""
+    prose = (ROOT / path).read_text()
+    assert "https://github.com/ContextualWisdomLab/procurement-workbench/pull/4" in prose
+
+
 def test_reusable_only_read_only_input_free():
     """No caller-controlled commands, refs, secrets or runner choices."""
     w = workflow()

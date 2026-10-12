@@ -1,6 +1,6 @@
 # Procurement central self-hosted CI
 
-상태: 구현 중 / ACTIVATION HOLD
+상태: 중앙 PR #2620 소스 게시·로컬 검증·독립 소스 검토 완료 / ACTIVATION HOLD.
 
 ## 결과
 
@@ -19,7 +19,7 @@
 
 - 중앙 base: `7554587c2e3106a388998bcad048a3d7121de25e`.
 - 제품 workflow: `procurement-workbench/.github/workflows/ci.yml`.
-- 제품 PR #4가 caller 파일을 소유한다. 중앙 workflow가 검토·게시되고 runner가 실제 준비되기 전에는 제품 caller를 바꾸지 않는다.
+- 제품 [ContextualWisdomLab/procurement-workbench#4](https://github.com/ContextualWisdomLab/procurement-workbench/pull/4)가 caller 파일을 소유한다. 중앙 workflow가 검토·게시되고 runner가 실제 준비되기 전에는 제품 caller를 바꾸지 않는다.
 - 중앙 전역 runner 정책은 PR #2565가 소유한다. 이 lane은 그 파일을 수정하지 않는다.
 - AI review와 personal LiteLLM `auto` routing은 중앙 issue #2560 소유다. 이 lane은 키를 발급하거나 review workflow를 변경하지 않는다.
 
@@ -60,4 +60,4 @@
 
 ## 다음 실행 조각
 
-중앙 source-only workflow와 정책 테스트를 작성한다. 원격 활성화와 제품 caller 변경은 위 선행 조건 전까지 HOLD다.
+현재 소스는 게시·검토됐다. 다음 단계는 runner 격리 증거, 실제 중앙 품질 실행, 기존 #2560 경로의 literal `auto`와 정식 App 판정을 확보하는 것이다. 제품 caller 활성화와 정상 병합은 그 조건을 충족한 뒤 진행한다. 완료한 소스 suite를 반복하는 것으로 운영 증거를 대신하지 않는다.

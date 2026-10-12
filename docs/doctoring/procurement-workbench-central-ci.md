@@ -1,6 +1,6 @@
 # 구매 시황 중앙 CI: current source candidate
 
-상태: 로컬 구현 / 독립 재검토 대기 / ACTIVATION HOLD.
+상태: 중앙 PR #2620 소스 게시·독립 소스 검토 완료 / 실제 실행·정식 App 검토 미완료 / ACTIVATION HOLD.
 
 ## PRD와 실패 계약
 
@@ -26,7 +26,7 @@
 
 ## 소유 및 승인 경계
 
-- 제품 caller: `ContextualWisdomLab/procurement-workbench` PR #4. 현재 파일 미수정.
+- 제품 caller: [ContextualWisdomLab/procurement-workbench#4](https://github.com/ContextualWisdomLab/procurement-workbench/pull/4). 제품 caller 활성화는 별도 단계다.
 - shared runner policy: 중앙 #2565. 기존 파일 미수정.
 - LiteLLM service-key/transport/auto/App custody: 중앙 #2560. 키 중복 발급·Secret 덮어쓰기 없음.
 - runner/isolation: `ContextualWisdomLab/linux-cluster-ops#326`, `ContextualWisdomLab/quarantine-sandbox-runtime#136/#137`.
@@ -41,5 +41,9 @@ R3는 준비→출력→checkout path admission→effective cache→cleanup을 �
 ## 미완료 acceptance
 
 로컬 테스트·actionlint·독립 source verdict, 실제 runner/group/ACL/isolation/cleanup canary, immutable 중앙 게시와 protected integration, 제품 caller 및 check mapping, matrix 전체 실제 실행, hosted-only retirement, literal `auto` inference와 독립 App `APPROVED`는 서로 다른 gate다. source-only 통과로 나머지를 완료라 하지 않는다. Issue #5 STARTUP_FAILURE 원인은 별도 미확정이다.
+
+## 원격 리뷰의 운영 격리 지적
+
+Devin의 setup-uv/setup-node 호스트 접근 지적은 미해결 운영 경계로 유지한다. 불변 action pin과 private 디렉터리는 코드 신원·생명주기 제어일 뿐 호스트 confinement 증거가 아니다. 승인된 runner의 격리·egress·동시 writer 통제·reset 증거를 실제 canary로 확인하기 전에는 제품 caller를 활성화하지 않는다. 문서 링크 수리나 로컬 테스트 통과로 이 지적을 resolved로 표시하지 않는다.
 
 Host 격리는 shell 디렉터리 검증만으로 증명되지 않는다. 악성 제품 code의 동시 경로 교체·호스트 조작·강제 종료 cleanup은 provisioning 격리/ephemeral reset 책임이다. Matrix skipped/missing은 원격 receipt 및 protection mapping에서 거절해야 한다.
