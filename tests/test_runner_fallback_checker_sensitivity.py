@@ -1,6 +1,5 @@
 """Exercise the retained fallback checker with valid and reversed routing."""
 import json
-from pathlib import Path
 import pytest
 import yaml
 from tests.test_all_self_hosted_runner_contract import test_isolated_fallback_never_selects_privileged_group as check_fallback

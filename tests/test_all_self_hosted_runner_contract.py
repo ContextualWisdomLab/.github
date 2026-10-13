@@ -17,6 +17,7 @@ STATIC_RUNNER_GROUP_LABELS = {
     'CWL central OpenCode': set(),
     'CWL CI isolated': {'cwlab-ci-isolated'},
     'CWL law CI': {'law-ai-agent-ci'},
+    'CWL QSR hostile workload': {'cwl-hostile-workload'},
 }
 
 
@@ -72,11 +73,10 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
             elif isinstance(runner, list):
-                # Existing K-CSAP caller-owned, repo-scoped pool; not a global
-                # label-only alternative to the organization group boundary.
+                # Preserve the inherited K-CSAP selector exactly; it is the only
+                # repository-scoped list admission and remains fail-closed.
                 assert (path.stem, job_id) == ('k-csap-skills-quality', 'quality'), (
-                    path, job_id, 'unsupported repository-scoped selector', runner,
-                )
+                    path, job_id, 'unsupported static label-only selector')
                 assert all(isinstance(label, str) for label in runner), (path, job_id, runner)
                 assert {label.lower() for label in runner} == {
                     'self-hosted', 'linux', 'x64', 'k-csap-isolated',
@@ -86,10 +86,47 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
     assert observed, 'runner selector coverage is empty'
 
 
+@pytest.mark.parametrize(
+    ('workflow_name', 'job_id', 'labels', 'accepted'),
+    [
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], True),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64'], False),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'k-csap-isolated'], False),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'cwlab-control'], False),
+        ('foreign-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], False),
+        ('k-csap-skills-quality.yml', 'foreign-job',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], False),
+    ],
+)
+def test_existing_kcsap_list_selector_remains_exact(
+    tmp_path, monkeypatch, workflow_name, job_id, labels, accepted
+):
+    """Admit one inherited label-only selector, not arbitrary runner lists."""
+    directory = tmp_path / '.github/workflows'
+    directory.mkdir(parents=True)
+    (directory / workflow_name).write_text(
+        yaml.safe_dump({'jobs': {job_id: {'runs-on': labels}}}), encoding='utf-8'
+    )
+    monkeypatch.chdir(tmp_path)
+    if accepted:
+        test_nonprivileged_runners_require_isolated_label()
+    else:
+        with pytest.raises(AssertionError):
+            test_nonprivileged_runners_require_isolated_label()
+
+
 def test_static_runner_group_policy_is_explicit_and_fail_closed() -> None:
     """Bind dedicated groups to their isolation labels and reject unknown groups."""
     assert required_static_labels('CWL law CI') == {
         'self-hosted', 'linux', 'x64', 'law-ai-agent-ci',
+    }
+    assert required_static_labels('CWL QSR hostile workload') == {
+        'self-hosted', 'linux', 'x64', 'cwl-hostile-workload',
     }
     with pytest.raises(AssertionError, match='unsupported static group'):
         required_static_labels('CWL ungoverned CI')
