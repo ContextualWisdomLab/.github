@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed in ContextualWisdomLab/.github#2607; the maintainer's requested endpoint and model are explicit session instructions.
+Accepted on 2026-10-13 after ContextualWisdomLab/.github#2607 merged. The maintainer's requested endpoint and model are explicit session instructions. Runtime App review and approval remain separate acceptance evidence.
 
 ## Context and decision drivers
 
