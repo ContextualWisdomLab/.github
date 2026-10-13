@@ -34,7 +34,11 @@ def test_native_metadata_token_reaches_both_head_reads(tmp_path: Path, name: str
         "secrets.OPENCODE_APPROVE_TOKEN": "synthetic-approve" if source == "approve" else "",
         "github.token": "workflow-only",
     }
-    token = next(credentials.get(term.strip()) for term in expression.group(1).split("||") if credentials.get(term.strip()))
+    expected_legacy = "secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token"
+    expected_kcsap = "env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_metadata_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (" + expected_legacy + ")) || ''"
+    assert expression.group(1) == expected_kcsap
+    legacy_terms = expected_legacy.split(" || ")
+    token = next((credentials.get(term.strip(), "") for term in legacy_terms if credentials.get(term.strip(), "")), "")
     gh = tmp_path / "gh"
     live_head = ("a" if current else "c") * 40
     payload = json.dumps({"state": "open", "head": {"sha": live_head}, "base": {"sha": "b" * 40}})

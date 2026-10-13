@@ -48,6 +48,7 @@ import argparse
 import ast
 import email.parser
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -63,10 +64,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
-    import tomli as tomllib
+def _import_toml_parser():
+    """Return the stdlib TOML parser, or the declared Python 3.10 backport."""
+    try:
+        return importlib.import_module("tomllib")
+    except ModuleNotFoundError:  # Python 3.10; already declared in the dev group.
+        return importlib.import_module("tomli")
+
+
+tomllib = _import_toml_parser()
 
 try:
     from scripts.ci.spdx_license_policy import (
@@ -1835,6 +1841,8 @@ def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
             raise GateError(CAPTURE_INCOMPLETE, "Cargo source checkout cannot be bound") from error
 
     def source_blob(path: Path) -> bytes:
+        """Read and verify one regular source file from the selected commit."""
+
         try:
             relative = path.relative_to(bound_root)
             if any((bound_root / parent).is_symlink() for parent in (relative, *relative.parents)):
@@ -2126,6 +2134,8 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
         raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
 
     def blob(path: str) -> bytes:
+        """Read one bounded regular blob from the selected release commit."""
+
         entry = subprocess.check_output(
             ["git", "-C", str(source), "ls-tree", source_sha, "--", path], text=True)
         if not entry.startswith("100644 blob "):
