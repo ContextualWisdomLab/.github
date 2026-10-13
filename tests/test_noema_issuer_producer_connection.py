@@ -283,31 +283,20 @@ def test_pinned_authenticated_transport_dispatches_original_phase_request(tmp_pa
     assert json.loads(calls[0].data)['permissions']=={'pull_requests':'read'}
 
 
-def test_workflow_invokes_real_bootstrap_and_phase_producer_before_controller():
-    """A module sitting unused on disk cannot supply any issuance output."""
+def test_normal_workflow_does_not_require_unprovided_bootstrap_inputs():
+    """The independent issuer remains dormant until its supplier exists."""
     workflow=(ROOT/'.github/workflows/noema-review.yml').read_text()
-    issuer=(ROOT/'scripts/ci/noema_existing_app_issuer.cjs').read_text()
-    assert workflow.count('scripts/ci/noema_bootstrap_producer.py') == 2
-    assert workflow.index('--materialize') < workflow.index('--phase prepare') < workflow.index('--revalidate-publish') < workflow.index('--phase publish')
-    assert workflow.count('node "$GITHUB_WORKSPACE/scripts/ci/noema_existing_app_issuer.cjs"') == 2
-    assert "child('premerge_review_tooling.py',args,env)" in issuer
-    assert "'--'+phase+'-production'" in issuer
-    assert "'--phase-issuance',file" in issuer
-    assert "await fence(read.token,phase);" in issuer
-    assert issuer.index("await fence(read.token,phase);") < issuer.index("selected=await issue('write',read.token);")
+    assert 'scripts/ci/noema_bootstrap_producer.py' not in workflow
+    assert 'node "$GITHUB_WORKSPACE/scripts/ci/noema_existing_app_issuer.cjs"' not in workflow
+    assert workflow.count('.github/actions/noema-review/two_phase.py"') == 2
 
 
-def test_actual_publish_request_has_only_controller_write_permissions():
-    """Publication grant is independently refreshed without unrelated privileges."""
+def test_actual_publish_request_has_only_scoped_app_write_permissions():
+    """Publication gets only fresh repository-scoped review authority."""
     workflow=(ROOT/'.github/workflows/noema-review.yml').read_text()
     step=workflow.split('      - name: Refresh repository-scoped Noema GitHub App token for publication\n',1)[1]
     step=step.split('      - name:',1)[0]
     permissions={name.replace('-','_'):value for name,value in
         re.findall(r'          permission-([a-z-]+): (read|write)',step)}
-    assert permissions=={'contents':'read','metadata':'read','pull_requests':'read'}, 'metadata action requests excess permissions'
-    issuer=(ROOT/'scripts/ci/noema_existing_app_issuer.cjs').read_text()
-    assert "const permissions={contents:'read',metadata:'read',pull_requests:grant};" in issuer
-    assert "selected=await issue('write',read.token);" in issuer
-    assert "{repositories:[scope.repository.split('/')[1]],permissions},jwt" in issuer
-    assert "Object.keys(response.permissions||{}).length!==3" in issuer
-    assert "Object.entries(permissions).some(([k,v])=>response.permissions[k]!==v)" in issuer
+    assert permissions=={'contents':'read','metadata':'read','pull_requests':'write'}
+    assert 'repositories: ${{ steps.noema_credential.outputs.repository }}' in step

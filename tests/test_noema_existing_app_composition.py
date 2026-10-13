@@ -8,20 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'scripts/ci/noema_existing_app_issuer.cjs'
 
 
-def test_workflow_uses_existing_secret_for_both_short_lived_issuer_phases():
-    """No missing JWT-file supplier or token-action output masquerades as issuer."""
+def test_normal_review_uses_existing_two_phase_and_short_lived_app_tokens():
+    """Production review works without an unprovisioned issuer supplier."""
     text=(ROOT/'.github/workflows/noema-review.yml').read_text()
     prepare=text.split('      - name: Prepare Noema model verdict\n',1)[1].split('      - name:',1)[0]
     publish=text.split('      - name: Publish prepared Noema verdict on the exact live head\n',1)[1].split('\n  continue-noema-transport:',1)[0]
-    for phase,block in (('prepare',prepare),('publish',publish)):
-        assert 'node "$GITHUB_WORKSPACE/scripts/ci/noema_existing_app_issuer.cjs"' in block
-        assert '--phase '+phase in block
-        assert 'NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}' in block
-        assert 'NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}' in block
-        assert '--app-jwt-file' not in block
-        assert '--phase-issuance' not in block
-        assert 'python3 -I -B "$GITHUB_WORKSPACE/scripts/ci/premerge_review_tooling.py"' not in block
-    assert text.index('      - name: Revalidate prepared scope before publisher credential refresh') < text.index('      - name: Refresh repository-scoped Noema GitHub App token for publication')
+    assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert '--publish-verdict-file "$verdict_file"' in publish
+    assert 'noema_existing_app_issuer.cjs' not in prepare + publish
+    assert 'premerge_review_tooling.py' not in prepare + publish
+    assert text.index('      - name: Prepare Noema model verdict') < text.index('      - name: Refresh repository-scoped Noema GitHub App token for publication') < text.index('      - name: Publish prepared Noema verdict on the exact live head')
 
 
 def test_existing_app_signing_original_body_controller_and_cleanup(tmp_path):
@@ -268,12 +264,14 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),crypto=require(
     assert result.returncode==0 and result.stdout.strip()=='WAIT_REVOKED','scope revoked during App authentication reached write issuance'
 
 
-def test_prepublication_action_never_mints_unused_write_capability():
-    """Only the original-response issuer may mint the actual publisher grant."""
+def test_publication_action_mints_only_scoped_write_capability():
+    """A fresh App token alone receives the permission needed to publish."""
     text=(ROOT/'.github/workflows/noema-review.yml').read_text()
     refresh=text.split('      - name: Refresh repository-scoped Noema GitHub App token for publication\n',1)[1].split('      - name:',1)[0]
-    assert 'permission-pull-requests: write' not in refresh, 'unused action write token minted before original-response issuer'
-    assert 'permission-pull-requests: read' in refresh
+    assert 'permission-pull-requests: write' in refresh
+    assert 'permission-contents: read' in refresh
+    assert 'permission-metadata: read' in refresh
+    assert 'permission-actions:' not in refresh
 
 
 def test_issuer_main_refuses_unpinned_python_before_executing_it(tmp_path):
