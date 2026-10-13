@@ -1,0 +1,153 @@
+name: PolicyWeave quality
+
+# Fixed consumer only. The caller owns event triggers and concurrency.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NODE_ENV: test
+
+jobs:
+  verify:
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+    services:
+      postgres:
+        image: postgres@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2 # 18.6-alpine3.24
+        env:
+          POSTGRES_DB: policyweave_test
+          POSTGRES_USER: policyweave_ci
+          POSTGRES_PASSWORD: policyweave_ci_password
+        ports:
+          - 5432
+        options: >-
+          --health-cmd "pg_isready -U policyweave_ci -d policyweave_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Validate fixed caller and exact event head before checkout
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          CALLER_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$TARGET_REPOSITORY" != 'ContextualWisdomLab/PolicyWeave' ]; then
+            echo 'Unsupported caller repository.' >&2
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            pull_request)
+              if [ "$PR_HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+                [ "$PR_BASE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+                [ "$PR_STATE" != open ] ||
+                [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+                [ "$CALLER_REF" != "refs/pull/$PR_NUMBER/merge" ] ||
+                [[ ! "$CALLER_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+                [[ ! "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo 'Unsupported pull request source or exact head.' >&2
+                exit 1
+              fi
+              ;;
+            push)
+              case "$CALLER_REF" in
+                refs/heads/main|refs/heads/develop) ;;
+                *) echo 'Unsupported push ref.' >&2; exit 1 ;;
+              esac
+              [[ "$CALLER_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+                echo 'Push SHA is not an exact commit.' >&2
+                exit 1
+              }
+              ;;
+            *) echo 'Unsupported event.' >&2; exit 1 ;;
+          esac
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - name: Checkout exact event head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Require exact checked-out head
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - name: Setup Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install exact lockfile dependencies
+        run: npm ci --include=dev
+      - name: Generate exact-head dependency SBOM
+        run: |
+          mkdir -p dependency-evidence
+          npm sbom --sbom-format cyclonedx > dependency-evidence/policyweave-dependency-sbom.cdx.json
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Build
+        env:
+          NODE_ENV: production
+        run: npm run build
+      - name: Verify PostgreSQL policy revision migration
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "${{ job.services.postgres.ports['5432'] }}"
+          PGUSER: policyweave_ci
+          PGDATABASE: policyweave_test
+          PGPASSWORD: policyweave_ci_password
+        run: sh db/tests/policy_revision_runtime.sh
+      - name: Verify PostgreSQL concurrent policy writers
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "${{ job.services.postgres.ports['5432'] }}"
+          PGUSER: policyweave_ci
+          PGDATABASE: policyweave_test
+          PGPASSWORD: policyweave_ci_password
+        run: sh db/tests/policy_revision_concurrency.sh
+      - name: Verify PostgreSQL policy revision restore
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "${{ job.services.postgres.ports['5432'] }}"
+          PGUSER: policyweave_ci
+          PGDATABASE: policyweave_test
+          PGPASSWORD: policyweave_ci_password
+        run: sh db/tests/policy_revision_restore.sh
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npm run test:e2e
+      - name: Upload exact-head browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: policyweave-browser-evidence
+          path: test-results
+          if-no-files-found: warn
+      - name: Upload exact-head dependency SBOM
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: policyweave-dependency-sbom
+          path: dependency-evidence/policyweave-dependency-sbom.cdx.json
+          if-no-files-found: error
