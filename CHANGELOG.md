@@ -1,3 +1,24 @@
+### Strix report identity rejects colon-suffixed file lookalikes
+
+- The completed-report scope validator no longer treats every colon as proof
+  that a changed path token ended. A distinct Linux filename such as
+  `scripts/ci/strix_quick_gate.sh:backup` now fails closed, including beneath
+  the private Strix scope root, while numeric `path:line` and
+  `path:line:column` evidence remains valid. A sentence period also ends a
+  path token only before a real delimiter, so `strix_quick_gate.sh.:backup`
+  and `strix_quick_gate.sh.@backup` are rejected in both report forms.
+  Focused evidence is 69 tests across the three scope suites with 100%
+  statement and branch coverage for `strix_report_scope.py`; hosted
+  exact-head Checks and qualifying independent review remain required.
+
+### Law CI cleanup rejects symlinked PostgreSQL descendants
+
+- The central law-agent cleanup now refuses symbolic links at every component
+  from the owned scratch root through the PostgreSQL cluster and
+  `postmaster.pid`. Cancellation and normal-exit cleanup therefore retain
+  evidence instead of invoking `pg_ctl` through an untrusted descendant path.
+  Contracts cover all five descendant boundaries in normal and Actions-mode
+  execution. Hosted exact-head Checks and independent review remain required.
 ### Security scanner setup no longer inherits runner-local failures
 
 - Disable `trivy-action`'s binary cache on the heterogeneous `CWL CI isolated`

@@ -366,10 +366,10 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
 
 
 def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
-    """Gateway free-pool scans must not force unsupported provider controls."""
+    """Gateway auto-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -517,7 +517,7 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}" in workflow
 
 
 def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
@@ -556,7 +556,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert 'STRIX_MODEL: auto' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
@@ -624,7 +624,7 @@ def test_sidecar_rebuilds_a_damaged_persistent_venv(tmp_path) -> None:
     re-running ``venv`` over a damaged ``pip`` package leaves it unimportable.
     """
     text = _read(SIDECAR)
-    line = next(l for l in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in l)
+    line = next(candidate for candidate in text.splitlines() if '-m venv --clear "$ORCHESTRATOR_WORK/.venv"' in candidate)
     work = tmp_path / "work"
     site = work / ".venv" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
     env = {"PATH": os.environ["PATH"], "ORCHESTRATOR_WORK": str(work),

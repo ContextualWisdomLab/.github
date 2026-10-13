@@ -326,13 +326,18 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
 
-        # 2026-08-30: orchestrator/auto is no longer a recognized Strix gateway
-        # model (owner decision superseding ADR-0003's auto default) -- the
-        # gate must now reject it rather than resolve it, the same as any
-        # other unrecognized virtual pool.
-        rc, _ = _resolve_api_base(
+        # Literal auto now uses the same pinned origin as the retained legacy
+        # free routes; unrecognized virtual pools still fail closed.
+        rc, api_base = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
-            "orchestrator/auto",
+            "auto",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "auto",
         )
         self.assertEqual(rc, 2)
 
@@ -343,9 +348,10 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_gateway_child_model_preserves_selected_virtual_pool(self) -> None:
-        """LiteLLM qualification must not rewrite the selected free pool."""
+        """LiteLLM qualification preserves auto and standalone legacy free models."""
 
         expected_child_models = {
+            "auto": "openai/auto",
             "orchestrator/free": "openai/orchestrator/free",
             "contextual-orchestrator/orchestrator/free": "openai/orchestrator/free",
         }

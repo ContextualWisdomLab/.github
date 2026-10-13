@@ -847,18 +847,22 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: contextual-orchestrator/orchestrator/free
+          STRIX_MODEL: auto
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
         run: |
           requested_model="$(printf '%s' "$STRIX_MODEL_REQUESTED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$requested_model" in
-            ""|orchestrator/free|contextual-orchestrator/orchestrator/free) ;;
+            ""|auto|orchestrator/auto|contextual-orchestrator/orchestrator/auto) ;;
             *)
-              echo '::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/free.'
+              echo '::error::Strix model overrides must select literal auto; free and direct-provider routes are not admitted.'
               exit 1
               ;;
           esac
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ "$strix_model" != "auto" ]; then
+            echo '::error::Strix primary model must remain literal auto.'
+            exit 1
+          fi
           {
             echo "strix_model=$strix_model"
             echo 'enabled=true'
@@ -884,7 +888,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
-          CONTEXTUAL_ORCHESTRATOR_POOL: free
+          CONTEXTUAL_ORCHESTRATOR_POOL: auto
         run: |
           set -euo pipefail
           report_parent="$GITHUB_WORKSPACE/strix_runs"
@@ -1041,11 +1045,11 @@ jobs:
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$strix_model" in
-            orchestrator/free | contextual-orchestrator/orchestrator/free)
-              printf '%s' 'orchestrator/free' > "$strix_llm_file"
+            auto)
+              printf '%s' 'auto' > "$strix_llm_file"
               ;;
             *)
-              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free.'
+              echo '::error::STRIX_LLM must remain literal auto; free fallback is not admitted.'
               exit 1
               ;;
           esac

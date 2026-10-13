@@ -4,7 +4,6 @@ from tests.test_required_workflow_queue_contract import (
 )
 import base64
 import hashlib
-import http.client
 import io
 import json
 import os
@@ -673,6 +672,7 @@ def make_pr(**overrides):
         "number": 7,
         "title": "Noema",
         "body": "",
+        "author": {"login": "fixture-pr-author"},
         "isDraft": False,
         "state": "OPEN",
         "headRefOid": "head",

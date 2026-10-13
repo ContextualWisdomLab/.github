@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,7 @@ def test_central_dispatch_and_control_jobs_use_dedicated_groups() -> None:
     """Central-only workflows cannot fall back into the general Ubuntu pool."""
     for name, group, jobs in (
         ("codeql-scan-dispatch.yml", "CWL central CodeQL", 3),
-        ("opencode-review-dispatch.yml", "CWL central OpenCode", 3),
+        ("opencode-review-dispatch.yml", "CWL central OpenCode", 2),
         ("agent-mention-router.yml", "CWL central control", 2),
         ("hourly-review-repair.yml", "CWL central control", 1),
     ):
@@ -1328,7 +1327,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
+            "STRIX_MODEL": "auto",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -1337,12 +1336,12 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/free",
+        "strix_model=auto",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
+        "STRIX_MODEL: auto"
         in workflow_text("strix.yml")
     )
     assert (
@@ -1406,15 +1405,15 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     """
     workflow = workflow_text("noema-review.yml")
 
-    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert 'NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || \'\' }}' in workflow
     assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
     assert (
         "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
         in workflow
     )
-    # The review step must prefer the PAT over the exchanged app token.
+    # Non-kcsap consumers retain PAT preference; k-csap is App-only.
     assert (
-        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        "GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token)) || '' }}"
         in workflow
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
@@ -1434,17 +1433,17 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
     assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in workflow
     assert "owner: ContextualWisdomLab" in workflow
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in workflow
-    for permission in (
-        "permission-actions: read",
-        "permission-checks: read",
-        "permission-contents: read",
-        "permission-metadata: read",
-        "permission-pull-requests: write",
-        "permission-security-events: read",
-        "permission-statuses: read",
-        "permission-vulnerability-alerts: read",
-    ):
-        assert permission in workflow
+    prepare = workflow_step(workflow, "Mint repository-scoped Noema GitHub App token")
+    publish = workflow_step(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    for permission in ("permission-contents: read", "permission-metadata: read"):
+        assert permission in prepare and permission in publish
+    assert "permission-pull-requests: read" in prepare
+    assert "permission-pull-requests: read" in publish
+    assert "permission-pull-requests: write" not in publish
+    for permission in ("permission-actions:", "permission-checks:",
+                       "permission-security-events:", "permission-statuses:",
+                       "permission-vulnerability-alerts:"):
+        assert permission not in prepare and permission not in publish
 
 
 def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:

@@ -82,7 +82,7 @@ def test_actual_refreshed_publication_counts_only_as_exact_head_independent_app(
     monkeypatch.setenv("NOEMA_REVIEW_INSTALLATION_ID", "146401636")
     monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", module.REFRESHED_APP_TOKEN_SOURCE)
     live = {"state": "OPEN", "headRefOid": HEAD, "baseRefOid": "b" * 40,
-            "isDraft": False, "reviews": {"nodes": []}}
+            "isDraft": False, "author": {"login": "seonghobae"}, "reviews": {"nodes": []}}
     monkeypatch.setattr(module.gate, "fetch_pr", lambda *_: live)
     captured = []
     monkeypatch.setattr(module.gate, "run", lambda args, stdin=None: captured.append(json.loads(stdin)))
@@ -99,7 +99,9 @@ def test_actual_refreshed_publication_counts_only_as_exact_head_independent_app(
     }
     module._write_envelope(envelope, {"schema_version": 1,
         "repository": "ContextualWisdomLab/example", "pull_request_number": 7,
-        "expected_head": HEAD, "expected_base": "b" * 40, "verdict": verdict})
+        "expected_head": HEAD, "expected_base": "b" * 40,
+        "reviewer_actor": "cwl-noema-review[bot]", "pull_request_author": "seonghobae",
+        "verdict": verdict})
     assert module.publish_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
     assert len(captured) == 1 and captured[0]["commit_id"] == HEAD
     assert captured[0]["event"] == "APPROVE"
