@@ -71,6 +71,16 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                 assert required.issubset(label.lower() for label in labels), (
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
+            elif isinstance(runner, list):
+                # Existing K-CSAP caller-owned, repo-scoped pool; not a global
+                # label-only alternative to the organization group boundary.
+                assert (path.stem, job_id) == ('k-csap-skills-quality', 'quality'), (
+                    path, job_id, 'unsupported repository-scoped selector', runner,
+                )
+                assert all(isinstance(label, str) for label in runner), (path, job_id, runner)
+                assert {label.lower() for label in runner} == {
+                    'self-hosted', 'linux', 'x64', 'k-csap-isolated',
+                }, (path, job_id, 'missing or unexpected repository-scoped labels', runner)
             else:
                 assert isinstance(runner, str) and 'cwlab-ci-isolated' in runner, (path, job_id, runner)
     assert observed, 'runner selector coverage is empty'
