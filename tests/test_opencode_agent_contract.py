@@ -392,19 +392,23 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
-    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 2
-    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 2
-    assert (
-        workflow.count(
-            'job_context.get("workflow_sha") or github_context.get("workflow_sha")'
-        )
-        == 2
-    )
-    assert workflow.count('workflow_ref.split("@", 1)[1]') == 2
-    assert (
-        workflow.count("Trusted OpenCode workflow ref resolved to an invalid value.")
-        == 2
-    )
+    # The privileged review job retains its existing resolver. Coverage uses
+    # only the workflow identity and must not inherit the token-bearing context.
+    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 1
+    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 1
+    assert workflow.count(
+        'job_context.get("workflow_sha") or github_context.get("workflow_sha")'
+    ) == 1
+    assert workflow.count('workflow_ref.split("@", 1)[1]') == 1
+    assert workflow.count("Trusted OpenCode workflow ref resolved to an invalid value.") == 1
+    coverage = workflow.split("  coverage-evidence:", 1)[1].split(
+        "      - name: Materialize trusted OpenCode coverage contract without a repository token", 1
+    )[0]
+    assert "TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}" in coverage
+    assert "TRUSTED_WORKFLOW_REF: ${{ github.workflow_ref }}" in coverage
+    assert 're.fullmatch(r"[0-9a-f]{40}", trusted_ref)' in coverage
+    assert "github.event.client_payload" not in coverage
+    assert 'trusted_ref = "main"' not in coverage
 
 
 def test_required_workflow_validates_archive_members_before_extraction():

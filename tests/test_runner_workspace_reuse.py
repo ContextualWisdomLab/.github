@@ -18,6 +18,9 @@ def test_anonymous_checkout_cleans_only_its_current_workspace(tmp_path, linked_w
     source.mkdir()
     subprocess.run(['git', 'init', '-q', str(source)], check=True)
     (source / 'current.txt').write_text('trusted source\n')
+    helper_path = source / 'scripts/ci/materialize_public_review_source.py'
+    helper_path.parent.mkdir(parents=True)
+    helper_path.write_bytes((ROOT / 'scripts/ci/materialize_public_review_source.py').read_bytes())
     subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
     subprocess.run(['git', '-C', str(source), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'], check=True)
     sha = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
@@ -40,9 +43,18 @@ def test_anonymous_checkout_cleans_only_its_current_workspace(tmp_path, linked_w
         hook.write_text('#!/bin/sh\ntouch "' + str(outside / 'hook-ran') + '"\n')
         hook.chmod(0o755)
     script = _extract_run_block((ROOT / '.github/workflows/opencode-review-dispatch.yml').read_text(), 'Materialize trusted OpenCode coverage contract without a repository token')
-    # Redirect only the fixed public remote to a real local Git fixture.
-    script = script.replace('https://github.com/ContextualWisdomLab/.github.git', str(source))
-    env = {**os.environ, 'GITHUB_WORKSPACE': str(workspace), 'RUNNER_WORKSPACE': str(parent), 'TRUSTED_SOURCE_REF': sha}
+    # Redirect only the fixed public remote; permit file transport solely in this fixture.
+    remote = 'https://github.com/ContextualWisdomLab/.github.git'
+    assert script.count(remote) == 1
+    assert script.count('"protocol.https.allow=always"') == 1
+    script = script.replace(remote, str(source)).replace(
+        '"protocol.https.allow=always"',
+        '"protocol.https.allow=always", "protocol.file.allow=always"',
+    )
+    runner_temp = tmp_path / 'runner-temp'
+    runner_temp.mkdir(mode=0o700)
+    env = {**os.environ, 'GITHUB_WORKSPACE': str(workspace), 'RUNNER_WORKSPACE': str(parent),
+           'RUNNER_TEMP': str(runner_temp), 'TRUSTED_SOURCE_REF': sha}
     result = subprocess.run(['bash'], input=script, text=True, cwd=workspace, env=env, capture_output=True)
     assert marker.read_text() == 'keep\n'
     assert not (outside / 'hook-ran').exists()
