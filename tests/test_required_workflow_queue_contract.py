@@ -1327,7 +1327,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
+            "STRIX_MODEL": "auto",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -1336,12 +1336,12 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/free",
+        "strix_model=auto",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
+        "STRIX_MODEL: auto"
         in workflow_text("strix.yml")
     )
     assert (
@@ -1433,17 +1433,17 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
     assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in workflow
     assert "owner: ContextualWisdomLab" in workflow
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in workflow
-    for permission in (
-        "permission-actions: read",
-        "permission-checks: read",
-        "permission-contents: read",
-        "permission-metadata: read",
-        "permission-pull-requests: write",
-        "permission-security-events: read",
-        "permission-statuses: read",
-        "permission-vulnerability-alerts: read",
-    ):
-        assert permission in workflow
+    prepare = workflow_step(workflow, "Mint repository-scoped Noema GitHub App token")
+    publish = workflow_step(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    for permission in ("permission-contents: read", "permission-metadata: read"):
+        assert permission in prepare and permission in publish
+    assert "permission-pull-requests: read" in prepare
+    assert "permission-pull-requests: read" in publish
+    assert "permission-pull-requests: write" not in publish
+    for permission in ("permission-actions:", "permission-checks:",
+                       "permission-security-events:", "permission-statuses:",
+                       "permission-vulnerability-alerts:"):
+        assert permission not in prepare and permission not in publish
 
 
 def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:

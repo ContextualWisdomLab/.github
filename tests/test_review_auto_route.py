@@ -16,6 +16,66 @@ ROOT = Path(__file__).resolve().parents[1]
 SIDECAR = ROOT / 'scripts/ci/contextual_orchestrator_review_sidecar.sh'
 
 
+def _strix_model_steps(source, root, requested):
+    """Execute only the two real model-selection shells without model calls."""
+    import textwrap
+
+    gate = source.split('      - name: Gate Strix secrets\n', 1)[1].split('      - name:', 1)[0]
+    default = re.search(r'^          STRIX_MODEL: (\S+)$', gate, re.M)
+    assert default is not None
+    output = root / 'output'
+    result = subprocess.run(
+        [shutil.which('bash'), '-eu', '-c', textwrap.dedent(gate.split('        run: |\n', 1)[1])],
+        env={'PATH': os.environ['PATH'], 'STRIX_MODEL': default[1],
+             'STRIX_MODEL_REQUESTED': requested, 'GITHUB_OUTPUT': str(output)},
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode:
+        return result.returncode, None, None
+    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    primary = values['strix_model']
+    prepare = source.split('      - name: Prepare Strix model input file\n', 1)[1].split('      - name:', 1)[0]
+    result = subprocess.run(
+        [shutil.which('bash'), '-eu', '-c', textwrap.dedent(prepare.split('        run: |\n', 1)[1])],
+        env={'PATH': os.environ['PATH'], 'STRIX_MODEL': primary,
+             'RUNNER_TEMP': str(root), 'GITHUB_ENV': str(root / 'env')},
+        capture_output=True, text=True, timeout=5,
+    )
+    return result.returncode, primary, (root / 'strix_llm.txt').read_text() if not result.returncode else None
+
+
+def _require_exact_strix_auto(result):
+    """Neither primary output nor scanner input may fall back to free."""
+    assert result == (0, 'auto', 'auto'), result
+
+
+@pytest.mark.parametrize('requested', ['', 'auto', 'orchestrator/auto', 'contextual-orchestrator/orchestrator/auto'])
+def test_strix_primary_and_scanner_input_are_literal_auto(requested, tmp_path):
+    source = (ROOT / '.github/workflows/strix.yml').read_text()
+    _require_exact_strix_auto(_strix_model_steps(source, tmp_path, requested))
+
+
+@pytest.mark.parametrize('requested', ['free', 'orchestrator/free', 'contextual-orchestrator/orchestrator/free', 'external/unsafe'])
+def test_strix_rejects_free_and_direct_override(requested, tmp_path):
+    source = (ROOT / '.github/workflows/strix.yml').read_text()
+    assert _strix_model_steps(source, tmp_path, requested)[0] != 0
+
+
+@pytest.mark.parametrize('position', ['primary', 'scanner'])
+def test_strix_auto_oracle_rejects_free_fallback(position, tmp_path):
+    """Run an otherwise-valid source with one actual output changed to free."""
+    source = (ROOT / '.github/workflows/strix.yml').read_text()
+    if position == 'primary':
+        before, after = 'echo "strix_model=$strix_model"', 'echo "strix_model=free"'
+    else:
+        before, after = "printf '%s' 'auto' > \"$strix_llm_file\"", "printf '%s' 'free' > \"$strix_llm_file\""
+    assert source.count(before) == 1
+    mutated = source.replace(before, after, 1)
+    result = _strix_model_steps(mutated, tmp_path, '')
+    with pytest.raises(AssertionError):
+        _require_exact_strix_auto(result)
+
+
 def test_sidecar_accepts_auto_with_zero_cost_fence():
     text = SIDECAR.read_text()
     start = text.index('orchestrator_pool=')

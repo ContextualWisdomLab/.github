@@ -749,7 +749,7 @@ jobs:
               changed_basename="${changed_path##*/}"
               case "$changed_basename" in
                 *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
-                setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
+                setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
                 requirements.lock|requirements*.txt|requirements*.in|\
                 environment.yml|environment.yaml)
                   python_coverage_required=1
@@ -978,6 +978,9 @@ jobs:
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
           COPY base-rust-dependencies /opt/base-rust-dependencies
+          # Crate archives keep modes such as 0640 through COPY, so make the base
+          # Rust dependency tree readable by the unprivileged coverage sandbox UID.
+          RUN chmod -R a+rX /opt/base-rust-dependencies
           DOCKERFILE
             # Debian's rustc lags the MSRV of pinned repositories (fast-mlsirm pins
             # 1.97.1; Debian ships 1.85), so a base-pinned repository gets that exact
@@ -1118,9 +1121,11 @@ jobs:
           }
 
           append_command() {
-            printf '$ ' >>"$summary_file"
-            printf '%q ' "$@" >>"$summary_file"
-            printf '\n' >>"$summary_file"
+            {
+              printf '$ '
+              printf '%q ' "$@"
+              printf '\n'
+            } >>"$summary_file"
           }
 
           emit_captured_log() {
@@ -1408,13 +1413,13 @@ jobs:
             project_is_maturin_project "$project_dir" || return 0
             run_and_capture "Offline PyO3/maturin extension build (${project_dir})" \
               env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 \
-              bash -c 'set -eu
-                cd "$1"
-                dist_dir="$(mktemp -d)"
-                python3 -m maturin build --offline --release -o "$dist_dir"
-                python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
-                python3 "$2" "$dist_dir"/*.whl .
-                rm -rf "$dist_dir"' bash "$project_dir" "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
+              bash -c "set -eu
+                cd \"\$1\"
+                dist_dir=\"\$(mktemp -d)\"
+                python3 -m maturin build --offline --release -o \"\$dist_dir\"
+                python3 -m pip install --user --no-index --no-deps --force-reinstall \"\$dist_dir\"/*.whl
+                python3 \"\$2\" \"\$dist_dir\"/*.whl .
+                rm -rf \"\$dist_dir\"" bash "$project_dir" "${GITHUB_WORKSPACE}/scripts/ci/place_maturin_extension.py"
           }
 
           run_python_test_coverage() {
@@ -1433,14 +1438,14 @@ jobs:
                 done <<<"$configured_commands_json"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c "cd \"\$1\" && PYTHONPATH=\"\$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing" bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c "PYTHONPATH=\"\$([ -d src ] && printf src:. || printf .)\" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing"
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -1591,7 +1596,7 @@ jobs:
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
                 run_and_capture "Python docstring coverage (${project_dir})" \
-                  bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
+                  bash -c "cd \"\$1\" && PYTHONPATH=\"\$([ -d src ] && printf src:. || printf .)\" python3 -m pytest tests/test_docstrings.py" bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
             [ "$measured_projects" -eq 1 ]
@@ -1959,21 +1964,21 @@ jobs:
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" corepack npm run build --workspace "$package_name"
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack npm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c "cd \"\$1\" && corepack npm run build" bash "$package_dir"
                 fi
                 ;;
               pnpm)
                 if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" corepack pnpm --filter "$package_name" run build
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack pnpm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c "cd \"\$1\" && corepack pnpm run build" bash "$package_dir"
                 fi
                 ;;
               yarn)
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" yarn workspace "$package_name" build
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && yarn build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c "cd \"\$1\" && yarn build" bash "$package_dir"
                 fi
                 ;;
             esac
@@ -2089,8 +2094,13 @@ jobs:
             # coverage command still runs and reports any uncovered GPU lines
             # exactly as before, so Rust repositories without GPU code are
             # unaffected and no gate is weakened.
-            if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
-              lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
+            local lvp_icd="" candidate_icd
+            for candidate_icd in /usr/share/vulkan/icd.d/lvp_icd*.json; do
+              [ -f "$candidate_icd" ] || continue
+              lvp_icd="$candidate_icd"
+              break
+            done
+            if [ -n "$lvp_icd" ]; then
               export VK_ICD_FILENAMES="$lvp_icd"
               export VK_DRIVER_FILES="$lvp_icd"
               export WGPU_BACKEND=vulkan
@@ -3320,13 +3330,13 @@ jobs:
               language_signal="Match changed prose"
             fi
 
-            printf -- '- Preferred review language: `%s`\n' "$language_signal"
+            printf -- "- Preferred review language: \`%s\`\\n" "$language_signal"
             printf -- '- Rule: write human-readable review prose in the preferred language; keep file paths, identifiers, logs, quoted source, error text, and protocol literals unchanged.\n'
-            printf -- '- PR title: `%s`\n' "$(printf '%s' "$title" | tr '\r\n`' '   ' | cut -c 1-240)"
+            printf -- "- PR title: \`%s\`\\n" "$(printf '%s' "$title" | tr '\r\n`' '   ' | cut -c 1-240)"
             if [ -n "$body" ]; then
-              printf -- '- PR body excerpt: `%s`\n' "$(printf '%s' "$body" | tr '\r\n`' '   ' | cut -c 1-360)"
+              printf -- "- PR body excerpt: \`%s\`\\n" "$(printf '%s' "$body" | tr '\r\n`' '   ' | cut -c 1-360)"
             else
-              printf -- '- PR body excerpt: `[empty]`\n'
+              printf -- "- PR body excerpt: \`[empty]\`\\n"
             fi
           }
 
@@ -3605,7 +3615,7 @@ jobs:
             shift
 
             if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff "$@"; then
-              printf 'Unable to collect %s from `%s` to `%s`; continue review from available changed-file evidence and direct file inspection.\n' "$description" "$PR_MERGE_BASE" "$PR_HEAD_SHA"
+              printf "Unable to collect %s from \`%s\` to \`%s\`; continue review from available changed-file evidence and direct file inspection.\\n" "$description" "$PR_MERGE_BASE" "$PR_HEAD_SHA"
             fi
           }
 
@@ -3615,13 +3625,13 @@ jobs:
             printf -- "- Base SHA: \`%s\`\n" "$PR_BASE_SHA"
             printf -- "- Head SHA: \`%s\`\n\n" "$PR_HEAD_SHA"
             if ! PR_MERGE_BASE="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"; then
-              printf 'Merge-base discovery failed for `%s` and `%s`; falling back to base SHA for bounded diff evidence.\n\n' "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              printf "Merge-base discovery failed for \`%s\` and \`%s\`; falling back to base SHA for bounded diff evidence.\\n\\n" "$PR_BASE_SHA" "$PR_HEAD_SHA"
               PR_MERGE_BASE="$PR_BASE_SHA"
             fi
             printf -- "- Merge base SHA: \`%s\`\n\n" "$PR_MERGE_BASE"
             printf '## Current-head authority order\n\n'
             printf 'Treat current-head sections in this file as authoritative for this run: Other unresolved review thread evidence, Failed GitHub Check evidence, Coverage execution evidence, Changed files, and Focused changed hunks.\n'
-            printf 'All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA `%s`.\n\n' "$PR_HEAD_SHA"
+            printf "All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA \`%s\`.\\n\\n" "$PR_HEAD_SHA"
             if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" |
               awk 'NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }' >"$OPENCODE_CHANGED_FILES_FILE"; then
               printf 'Changed-file discovery failed; downstream review must inspect the PR head directly.\n\n'
@@ -4652,27 +4662,27 @@ jobs:
               "$@"
           }
 
-          self_check_filter='
+          self_check_filter="
             def self_check:
-              (.name // "") as $n
-              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation", "scan-pr-queue"] | index($n);
+              (.name // \"\") as \$n
+              | [\"opencode-review\", \"coverage-evidence\", \"coverage-source-tree\", \"required-workflow-bootstrap\", \"metadata-only gate evaluation\", \"scan-pr-queue\"] | index(\$n);
             def latest_peer_checks:
               [
                 (.check_runs // [])[]
                 | select(self_check | not)
                 | . + {
                     checkedAt: (
-                      if ((.started_at // "") != "") then .started_at
-                      else (.completed_at // "")
+                      if ((.started_at // \"\") != \"\") then .started_at
+                      else (.completed_at // \"\")
                       end
                     )
                   }
               ]
-              | sort_by(.app.slug // "", .name // "", .checkedAt // "", .id // 0)
-              | group_by([.app.slug // "", .name // ""])
+              | sort_by(.app.slug // \"\", .name // \"\", .checkedAt // \"\", .id // 0)
+              | group_by([.app.slug // \"\", .name // \"\"])
               | map(last)
               | .[];
-          '
+          "
 
           check_runs_file="$(mktemp)"
           pending_checks_file="$(mktemp)"
@@ -5325,7 +5335,7 @@ jobs:
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 printf '## OpenCode %s review body\n\n' "$event"
-                printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+                printf -- "- Head SHA: \`%s\`\\n" "$HEAD_SHA"
                 printf -- '- Workflow run: %s\n' "$RUN_ID"
                 printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
                 printf '%s\n' "$body"
@@ -5679,7 +5689,7 @@ jobs:
               printf '## Summary\n\n'
               printf '%s\n\n' "$summary"
               printf '## Adversarial validation\n\n'
-              printf '```json\n%s\n```\n\n' "$adversarial_evidence"
+              printf "\`\`\`json\\n%s\\n\`\`\`\\n\\n" "$adversarial_evidence"
               printf -- '- Result: REQUEST_CHANGES\n'
               printf -- '- Reason: %s\n\n' "$reason"
               printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
@@ -6500,33 +6510,33 @@ jobs:
 
             case "$mode" in
               failed)
-                jq_filter='
+                jq_filter="
                   [.[].check_runs[]?]
-                  | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
-                  | group_by(.name // "")
+                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))
+                  | group_by(.name // \"\")
                   | map(last)
                   | .[]?
-                  | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
-                  | select((.status // "") == "completed")
-                  | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-                  | select((.name // "") != "scan-pr-queue")
-                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
-                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
-                  | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
-                '
+                  | select(((.name // \"\" | ascii_downcase) as \$n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index(\$n)) | not)
+                  | select((.status // \"\") == \"completed\")
+                  | select((.conclusion // \"\" | ascii_upcase) as \$c | [\"FAILURE\",\"TIMED_OUT\",\"ACTION_REQUIRED\",\"CANCELLED\",\"STARTUP_FAILURE\"] | index(\$c))
+                  | select((.name // \"\") != \"scan-pr-queue\")
+                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and ((.name // \"\") | contains(\"\$\" + \"{{\"))) | not)
+                  | select(((.conclusion // \"\" | ascii_downcase) == \"cancelled\" and (.name // \"\") == \"noema-review\") | not)
+                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.conclusion // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)
+                "
                 ;;
               pending)
-                jq_filter='
+                jq_filter="
                   [.[].check_runs[]?]
-                  | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
-                  | group_by(.name // "")
+                  | sort_by((.started_at // .completed_at // .created_at // \"\"), (.id // 0))
+                  | group_by(.name // \"\")
                   | map(last)
                   | .[]?
-                  | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
-                  | select((.name // "") != "scan-pr-queue")
-                  | select((.status // "") != "completed")
-                  | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.status // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
-                '
+                  | select(((.name // \"\" | ascii_downcase) as \$n | [\"opencode-review\",\"coverage-evidence\",\"metadata-only gate evaluation\"] | index(\$n)) | not)
+                  | select((.name // \"\") != \"scan-pr-queue\")
+                  | select((.status // \"\") != \"completed\")
+                  | \"- \" + (if (.name // \"\") == \"strix\" then \"Strix Security Scan/strix\" else ((.name // \"check\") + \" check run\") end) + \": \" + (.status // \"unknown\") + (if (.details_url // .html_url // \"\") != \"\" then \" (\" + (.details_url // .html_url) + \")\" else \"\" end)
+                "
                 ;;
               *)
                 return 1
@@ -6584,10 +6594,10 @@ jobs:
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
-              -f query='
-                query($owner:String!,$name:String!,$number:Int!) {
-                  repository(owner:$owner,name:$name) {
-                    pullRequest(number:$number) {
+              -f query="
+                query(\$owner:String!,\$name:String!,\$number:Int!) {
+                  repository(owner:\$owner,name:\$name) {
+                    pullRequest(number:\$number) {
                       statusCheckRollup {
                         contexts(first: 100) {
                           nodes {
@@ -6612,7 +6622,7 @@ jobs:
                     }
                   }
                 }
-              ' \
+              " \
               --jq '
                 (.data.repository.pullRequest.statusCheckRollup.contexts.nodes // [])
                 | map(
@@ -6737,7 +6747,7 @@ jobs:
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
-              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id}}}' \
+              -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){id}}}" \
               --jq '.data.repository.pullRequest.id // empty')"; then
               echo "GitHub Checks statusCheckRollup PR id lookup failed; falling back to current-head REST check-runs." >&2
               pr_node_id=""
@@ -7181,21 +7191,21 @@ jobs:
                 -f "ref=refs/heads/${head_ref}" \
                 -f state=open \
                 -F per_page=100 \
-                --jq '
+                --jq "
                   [
                     .[]
                     | {
                         number: (.number // 0),
-                        rule: (.rule.id // .rule.name // "unknown"),
-                        tool: (.tool.name // "code-scanning"),
-                        severity: (.rule.security_severity_level // .rule.severity // "unknown"),
-                        url: (.html_url // "")
+                        rule: (.rule.id // .rule.name // \"unknown\"),
+                        tool: (.tool.name // \"code-scanning\"),
+                        severity: (.rule.security_severity_level // .rule.severity // \"unknown\"),
+                        url: (.html_url // \"\")
                       }
-                    | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
+                    | select((.severity | ascii_downcase) as \$s | [\"medium\",\"high\",\"critical\",\"warning\",\"error\"] | index(\$s))
                   ]
                   | .[]
-                  | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
-                ' >"$output_file" 2>"$lookup_error_file"; then
+                  | \"- \" + .tool + \"/\" + .rule + \": \" + .severity + \" alert #\" + (.number | tostring) + (if .url != \"\" then \" (\" + .url + \")\" else \"\" end)
+                " >"$output_file" 2>"$lookup_error_file"; then
               sed 's/^/gh: /' "$lookup_error_file" >&2 || true
               rm -f "$lookup_error_file"
               return 1
@@ -7243,7 +7253,7 @@ jobs:
                 printf 'OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n\n'
                 printf '## Findings\n\n'
                 printf '### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n'
-                printf -- '- Problem: Failed same-head checks remain for `%s`.\n' "$HEAD_SHA"
+                printf -- "- Problem: Failed same-head checks remain for \`%s\`.\\n" "$HEAD_SHA"
                 printf -- '- Root cause: The model-unavailable evidence fallback is allowed only when peer GitHub Checks are complete and clean.\n'
                 printf -- '- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n'
                 printf -- '- Regression test: Keep the model-unavailable fallback gated on an empty failed-check rollup.\n\n'
@@ -7299,11 +7309,11 @@ jobs:
               if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                 {
                   printf '## OpenCode required check satisfied by existing same-head approval\n\n'
-                  printf -- '- Result: `EXISTING_CURRENT_HEAD_APPROVAL`\n'
-                  printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+                  printf -- "- Result: \`EXISTING_CURRENT_HEAD_APPROVAL\`\\n"
+                  printf -- "- Head SHA: \`%s\`\\n" "$HEAD_SHA"
                   printf -- '- Workflow run: %s\n' "$RUN_ID"
                   printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-                  printf -- '- Model-pool outcome: `%s`\n' "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
+                  printf -- "- Model-pool outcome: \`%s\`\\n" "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
                   printf -- '- Reason: a prior real-model OpenCode APPROVED review with passed structured adversarial probes already targets this exact head, and the fallback rechecked coverage, peer checks, code-scanning alerts, and unresolved review threads before accepting it.\n'
                   printf -- '- Review state: unchanged; no duplicate APPROVE review was posted from model-output-unavailable evidence.\n\n'
                 } >>"$GITHUB_STEP_SUMMARY"

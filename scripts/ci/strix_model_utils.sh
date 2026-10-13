@@ -77,6 +77,16 @@ normalize_model() {
 		return 0
 	fi
 
+	# Literal auto is a gateway request, never a guessed Vertex/direct model.
+	if [ "$model" = "auto" ]; then
+		if [ "${DEFAULT_PROVIDER:-}" != "contextual_orchestrator" ]; then
+			echo "ERROR: literal auto requires the explicit contextual_orchestrator provider." >&2
+			return 2
+		fi
+		printf '%s\n' 'auto'
+		return 0
+	fi
+
 	if is_vertex_resource_path "$model"; then
 		local provider
 		provider="$(sanitize_provider_name "${DEFAULT_PROVIDER:-}")" || {
