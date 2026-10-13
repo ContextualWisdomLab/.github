@@ -573,25 +573,27 @@ jobs:
           if [ "$PR_DRAFT" = "true" ]; then
             echo "Event draft snapshot is stale; checking the verdict for the live ready PR."
           fi
-          reviews="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          reviews_file="$(mktemp)"
           helper="$(mktemp)"
-          trap 'rm -f "$helper"' EXIT
+          trap 'rm -f "$reviews_file" "$helper"' EXIT
+          gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" >"$reviews_file"
           gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode >"$helper"
-          verdict="$(python3 - "$helper" "$reviews" "$HEAD_SHA" <<'PY'
+          verdict="$(python3 - "$helper" "$reviews_file" "$HEAD_SHA" <<'PY'
           import importlib.machinery
           import importlib.util
           import json
           import sys
 
-          helper_path, reviews_json, head_sha = sys.argv[1:]
+          helper_path, reviews_path, head_sha = sys.argv[1:]
           loader = importlib.machinery.SourceFileLoader("trusted_opencode_receipt_gate", helper_path)
           spec = importlib.util.spec_from_loader(loader.name, loader)
           if spec is None or spec.loader is None:
               raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
           gate = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(gate)
-          pages = json.loads(reviews_json)
+          with open(reviews_path, encoding="utf-8") as stream:
+              pages = json.load(stream)
           if not isinstance(pages, list) or not all(
               isinstance(page, list) and all(isinstance(review, dict) for review in page)
               for page in pages
