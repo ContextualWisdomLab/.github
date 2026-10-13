@@ -422,6 +422,7 @@ def _run_fail_closed_step(
             "HEAD_SHA": head_sha,
             "PR_ACTION": pr_action,
             "PR_DRAFT": pr_draft,
+            "WORKFLOW_SHA": "6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3",
             "LIVE_PR_JSON": json.dumps(
                 {
                     "draft": pr_draft.lower() == "true",

@@ -105,6 +105,8 @@ fi
 
     assert result.returncode == 1
     assert "will rerun this failed job" in result.stdout
+    assert "No current-head formal OpenCode verdict:" in result.stderr
+    assert "Current-head OpenCode verdict:" not in result.stdout
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "api repos/owner/repo/pulls/7",
         "api --paginate --slurp repos/owner/repo/pulls/7/reviews?per_page=100",
