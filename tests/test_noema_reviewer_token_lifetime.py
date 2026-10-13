@@ -33,7 +33,7 @@ def test_noema_remints_repository_scoped_app_token_after_model_before_publicatio
     assert "--publish-verdict-file" in publish
     assert '--expected-head "$EXPECTED_HEAD_SHA"' in prepare
     assert '--expected-head "$EXPECTED_HEAD_SHA"' in publish
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in prepare
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in prepare
     assert "steps.noema_prepare.outputs.prepared == 'true'" in refresh
     assert "steps.noema_credential.outputs.source == 'github-app'" in refresh
     assert "steps.noema_prepare.outputs.prepared == 'true'" in publish
@@ -49,7 +49,7 @@ def test_publication_step_uses_fresh_app_token_without_authority_fallback() -> N
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in refresh
     assert "permission-pull-requests: write" in refresh
     assert "permission-contents: read" in refresh
-    assert "permission-actions: read" in refresh
+    assert "permission-actions:" not in refresh
     assert "steps.noema_github_app_publication_token.outputs.token" in publish
     assert "steps.noema_github_app_token.outputs.token" not in publish
     assert "secrets.NOEMA_REVIEW_TOKEN" in publish

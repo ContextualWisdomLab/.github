@@ -263,12 +263,13 @@ def test_null_latest_analysis_is_not_coverage() -> None:
 
 
 def test_audit_codeql_coverage_defaults_now_to_current_time(monkeypatch) -> None:
-    class Clock(datetime):
+    class FixedClock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return NOW.astimezone(tz)
+            assert tz is timezone.utc
+            return NOW
 
-    monkeypatch.setattr(audit, "datetime", Clock)
+    monkeypatch.setattr(audit, "datetime", FixedClock)
     repositories = [covered_by_recent_analysis("DefaultNowRepo", days_ago=0)]
 
     assert audit.audit_codeql_coverage(repositories) == []
@@ -306,12 +307,13 @@ def test_main_fail_path_reports_gaps_from_stdin(monkeypatch, capsys) -> None:
 
 
 def test_main_pass_path_reports_from_file_arg(tmp_path, capsys, monkeypatch) -> None:
-    class Clock(datetime):
+    class FixedClock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return NOW.astimezone(tz)
+            assert tz is timezone.utc
+            return NOW
 
-    monkeypatch.setattr(audit, "datetime", Clock)
+    monkeypatch.setattr(audit, "datetime", FixedClock)
     payload_path = tmp_path / "repositories.json"
     payload_path.write_text(
         json.dumps([covered_by_default_setup("ELUNVERA"), covered_by_recent_analysis("Orgmetra")]),

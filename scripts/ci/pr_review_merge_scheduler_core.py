@@ -2186,9 +2186,10 @@ def is_bot_review_author(review: dict[str, Any]) -> bool:
     ``login`` (e.g. ``dependabot[bot]``), but GitHub's GraphQL API can
     return the bare account name for that same actor (e.g. ``dependabot``)
     while exposing ``__typename: "Bot"`` on the ``author`` field instead of
-    the suffix. Checking both preserves the API actor classification across
-    both surfaces; ``rest_review_node`` carries REST ``user.type`` into
-    ``__typename`` when present, retaining suffix compatibility when absent.
+    the suffix. Checking both keeps bot exclusion correct regardless of
+    which API surface -- and which suffix convention -- produced the
+    review node; ``rest_review_node`` never sets ``__typename``, so REST
+    reviews continue to rely solely on the login suffix.
     """
     if review_author_login(review).endswith("[bot]"):
         return True
@@ -2251,76 +2252,79 @@ def has_current_head_approval(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "APPROVED")
 
 
-def is_noema_app_review(review: dict[str, Any]) -> bool:
-    """Accept only the canonical Noema App identity authenticated by GitHub."""
-    actor = review.get("author") or {}
-    login = review_author_login(review)
-    return (
-        login in {"cwl-noema-review", "cwl-noema-review[bot]"}
-        and actor.get("__typename") in {None, "Bot"}
-        and (actor.get("__typename") == "Bot" or login.endswith("[bot]"))
-    )
+def is_substantive_noema_app_approval(review: dict[str, Any], head: str) -> bool:
+    """Recognize only the known second-review App's actual publisher contract.
 
-
-def has_noema_app_approval_receipt(review: dict[str, Any], head: str) -> bool:
-    """Validate the publisher's App/head receipt, not broader merge authority."""
-    if not re.fullmatch(r"[0-9a-f]{40}", head) or (review.get("commit") or {}).get("oid") != head:
+    API author and commit identity remain authoritative. Body markers alone
+    cannot authorize an arbitrary bot, a personal-token fallback or OpenCode.
+    """
+    if (
+        review_author_login(review) not in {"cwl-noema-review", "cwl-noema-review[bot]"}
+        or (review.get("author") or {}).get("__typename") not in {None, "Bot"}
+        or not is_bot_review_author(review)
+        or (review.get("commit") or {}).get("oid") != head
+        or not re.fullmatch(r"[0-9a-f]{40}", head)
+    ):
         return False
     body = str(review.get("body") or "")
     footer_marker = "<!-- noema-review-gate-footer -->"
     if body.count(footer_marker) != 1:
         return False
-    _, _, footer = body.partition(footer_marker)
-    receipt = (
-        r"\n- Result: APPROVE\n- Head SHA: `" + re.escape(head)
-        + r"`\n- Reviewer credential: `(?:noema-review-github-app(?:-refresh)?|noema-review-app-oidc)`"
-        + r"\n- Actor: `cwl-noema-review\[bot\]`\n\n"
-        + r"<!-- noema-review-gate head_sha=" + re.escape(head) + r" decision=approve -->"
-    )
-    if re.fullmatch(receipt, footer) is None:
+    evidence, footer = body.split(footer_marker, 1)
+    expected_footers = {
+        (
+            f"\n- Result: APPROVE\n- Head SHA: `{head}`\n"
+            f"- Reviewer credential: `{source}`\n"
+            "- Actor: `cwl-noema-review[bot]`\n\n"
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->"
+        )
+        for source in ("noema-review-github-app", "noema-review-github-app-refresh")
+    }
+    if footer not in expected_footers:
         return False
-    # The authenticated publisher validates model substance before posting;
-    # human-facing headings are not an additional authorization contract.
-    return True
+    return bool(
+        evidence.startswith("## Noema LLM review\n")
+        and re.search(
+            r"### Reviewed changed lines\n- `[^`\n]+:[1-9][0-9]* \((?:LEFT|RIGHT)\)`: [^\s][^\n]*",
+            evidence,
+        )
+        and re.search(
+            r"### Adversarial validation\n- `[^`\n]+:[1-9][0-9]* \((?:LEFT|RIGHT)\)` "
+            r"falsified: [^\s][^\n]* — [^\s][^\n]*",
+            evidence,
+        )
+        and re.search(r"(?m)^- Residual risk: [^\s][^\n]*$", evidence)
+    )
 
 
 def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
-    """Return whether an eligible reviewer's latest exact-head policy state approves."""
-    author = ((pr.get("author") or {}).get("login") or "").lower()
+    """Require a non-author human or trusted, substantive second-review App."""
+    author = ((pr.get("author") or {}).get("login") or "").lower().removesuffix("[bot]")
     if not author:
         return False
     seen_reviewers: set[str] = set()
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
-        reviewer = review_author_login(review)
+        reviewer = review_author_login(review).removesuffix("[bot]")
         state = (review.get("state") or "").upper()
-        if reviewer.removesuffix("[bot]") == "cwl-noema-review":
-            if state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
-                continue
-            identity = "cwl-noema-review"
-            if identity in seen_reviewers:
-                continue
-            seen_reviewers.add(identity)
-            if (
-                author.removesuffix("[bot]") != identity
-                and is_noema_app_review(review)
-                and state == "APPROVED"
-                and has_noema_app_approval_receipt(review, str(pr.get("headRefOid") or ""))
-            ):
-                return True
-            continue
         if (
             not reviewer
             or reviewer == author
             or is_automated_opencode_review(review)
             or reviewer == "github-actions"
-            or is_bot_review_author(review)
-            or not review_matches_current_head(review, pr)
+            or (reviewer != "cwl-noema-review" and not review_matches_current_head(review, pr))
             or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
             or reviewer in seen_reviewers
         ):
             continue
+        # Even a later malformed approval must retire that actor's older one.
         seen_reviewers.add(reviewer)
-        if state == "APPROVED":
+        if state == "APPROVED" and (
+            (
+                not is_bot_review_author(review)
+                and reviewer != "cwl-noema-review"
+            )
+            or is_substantive_noema_app_approval(review, str(pr.get("headRefOid") or ""))
+        ):
             return True
     return False
 

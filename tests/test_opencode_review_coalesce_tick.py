@@ -60,8 +60,8 @@ def test_tick_uses_the_admitted_central_self_hosted_group():
     """Trusted schedule metadata work must not consume billing-locked hosted jobs."""
     job = _job_block()
     assert (
-        "    runs-on:\n      group: CWL MCP remediation\n"
-        "      labels: [self-hosted, linux, x64]"
+        "    runs-on:\n      group: CWL CI isolated\n"
+        "      labels: [self-hosted, linux, x64, cwlab-ci-isolated]"
     ) in job
     assert "runs-on: ubuntu" not in job
     assert "pull_request:" not in _workflow_text()

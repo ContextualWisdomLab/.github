@@ -43,7 +43,9 @@ jobs:
     # queue wait between two single-digit-second jobs. See
     # docs/doctoring/actions-capacity-root-cause-20260917.md for the
     # underlying measurement methodology.
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     permissions:
       contents: read
       pull-requests: read
@@ -152,6 +154,10 @@ jobs:
           api_url="${GITHUB_API_URL:-https://api.github.com}"
           mkdir -p "$trusted_source_dir"
           curl -fsSL \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --retry-max-time 30 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
@@ -304,7 +310,9 @@ jobs:
     # gap using the identical classifier. Fails OPEN: an unreadable, empty,
     # or truncated file list reviews everything.
     if: (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')) && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -358,7 +366,9 @@ jobs:
     name: coverage-source-tree
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     steps:
       - run: >-
           echo "PR-head source and coverage execution are delegated to the
@@ -378,7 +388,9 @@ jobs:
     # through coverage-source-tree, so an unadmitted head still skips it.
     needs: [required-workflow-bootstrap]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     steps:
       - run: >-
           echo "This required-workflow job preserves the stable branch-protection
@@ -397,7 +409,9 @@ jobs:
     # directly by this job's own `if:` below, not inherited through that edge.
     needs: [required-workflow-bootstrap, changed-scope]
     if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     permissions:
       contents: read
       pull-requests: read
@@ -517,6 +531,7 @@ jobs:
           PR_ACTION: ${{ github.event.action }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           CHANGED_SCOPE_CODE: ${{ needs.changed-scope.outputs.code }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           if [ "$PR_ACTION" = "closed" ]; then
@@ -558,35 +573,42 @@ jobs:
           if [ "$PR_DRAFT" = "true" ]; then
             echo "Event draft snapshot is stale; checking the verdict for the live ready PR."
           fi
-          reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
-            (add // [])
-            | [
-                .[]
-                | select(
-                    (.user.login // "" | ascii_downcase) as $user
-                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
-                  )
-                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
-              ]
-            | (last // {}) as $review
-            | ($review.body // "" | ascii_downcase) as $body
-            | if $review.state == "CHANGES_REQUESTED" then
-                "CHANGES_REQUESTED"
-              elif $review.state == "APPROVED"
-                and ($body | contains("deterministic current-head evidence") | not)
-                and ($body | contains("deterministic fallback approval") | not)
-                and ($body | contains("model-unavailable evidence fallback") | not)
-                and ($body | contains("did not emit a usable current-head control block") | not)
-                and ($body | contains("scope: `unsupported`") | not)
-                and ($body | contains("model-pool outcome: `unknown`") | not)
-              then
-                "APPROVED"
-              else
-                empty
-              end
-          ')"
+          reviews_file="$(mktemp)"
+          helper="$(mktemp)"
+          trap 'rm -f "$reviews_file" "$helper"' EXIT
+          gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" >"$reviews_file"
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$helper"
+          verdict="$(python3 - "$helper" "$reviews_file" "$HEAD_SHA" <<'PY'
+          import importlib.machinery
+          import importlib.util
+          import json
+          import sys
+
+          helper_path, reviews_path, head_sha = sys.argv[1:]
+          loader = importlib.machinery.SourceFileLoader("trusted_opencode_receipt_gate", helper_path)
+          spec = importlib.util.spec_from_loader(loader.name, loader)
+          if spec is None or spec.loader is None:
+              raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
+          gate = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(gate)
+          with open(reviews_path, encoding="utf-8") as stream:
+              pages = json.load(stream)
+          if not isinstance(pages, list) or not all(
+              isinstance(page, list) and all(isinstance(review, dict) for review in page)
+              for page in pages
+          ):
+              raise ValueError("formal review lookup returned malformed paginated JSON")
+          reviews = [review for page in pages for review in page
+                     if str((review.get("user") or {}).get("login") or "").lower()
+                     in {"opencode-agent", "opencode-agent[bot]"}]
+          receipt, reason = gate.evaluate_receipts(reviews, head_sha, is_draft=False)
+          if receipt is None:
+              print(f"No current-head formal OpenCode verdict: {reason}", file=sys.stderr)
+              raise SystemExit(0)
+          print(receipt["state"])
+          PY
+          )"
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
             exit 1
@@ -607,7 +629,9 @@ jobs:
     # head no longer matches the live one. The target job also revalidates the
     # live PR before dispatch and verdict admission.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
-    runs-on: ${{ github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on:
+      group: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     permissions:
       actions: write
       contents: read
