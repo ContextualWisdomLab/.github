@@ -2672,6 +2672,7 @@ jobs:
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
+          PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ needs.validate-pr-metadata.outputs.is_private }}
         run: |
@@ -2682,6 +2683,7 @@ jobs:
           fi
           python3 -m scripts.ci.personal_review_route \
             --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
+            --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
             --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
             --private-target "$PRIVATE_TARGET"
           echo 'selected=true' >>"$GITHUB_OUTPUT"
@@ -3787,6 +3789,7 @@ jobs:
         env:
           PERSONAL_ROUTE_SELECTED: ${{ steps.personal_route.outputs.selected }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
+          PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ needs.validate-pr-metadata.outputs.is_private }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -4264,6 +4267,7 @@ jobs:
           if [ "${PERSONAL_ROUTE_SELECTED:-}" = 'true' ]; then
             python3 -m scripts.ci.personal_review_route \
               --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
+              --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
               --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
               --private-target "$PRIVATE_TARGET" \
               --opencode-config "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
