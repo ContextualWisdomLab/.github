@@ -1,0 +1,323 @@
+name: psychometrics-commons Runtime CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+  CARGO_LLVM_COV_VERSION: "0.8.6"
+
+jobs:
+  rust-quality:
+    name: Format, lint, test, and rustdoc
+    if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_${{ github.run_id }}_${{ github.run_attempt }}
+          POSTGRES_DB: psychometrics_commons_test
+        ports:
+          - 5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d psychometrics_commons_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+    steps:
+      - name: Validate fixed caller and exact head before checkout
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "$TARGET_REPOSITORY" != 'ContextualWisdomLab/psychometrics-commons' ] ||
+            [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            [ "$SOURCE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REF" != main ] ||
+            [ "$PR_STATE" != open ] || [ "$PR_DRAFT" != false ] ||
+            [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            [ "$GITHUB_REF" != "refs/pull/$PR_NUMBER/merge" ] ||
+            [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Fixed caller or exact pull request head is invalid.' >&2
+            exit 1
+          fi
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Require exact checked-out head
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - name: Configure ephemeral PostgreSQL test connection
+        shell: bash
+        run: |
+          printf 'TEST_DATABASE_URL=host=localhost port=%s user=postgres password=ci_%s_%s dbname=psychometrics_commons_test\n' \
+            "${{ job.services.postgres.ports['5432'] }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+      - name: Check formatting
+        run: cargo +1.97.1 fmt --all -- --check
+      - name: Compile all targets
+        run: cargo +1.97.1 check --locked --all-targets
+      - name: Require committed Cargo lockfile
+        id: cargo_lock_gate
+        run: git diff --exit-code -- Cargo.lock
+      - name: Emit resolved Cargo lock evidence when the lock gate fails
+        if: failure() && steps.cargo_lock_gate.outcome == 'failure'
+        run: |
+          printf 'RESOLVED_CARGO_LOCK_BASE64='
+          base64 -w0 Cargo.lock
+          printf '\n'
+      - name: Preserve resolved lockfile when the lock gate fails
+        if: failure() && steps.cargo_lock_gate.outcome == 'failure'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: resolved-cargo-lock-${{ github.event.pull_request.head.sha }}
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
+      - name: Run Clippy
+        run: cargo +1.97.1 clippy --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: cargo +1.97.1 test --all-targets
+      - name: Run coverage-contract regression tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build warning-free documentation
+        run: cargo +1.97.1 doc --no-deps
+
+  line-coverage:
+    name: Production line coverage
+    if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_${{ github.run_id }}_${{ github.run_attempt }}
+          POSTGRES_DB: psychometrics_commons_test
+        ports:
+          - 5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d psychometrics_commons_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+    steps:
+      - name: Validate fixed caller and exact head before checkout
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "$TARGET_REPOSITORY" != 'ContextualWisdomLab/psychometrics-commons' ] ||
+            [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            [ "$SOURCE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REF" != main ] ||
+            [ "$PR_STATE" != open ] || [ "$PR_DRAFT" != false ] ||
+            [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            [ "$GITHUB_REF" != "refs/pull/$PR_NUMBER/merge" ] ||
+            [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Fixed caller or exact pull request head is invalid.' >&2
+            exit 1
+          fi
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Require exact checked-out head
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - name: Configure ephemeral PostgreSQL test connection
+        shell: bash
+        run: |
+          printf 'TEST_DATABASE_URL=host=localhost port=%s user=postgres password=ci_%s_%s dbname=psychometrics_commons_test\n' \
+            "${{ job.services.postgres.ports['5432'] }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Install pinned Rust toolchain with LLVM tools
+        run: rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
+      - name: Install pinned cargo-llvm-cov
+        run: cargo +1.97.1 install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Verify cargo-llvm-cov version
+        run: cargo +1.97.1 llvm-cov --version | grep -F "$CARGO_LLVM_COV_VERSION"
+      - name: Generate line coverage
+        run: cargo +1.97.1 llvm-cov --json --summary-only --output-path coverage.json
+      - name: Enforce complete line coverage
+        run: python3 scripts/check_coverage.py coverage.json --kind lines
+      - name: Diagnose missing line coverage
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("coverage.json").read_text(encoding="utf-8"))
+          entry = payload["data"][0]
+          kind = "lines"
+          for file_entry in entry.get("files", []):
+              summary = file_entry.get("summary", {})
+              metric = summary.get(kind)
+              if isinstance(metric, dict) and metric.get("covered") != metric.get("count"):
+                  print(
+                      "INCOMPLETE_FILE "
+                      f"{kind} {metric.get('covered')}/{metric.get('count')} "
+                      f"{file_entry.get('filename')}"
+                  )
+          PY
+          cargo +1.97.1 llvm-cov report --lcov --output-path coverage-lines.lcov
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workspace = Path.cwd().resolve()
+          source = None
+          for raw_line in Path("coverage-lines.lcov").read_text(encoding="utf-8").splitlines():
+              if raw_line.startswith("SF:"):
+                  source_path = Path(raw_line[3:]).resolve()
+                  try:
+                      source = source_path.relative_to(workspace).as_posix()
+                  except ValueError:
+                      source = source_path.as_posix()
+              elif raw_line.startswith("DA:") and source is not None:
+                  line, hits, *_ = raw_line[3:].split(",")
+                  if hits == "0":
+                      print(f"::error file={source},line={line}::uncovered production line")
+          PY
+          cargo +1.97.1 llvm-cov report --text --show-missing-lines --show-instantiations
+
+  branch-coverage:
+    name: Production branch coverage
+    if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_${{ github.run_id }}_${{ github.run_attempt }}
+          POSTGRES_DB: psychometrics_commons_test
+        ports:
+          - 5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d psychometrics_commons_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+    steps:
+      - name: Validate fixed caller and exact head before checkout
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "$TARGET_REPOSITORY" != 'ContextualWisdomLab/psychometrics-commons' ] ||
+            [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            [ "$SOURCE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REPOSITORY" != "$TARGET_REPOSITORY" ] ||
+            [ "$BASE_REF" != main ] ||
+            [ "$PR_STATE" != open ] || [ "$PR_DRAFT" != false ] ||
+            [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            [ "$GITHUB_REF" != "refs/pull/$PR_NUMBER/merge" ] ||
+            [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Fixed caller or exact pull request head is invalid.' >&2
+            exit 1
+          fi
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Require exact checked-out head
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - name: Configure ephemeral PostgreSQL test connection
+        shell: bash
+        run: |
+          printf 'TEST_DATABASE_URL=host=localhost port=%s user=postgres password=ci_%s_%s dbname=psychometrics_commons_test\n' \
+            "${{ job.services.postgres.ports['5432'] }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Install pinned nightly with LLVM tools
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal --component llvm-tools-preview
+      - name: Install pinned cargo-llvm-cov
+        run: cargo +nightly-2026-08-18 install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Verify cargo-llvm-cov version
+        run: cargo +nightly-2026-08-18 llvm-cov --version | grep -F "$CARGO_LLVM_COV_VERSION"
+      - name: Generate branch coverage
+        run: cargo +nightly-2026-08-18 llvm-cov --branch --json --summary-only --output-path coverage-branches.json
+      - name: Enforce complete branch coverage
+        run: python3 scripts/check_coverage.py coverage-branches.json --kind branches
+      - name: Diagnose missing branch coverage
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("coverage-branches.json").read_text(encoding="utf-8"))
+          entry = payload["data"][0]
+          kind = "branches"
+          for file_entry in entry.get("files", []):
+              summary = file_entry.get("summary", {})
+              metric = summary.get(kind)
+              if isinstance(metric, dict) and metric.get("covered") != metric.get("count"):
+                  print(
+                      "INCOMPLETE_FILE "
+                      f"{kind} {metric.get('covered')}/{metric.get('count')} "
+                      f"{file_entry.get('filename')}"
+                  )
+          PY
+          cargo +nightly-2026-08-18 llvm-cov report --branch --lcov --output-path coverage-branches.lcov
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = None
+          for raw_line in Path("coverage-branches.lcov").read_text(encoding="utf-8").splitlines():
+              if raw_line.startswith("SF:"):
+                  source = raw_line[3:]
+              elif raw_line.startswith("BRDA:"):
+                  line, block, branch, taken = raw_line[5:].split(",", 3)
+                  if taken in {"0", "-"}:
+                      print(f"UNCOVERED_BRANCH {source}:{line}:{block}:{branch}")
+          PY
