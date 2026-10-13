@@ -3,7 +3,6 @@
 from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
-import base64
 import json
 import os
 from pathlib import Path
@@ -63,8 +62,6 @@ def test_native_cancellation_runs_before_runner_admission() -> None:
 def test_missing_verdict_fails_after_one_review_read(tmp_path: Path) -> None:
     calls = tmp_path / "calls"
     fake_gh = tmp_path / "gh"
-    workflow_sha = "c" * 40
-    helper = Path("scripts/ci/opencode_review_receipt_gate.py").read_bytes()
     fake_gh.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -107,6 +104,7 @@ fi
     )
 
     assert result.returncode == 1
+    assert "will rerun this failed job" in result.stdout
     assert "No current-head formal OpenCode verdict:" in result.stderr
     assert "Current-head OpenCode verdict:" not in result.stdout
     assert calls.read_text(encoding="utf-8").splitlines() == [
