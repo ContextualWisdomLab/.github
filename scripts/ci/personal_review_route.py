@@ -9,9 +9,11 @@ BASE_URL = 'https://litellm.poinnetworks.net/v1'
 MODEL = 'personal-litellm/auto'
 
 
-def require_admission(*, zero_cost: bool, zero_retention: bool, private_target: bool) -> None:
-    """Reject missing supplier evidence; existing key possession is not policy."""
-    if zero_cost is not True:
+def require_admission(*, zero_cost: bool, zero_retention: bool, private_target: bool,
+                      public_auto_authorized: bool = False) -> None:
+    """Admit owner-authorized public routing; private supplier gates stay intact."""
+    authorized_public = private_target is False and public_auto_authorized is True
+    if zero_cost is not True and not authorized_public:
         raise RuntimeError('STOP: personal auto zero-cost supplier is not attested')
     if private_target and zero_retention is not True:
         raise RuntimeError('STOP: private personal auto zero-retention supplier is not attested')
@@ -39,11 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--zero-cost', choices=('true', 'false'), required=True)
     parser.add_argument('--zero-retention', choices=('true', 'false'), required=True)
     parser.add_argument('--private-target', choices=('true', 'false'), required=True)
+    parser.add_argument('--public-auto-authorized', choices=('true', 'false'), default='false')
     parser.add_argument('--opencode-config', type=Path)
     args = parser.parse_args(argv)
     require_admission(zero_cost=args.zero_cost == 'true',
                       zero_retention=args.zero_retention == 'true',
-                      private_target=args.private_target == 'true')
+                      private_target=args.private_target == 'true',
+                      public_auto_authorized=args.public_auto_authorized == 'true')
     if args.opencode_config is not None:
         configure_opencode(args.opencode_config)
     return 0
