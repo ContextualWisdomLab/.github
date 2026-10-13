@@ -1,0 +1,92 @@
+name: Naruon backend CI
+
+# Fixed product supplier. Keep application-ci concurrency in the caller.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (Python 3.14)
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    env:
+      PYTHONWARNINGS: error
+      DISABLE_BACKGROUND_WORKERS: "1"
+    steps:
+      - name: Admit fixed caller before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CALLER_REF: ${{ github.ref }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ "$CALLER_REPOSITORY" != "ContextualWisdomLab/naruon" ]; then
+            echo "Unsupported caller repository" >&2; exit 1
+          fi
+          case "$CALLER_EVENT" in
+            pull_request)
+              if [ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ] || [ "$PR_BASE_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+                echo "Unsupported pull request source" >&2; exit 1
+              fi
+              case "$PR_BASE_REF" in
+                develop|master|release/?*) ;;
+                *) echo "Unsupported pull request base" >&2; exit 1 ;;
+              esac
+              ;;
+            push)
+              case "$CALLER_REF" in
+                refs/heads/develop|refs/heads/master) ;;
+                *) echo "Unsupported caller ref" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unsupported caller event" >&2; exit 1 ;;
+          esac
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements-hashes.txt
+      - name: Verify backend in a job-private environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ ! -d "${RUNNER_TEMP:?}" ] || [ -L "$RUNNER_TEMP" ] || [ "$(cd "$RUNNER_TEMP" && pwd -P)" != "$RUNNER_TEMP" ]; then
+            echo "Refuse untrusted runner temporary root" >&2; exit 1
+          fi
+          umask 077
+          job_root="$(mktemp -d "${RUNNER_TEMP:?}/naruon-backend.XXXXXXXX")"
+          trap 'rm -rf -- "$job_root"' EXIT
+          mkdir -p "$job_root/home" "$job_root/tmp"
+          export HOME="$job_root/home" TMPDIR="$job_root/tmp" TMP="$job_root/tmp" TEMP="$job_root/tmp"
+          unset PYTHONHOME PYTHONPATH
+          export PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CONFIG_FILE=/dev/null
+          python -m venv "$job_root/venv"
+          export PATH="$job_root/venv/bin:$PATH"
+          python -m pip install --disable-pip-version-check --require-hashes -r backend/requirements-hashes.txt
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r backend/requirements-hashes.txt \
+            -r backend/requirements-agent.txt
+          cd backend
+          python -m ruff check .
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee pytest_output.log
+          if grep -qiE 'timeout|fatal|warn|denied' pytest_output.log; then
+            echo "::error::Tests produced Timeout, Fatal, Warn, or Denied outputs"
+            exit 1
+          fi

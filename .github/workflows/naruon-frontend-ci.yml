@@ -1,0 +1,167 @@
+name: Naruon frontend CI
+
+# Fixed product supplier. Keep application-ci concurrency in the caller.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    env:
+      NODE_ENV: test
+    steps:
+      - name: Admit fixed caller before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CALLER_REF: ${{ github.ref }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ "$CALLER_REPOSITORY" != "ContextualWisdomLab/naruon" ]; then
+            echo "Unsupported caller repository" >&2; exit 1
+          fi
+          case "$CALLER_EVENT" in
+            pull_request)
+              if [ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ] || [ "$PR_BASE_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+                echo "Unsupported pull request source" >&2; exit 1
+              fi
+              case "$PR_BASE_REF" in
+                develop|master|release/?*) ;;
+                *) echo "Unsupported pull request base" >&2; exit 1 ;;
+              esac
+              ;;
+            push)
+              case "$CALLER_REF" in
+                refs/heads/develop|refs/heads/master) ;;
+                *) echo "Unsupported caller ref" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unsupported caller event" >&2; exit 1 ;;
+          esac
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Prepare job-private runtime
+        id: runtime
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ ! -d "${RUNNER_TEMP:?}" ] || [ -L "$RUNNER_TEMP" ] || [ "$(cd "$RUNNER_TEMP" && pwd -P)" != "$RUNNER_TEMP" ]; then
+            echo "Refuse untrusted runner temporary root" >&2; exit 1
+          fi
+          umask 077
+          job_root="$(mktemp -d "${RUNNER_TEMP:?}/naruon-frontend.XXXXXXXX")"
+          printf 'root=%s\n' "$job_root" >> "$GITHUB_OUTPUT"
+          mkdir -p "$job_root/home" "$job_root/tmp" "$job_root/bin" "$job_root/screenshots"
+          {
+            printf 'NARUON_JOB_ROOT=%s\n' "$job_root"
+            printf 'HOME=%s/home\n' "$job_root"
+            printf 'TMPDIR=%s/tmp\nTMP=%s/tmp\nTEMP=%s/tmp\n' "$job_root" "$job_root" "$job_root"
+            printf 'COREPACK_HOME=%s/corepack\n' "$job_root"
+            printf 'npm_config_cache=%s/npm-cache\n' "$job_root"
+            printf 'PLAYWRIGHT_BROWSERS_PATH=%s/playwright\n' "$job_root"
+            printf 'NARUON_FULL_PRODUCT_SCREENSHOT_PROFILE=/tmp/naruon-full-product-smoke\n'
+          } >> "$GITHUB_ENV"
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # setup-node's pnpm cache resolves pnpm during the action, not afterwards.
+      - name: Configure checkout-local pnpm store for setup-node post
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          printf 'PNPM_CONFIG_STORE_DIR=%s/.naruon-pnpm-store\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - name: Bootstrap Node.js without package-manager cache
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Enable Corepack pnpm
+        working-directory: frontend
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          node_path="$(command -v node)"
+          corepack_path="$(command -v corepack)" || { echo "Missing runner prerequisite: Corepack" >&2; exit 1; }
+          if [ ! -x "$node_path" ] || [ ! -x "$corepack_path" ]; then
+            echo "Missing executable Node/Corepack prerequisite" >&2; exit 1
+          fi
+          case "$(node --version)" in
+            v24.*) ;;
+            *) echo "Node 24 prerequisite mismatch" >&2; exit 1 ;;
+          esac
+          corepack --version
+          corepack enable --install-directory "$NARUON_JOB_ROOT/bin" pnpm
+          corepack prepare pnpm@11.5.3 --activate
+          export PATH="$NARUON_JOB_ROOT/bin:$PATH"
+          printf '%s/bin\n' "$NARUON_JOB_ROOT" >> "$GITHUB_PATH"
+          if [ "$(pnpm --version)" != "11.5.3" ]; then
+            echo "pnpm package-manager pin mismatch" >&2; exit 1
+          fi
+          store_path="$(cd "$GITHUB_WORKSPACE" && pnpm store path --silent)"
+          case "$store_path" in
+            */../*|*/./*|*/..|*/.) echo "Refuse pnpm store outside checkout-local cache root" >&2; exit 1 ;;
+          esac
+          case "$store_path" in
+            "$GITHUB_WORKSPACE/.naruon-pnpm-store"/?*) ;;
+            *) echo "Refuse pnpm store outside checkout-local cache root" >&2; exit 1 ;;
+          esac
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        run: cd frontend && pnpm install --frozen-lockfile
+      - name: Run frontend tests
+        run: cd frontend && pnpm test
+      - name: Run frontend lint
+        run: cd frontend && pnpm run lint
+      - name: Cache Next.js build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: frontend/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('frontend/pnpm-lock.yaml') }}-${{ hashFiles('frontend/**/*.js', 'frontend/**/*.jsx', 'frontend/**/*.ts', 'frontend/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('frontend/pnpm-lock.yaml') }}-
+      - name: Build frontend
+        env:
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          NEXT_BUILD_CPUS: "2"
+          POSTCSS_WORKERS: "1"
+          DISABLE_POSTCSS_WORKERS: "true"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm -f -- "$HOME/package-lock.json"
+          cd frontend && pnpm run build
+      - name: Install Playwright Chromium
+        run: cd frontend && pnpm exec playwright install --with-deps chromium
+      - name: Run full product smoke
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NARUON_FULL_PRODUCT_BASE_URL: "http://127.0.0.1:3001"
+        run: cd frontend && pnpm run full:smoke
+      - name: Clean job-private runtime
+        if: ${{ always() }}
+        env:
+          JOB_ROOT: ${{ steps.runtime.outputs.root }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ -n "$JOB_ROOT" ]; then
+            case "$JOB_ROOT" in
+              "${RUNNER_TEMP:?}"/naruon-frontend.????????) rm -rf -- "$JOB_ROOT" ;;
+              *) echo "Refuse nonowned runtime cleanup" >&2; exit 1 ;;
+            esac
+          fi
