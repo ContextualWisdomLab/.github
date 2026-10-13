@@ -129,6 +129,15 @@ jobs:
                   f"release tag does not match project version: expected {expected!r}, got {actual!r}"
               )
           PY
+      - name: Require reviewed release license helpers
+        run: |
+          set -euo pipefail
+          for helper in tools/select_third_party_license.sh tools/verify_wheel_license.py; do
+            if [ ! -f "$helper" ] || [ -L "$helper" ]; then
+              echo "::error::Release source lacks the reviewed license helper: $helper"
+              exit 1
+            fi
+          done
       # Reproducible-build clock: the committer time of the exact release
       # commit, never the wall clock. maturin stamps it into the embedded
       # CycloneDX SBOM (timestamp/serialNumber) and archive metadata; without it

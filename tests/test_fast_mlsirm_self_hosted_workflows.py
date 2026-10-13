@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import textwrap
 from xml.etree import ElementTree as ET
 
@@ -78,6 +79,20 @@ def test_release_wheel_and_sdist_consumer_keep_selected_license_bytes():
         assert text.count(step) == 1
     assert text.index(wheel_selection) < text.index("      - name: Build wheel\n") < text.index(wheel_verification) < text.index("      - name: Capture first native-runner build graph\n")
     assert text.index("      - name: Verify and unpack the same-run sdist\n") < text.index(consumer_selection) < text.index("      - name: Build this wheel target from the verified sdist\n") < text.index(consumer_verification) < text.index("      - name: Capture target sdist consumer wheel\n")
+
+
+def test_older_release_source_without_license_helpers_fails_before_build(tmp_path):
+    """Historical commits without the new helpers cannot enter the matrix."""
+    text = workflow_text("fast-mlsirm-publish-pypi.yml")
+    step = text.split("      - name: Require reviewed release license helpers\n", 1)[1]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n      # Reproducible-build clock:", 1)[0])
+    assert text.index("      - name: Require reviewed release license helpers\n") < text.index("  sdist:\n")
+    assert subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, capture_output=True).returncode == 1
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("select_third_party_license.sh", "verify_wheel_license.py"):
+        (tools / name).write_text("reviewed helper fixture")
+    assert subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, capture_output=True).returncode == 0
 
 
 def test_disabled_release_legs_fail_the_caller_instead_of_reporting_success():
