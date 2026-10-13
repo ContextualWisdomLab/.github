@@ -33,6 +33,7 @@ import threading
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
@@ -329,10 +330,15 @@ def _safe_retry_after_seconds(exc: Exception) -> int | None:
     # runs inside the probe walk's exception handler, so a ValueError here
     # would escape ``_preflight_review_agents`` -- whose callers catch only
     # ``ReviewPreflightError`` -- and kill the boot before any evidence file
-    # is written. Every ``isdecimal`` string is accepted by ``int``.
-    if not isinstance(raw, str) or not raw.strip().isdecimal():
+    # is written. Reject more than five decimal characters before conversion:
+    # the accepted ceiling is 86400, and Python deliberately rejects very
+    # long integer strings before ``int`` can return a value.
+    if not isinstance(raw, str):
         return None
-    seconds = int(raw.strip())
+    normalized = raw.strip()
+    if len(normalized) > 5 or not normalized.isdecimal():
+        return None
+    seconds = int(normalized)
     return seconds if 0 <= seconds <= 86400 else None
 
 
@@ -389,19 +395,25 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row: The in-progress per-route evidence row to update.
         exc: The exception a probe attempt raised.
     """
-    row["status"] = "rejected"
-    error_type = type(exc).__name__
-    row["error_type"] = (
-        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
-    )
-    http_status = _safe_http_status(exc)
-    if http_status is not None:
-        row["http_status"] = http_status
-    retry_after = _safe_retry_after_seconds(exc)
-    if retry_after is not None:
-        row["retry_after_s"] = retry_after
-    row.pop("finish_reason", None)
-    row.pop("reasoning_without_content", None)
+    try:
+        row["status"] = "rejected"
+        error_type = type(exc).__name__
+        row["error_type"] = (
+            error_type
+            if error_type.isidentifier() and len(error_type) <= 64
+            else "provider_error"
+        )
+        http_status = _safe_http_status(exc)
+        if http_status is not None:
+            row["http_status"] = http_status
+        retry_after = _safe_retry_after_seconds(exc)
+        if retry_after is not None:
+            row["retry_after_s"] = retry_after
+        row.pop("finish_reason", None)
+        row.pop("reasoning_without_content", None)
+    finally:
+        if isinstance(exc, HTTPError):
+            exc.close()
 
 
 def _demote_agent(agent: object, penalty: int) -> object:
@@ -1207,6 +1219,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
+    parser.add_argument("--zero-cost-only", action="store_true", help="Exclude priced routes and priced fallback even for auto")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
@@ -1242,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         discovered, discovery_errors = discover_all_models()
-    except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
+    except Exception as exc:
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
     _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
@@ -1253,7 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
             continue
-        if args.pool == "free" and _route_identity(model) not in free_route_identities:
+        if (args.pool == "free" or args.zero_cost_only) and _route_identity(model) not in free_route_identities:
             continue
         selected_models.append(model)
     if not selected_models:
@@ -1298,8 +1311,10 @@ def main(argv: list[str] | None = None) -> int:
         account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
-        pool=args.pool,
+        pool="free" if args.zero_cost_only else args.pool,
     )
+    result["report"]["requested_pool"] = f"orchestrator/{args.pool}"
+    result["report"]["zero_cost_only"] = args.zero_cost_only
     result["report"] = _with_discovery_counts(
         result["report"], normalized_rows, provider_account=provider_account
     )
@@ -1318,6 +1333,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if (
         args.pool == "auto"
+        and not args.zero_cost_only
         and admitted_free_rows
         and admitted_priced_rows
         and fallback_limit
@@ -1388,5 +1404,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

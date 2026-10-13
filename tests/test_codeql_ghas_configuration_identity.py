@@ -430,8 +430,8 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
     """HTTP and transport failures become ConfigurationIdentityError."""
 
     class _HTTPError(identity.urllib.error.HTTPError):
-        def read(self) -> bytes:
-            return b"denied"
+        def read(self, size: int = -1) -> bytes:
+            return b"denied"[:size]
 
     def raise_http(request, timeout=30):
         del request, timeout
@@ -492,6 +492,9 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
 
 def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     """A non-list analyses response fails closed."""
-    monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
+    monkeypatch.setattr(
+        identity, "_request_json",
+        lambda url, token, timeout_seconds, response_headers=None: {"ok": True},
+    )
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")

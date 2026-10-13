@@ -9,6 +9,14 @@ ADR = Path("docs/adr/0002-product-technical-gap-baseline.md")
 DOCTORING = Path("docs/doctoring/product-technical-gap-baseline.md")
 
 
+def test_baseline_is_not_a_truncated_connector_rendering() -> None:
+    """The committed baseline must be the source artifact, not UI display output."""
+    source = BASELINE.read_text(encoding="utf-8")
+
+    assert not source.startswith("Warning: truncated output")
+    assert "\nTotal output lines: " not in source[:200]
+
+
 def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
     """The shipped baseline must point agents to product, governance, and evidence."""
     source = BASELINE.read_text(encoding="utf-8")

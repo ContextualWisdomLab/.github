@@ -16,9 +16,12 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 30" in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
     assert "endsWith(github.workflow_ref, '@refs/heads/main')" in workflow
     assert '"group":"CWL MCP remediation"' in workflow
     assert '"labels":["self-hosted","linux","x64"]' in workflow
+    assert '"group":"CWL CI isolated"' in workflow
+    assert '"labels":["self-hosted","linux","x64","cwlab-ci-isolated"]' in workflow
     assert "runs-on: ubuntu-24.04" not in workflow
     assert "runs-on: ubuntu-latest" not in workflow
     assert "actions: read" in workflow
