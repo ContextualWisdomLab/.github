@@ -19,7 +19,8 @@ jobs:
         uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Validate documentation
         run: python3 scripts/validate_documentation.py
       - name: Reject whitespace errors
-        run: git diff --check HEAD^ HEAD || git diff --check
+        run: git diff --check HEAD^ HEAD
