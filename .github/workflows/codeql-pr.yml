@@ -182,11 +182,13 @@ jobs:
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Set up Python for pinned GitHub CLI provisioning
+        if: needs.detect-languages.outputs.code == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
       - name: Provision pinned job-local GitHub CLI
+        if: needs.detect-languages.outputs.code == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -271,6 +273,7 @@ jobs:
           PY
 
       - name: Verify pinned job-local GitHub CLI selection
+        if: needs.detect-languages.outputs.code == 'true'
         shell: bash
         run: |
           set -euo pipefail

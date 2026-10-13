@@ -33,7 +33,11 @@ def _assert_order(steps: list[dict]) -> None:
              and re.search(r"(?:^|[\s;|&($])(?:/[^\s]+/)?gh\s+(?:api|auth|pr|run)\b", step.get("run", ""))]
     assert calls and install < verify < min(calls), "gh provisioning is after first use"
     for i in (install, verify):
-        assert "if" not in steps[i] and "continue-on-error" not in steps[i]
+        # Conditional readiness must exactly follow every affected consumer.
+        consumer_guards = [steps[index].get("if") for index in calls]
+        expected = consumer_guards[0] if len(set(consumer_guards)) == 1 else None
+        assert steps[i].get("if") == expected
+        assert "continue-on-error" not in steps[i]
         assert steps[i].get("shell") == "bash"
     assert "sha256" in steps[install]["run"]
     assert 'with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8")' in steps[install]["run"]
@@ -64,6 +68,30 @@ def test_provisioning_order_rejects_mutated_executable_steps(mutation: str) -> N
         steps[index]["run"] = "# sha256 and $GITHUB_PATH are documentation only"
     with pytest.raises(AssertionError):
         _assert_order(steps)
+
+
+def test_docs_only_shard_does_not_admit_network_provisioning() -> None:
+    """Preserve the docs-only check without downloading an unused host tool."""
+    steps = _steps("codeql-pr.yml", "analyze-head")
+    guard = "needs.detect-languages.outputs.code == 'true'"
+    selected = [step for step in steps if step.get("name") in (
+        "Set up Python for pinned GitHub CLI provisioning", INSTALL, VERIFY)]
+    assert len(selected) == 3
+    assert all(step.get("if") == guard for step in selected)
+    consumer = next(step for step in steps if step.get("name") == "Read current-head CodeQL dispatch verdict")
+    assert consumer.get("if") == guard
+
+
+def test_strix_bootstrap_does_not_introduce_fixed_network_deadline() -> None:
+    """Honor the existing Strix bootstrap DNS/TLS readiness policy."""
+    import ast
+
+    run = next(step["run"] for step in _steps("strix.yml", "strix") if step.get("name") == INSTALL)
+    payload = run.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    calls = [node for node in ast.walk(ast.parse(payload)) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "urlopen"]
+    assert len(calls) == 1
+    assert not calls[0].keywords, "fixed network deadline introduced before Strix review"
 
 
 def _installer_tree():
@@ -128,10 +156,10 @@ def _run_installer_fixture(monkeypatch, tmp_path, *, kind="regular", mismatch=No
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(platform, "machine", lambda: "x86_64")
 
-    def download(url, timeout):
+    def download(url, timeout=None):
         """Disallow external requests while reproducing a bounded response."""
         assert url == "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
-        assert timeout == 30
+        assert timeout is None
         if fail_download:
             raise OSError("synthetic download refusal")
         return io.BytesIO(archive)
@@ -198,6 +226,11 @@ def test_all_three_jobs_share_identical_supplier_and_verifier() -> None:
     for name in (INSTALL, VERIFY):
         payloads = [next(step["run"] for step in _steps(*target) if step.get("name") == name)
                     for target in TARGETS]
+        # Only the documented Strix DNS/TLS no-timeout policy differs.
+        if name == INSTALL:
+            assert "urlopen(url)" in payloads[0]
+            assert all("urlopen(url, timeout=30)" in item for item in payloads[1:])
+            payloads = [item.replace("urlopen(url, timeout=30)", "urlopen(url)") for item in payloads]
         assert len(set(payloads)) == 1
         assert "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b" in payloads[0]
 

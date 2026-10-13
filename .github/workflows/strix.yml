@@ -526,7 +526,7 @@ jobs:
           os.chmod(root, 0o700)
           try:
               archive = root / "gh.tar.gz"
-              with urllib.request.urlopen(url, timeout=30) as response, archive.open("xb") as output:
+              with urllib.request.urlopen(url) as response, archive.open("xb") as output:
                   total = 0
                   digest = hashlib.sha256()
                   while True:
