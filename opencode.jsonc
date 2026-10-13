@@ -1,11 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   // Default routed through the vendored contextual-orchestrator gateway
-  // (orchestrator/free: fail-closed zero-cost pool, ZDR-first). The gateway
+  // (orchestrator/auto: fail-closed zero-cost pool, ZDR-first). The gateway
   // must be provisioned before a review starts; there is no direct-provider
   // fallback for review content.
-  "model": "contextual-orchestrator/orchestrator/free",
-  "small_model": "contextual-orchestrator/orchestrator/free",
+  "model": "contextual-orchestrator/orchestrator/auto",
+  "small_model": "contextual-orchestrator/orchestrator/auto",
   "enabled_providers": ["contextual-orchestrator"],
   "lsp": false,
   "mcp": {},
@@ -290,7 +290,7 @@
     // vendored contextual-orchestrator LLM gateway. It auto-discovers models
     // across Bytez/NVIDIA NIM (x2 keys)/OpenRouter/OpenAI from KV-registered
     // credentials and serves the fail-closed zero-cost pool under the virtual
-    // model id `orchestrator/free`, with ZDR-compliant (zero-data-retention)
+    // model id `orchestrator/auto`, with ZDR-compliant (zero-data-retention)
     // routes prioritized by scripts/ci/zdr_policy.py. Requires
     // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN,
     // which scripts/ci/contextual_orchestrator_review_sidecar.sh provisions on
@@ -306,8 +306,8 @@
         "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
       },
       "models": {
-        "orchestrator/free": {
-          "name": "Orchestrator Free (ZDR-first zero-cost pool)",
+        "orchestrator/auto": {
+          "name": "Orchestrator Auto (cost-fenced dynamic selection)",
           "tool_call": true,
           "reasoning": true,
           "options": {

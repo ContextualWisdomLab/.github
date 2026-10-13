@@ -10,6 +10,8 @@ product repository. See
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/r-package-check.yml")
@@ -108,12 +110,21 @@ def test_uniform_fields_are_hardcoded_not_parameterized() -> None:
 
 
 def test_matrix_is_driven_by_the_r_matrix_input() -> None:
-    """The strategy matrix must come from fromJSON(inputs.r_matrix), not a fixed list."""
+    """Caller data is admitted before expanding supported Linux matrix legs."""
     workflow = _workflow_text()
-    assert "config: ${{ fromJSON(inputs.r_matrix) }}" in workflow
-    assert "runs-on: ${{ matrix.config.os }}" in workflow
-    assert "r-version: ${{ matrix.config.r }}" in workflow
+    assert 'R_MATRIX: ${{ inputs.r_matrix }}' in workflow
+    assert 'config: ${{ fromJSON(needs.admit-platforms.outputs.matrix) }}' in workflow
+    assert 'r-version: ${{ matrix.config.r }}' in workflow
     assert "http-user-agent: ${{ matrix.config['http-user-agent'] }}" in workflow
+
+
+def test_matrix_runner_format_renders_valid_group_scoped_json() -> None:
+    """Both admission and R execution use the fixed isolated Linux selector."""
+    workflow = _workflow_text()
+    assert workflow.count('group: CWL CI isolated') == 2
+    assert workflow.count('labels: [self-hosted, Linux, X64, cwlab-ci-isolated]') == 2
+    assert 'toJSON(matrix.config.os)' not in workflow
+    assert 'STOP unsupported platform leg:' in workflow
 
 
 def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
@@ -129,3 +140,15 @@ def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
     assert '"$PRE_CHECK_TEST_FILE" == *".."*' in workflow
     assert '"$PRE_CHECK_TEST_FILE" == /*' in workflow
     assert 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))' in workflow
+
+
+def test_current_routing_document_matches_linux_only_admission() -> None:
+    """Current coverage must not claim unsupported platforms are queued checks."""
+    source = Path('docs/doctoring/all-self-hosted-runner-routing-20261003.md').read_text()
+    paragraph = next(p for p in source.split('\n\n') if p.startswith('R reusable jobs'))
+    assert 'Linux/x64-only' in paragraph
+    assert 'ubuntu-latest' in paragraph and 'ubuntu-24.04' in paragraph
+    assert 'STOP' in paragraph and 'unsupported-only' in paragraph
+    assert 'not platform coverage' in paragraph
+    assert 'remain queued' not in paragraph
+    assert 'entire R-version matrix' not in paragraph

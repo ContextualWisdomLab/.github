@@ -1,0 +1,117 @@
+name: Law AI Agent central CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: law-ci-${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on:
+      group: CWL law CI
+      labels: [self-hosted, Linux, X64, law-ai-agent-ci]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - name: Admit exact owned caller before checkout
+        id: admission
+        shell: bash
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CENTRAL_REPOSITORY: ${{ job.workflow_repository }}
+          CENTRAL_REF: ${{ job.workflow_ref }}
+          CENTRAL_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          """Fail closed before checking out consumer or central source."""
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+          e = os.environ
+          owned = "ContextualWisdomLab/law-ai-agent"
+          valid = e["CALLER_REPOSITORY"] == owned
+          valid &= e["CENTRAL_REPOSITORY"] == "ContextualWisdomLab/.github"
+          valid &= bool(re.fullmatch(r"[0-9a-f]{40}", e["SOURCE_SHA"]))
+          valid &= bool(re.fullmatch(r"[0-9a-f]{40}", e["CENTRAL_SHA"]))
+          valid &= e["CENTRAL_REF"] == (
+              "ContextualWisdomLab/.github/.github/workflows/law-ai-agent-ci.yml@"
+              + e["CENTRAL_SHA"]
+          )
+          payload = json.loads(Path(e["GITHUB_EVENT_PATH"]).read_text())
+          event = e["CALLER_EVENT"]
+          if event == "pull_request":
+              pr = payload.get("pull_request", {})
+              head, base = pr.get("head", {}), pr.get("base", {})
+              valid &= head.get("repo", {}).get("full_name") == owned
+              valid &= base.get("repo", {}).get("full_name") == owned
+              valid &= head.get("sha") == e["SOURCE_SHA"]
+              valid &= base.get("ref") == "main"
+          elif event == "push":
+              valid &= e["CALLER_REF"] == "refs/heads/main"
+              valid &= payload.get("ref") == "refs/heads/main"
+              valid &= payload.get("after") == e["SOURCE_SHA"]
+              valid &= payload.get("deleted") is False
+          elif event == "workflow_dispatch":
+              valid &= e["CALLER_REF"] == "refs/heads/main"
+          else:
+              valid = False
+          if not valid:
+              sys.exit("law-ci: admission refused")
+          with open(e["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("source_sha=" + e["SOURCE_SHA"] + "\n")
+          PY
+      - name: Checkout admitted consumer head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 verified commit
+        with:
+          repository: ContextualWisdomLab/law-ai-agent
+          ref: ${{ steps.admission.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Checkout this reusable workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 verified commit
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: central
+          persist-credentials: false
+      - name: Verify both checkout identities
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.admission.outputs.source_sha }}
+          CENTRAL_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C "$GITHUB_WORKSPACE/source" rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/central" rev-parse HEAD)" = "$CENTRAL_SHA"
+      - name: Provision pinned uv and matrix Python
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7 dereferenced commit
+        with:
+          version: "0.12.5"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: false
+      - name: Run isolated native database and artifact gates
+        shell: bash
+        env:
+          LAW_CI_SOURCE: ${{ github.workspace }}/source
+          LAW_CI_SOURCE_SHA: ${{ steps.admission.outputs.source_sha }}
+          LAW_CI_PYTHON_VERSION: ${{ matrix.python-version }}
+        run: bash "$GITHUB_WORKSPACE/central/scripts/ci/law_ai_agent_ci.sh" run
+      - name: Cleanup owned native cluster on cancellation
+        if: always()
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/central/scripts/ci/law_ai_agent_ci.sh" cleanup

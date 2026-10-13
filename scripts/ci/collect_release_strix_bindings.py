@@ -337,6 +337,8 @@ def collect_bindings(
 
 
 def main() -> None:
+    """Collect and print the full release dependency review from CLI inputs."""
+
     parser = argparse.ArgumentParser()
     for name in (
         "capture", "license-report", "plan", "metadata", "attempt", "repository",
