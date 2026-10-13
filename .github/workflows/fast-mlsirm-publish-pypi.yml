@@ -129,6 +129,15 @@ jobs:
                   f"release tag does not match project version: expected {expected!r}, got {actual!r}"
               )
           PY
+      - name: Require reviewed release license helpers
+        run: |
+          set -euo pipefail
+          for helper in tools/select_third_party_license.sh tools/verify_wheel_license.py; do
+            if [ ! -f "$helper" ] || [ -L "$helper" ]; then
+              echo "::error::Release source lacks the reviewed license helper: $helper"
+              exit 1
+            fi
+          done
       # Reproducible-build clock: the committer time of the exact release
       # commit, never the wall clock. maturin stamps it into the embedded
       # CycloneDX SBOM (timestamp/serialNumber) and archive metadata; without it
@@ -536,6 +545,9 @@ jobs:
       # MATURIN_, ...) into the manylinux container, so SOURCE_DATE_EPOCH must
       # be passed explicitly via docker-options for the Linux legs. Native
       # macOS/Windows builds inherit it from the job env.
+      - name: Select reviewed license bundle for wheel target
+        shell: bash
+        run: bash tools/select_third_party_license.sh "${{ matrix.target }}"
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         env:
@@ -548,6 +560,8 @@ jobs:
           docker-options: -e SOURCE_DATE_EPOCH
           before-script-linux: $CARGO_BUILD_PYTHON trusted-control/scripts/ci/capture_release_build_scope.py
           args: --release --out dist -i ${{ matrix.interpreter }}
+      - name: Verify wheel license bytes
+        run: python tools/verify_wheel_license.py dist
       - name: Capture first native-runner build graph
         if: ${{ runner.os != 'Linux' }}
         env:
@@ -671,6 +685,10 @@ jobs:
         env:
           RELEASE_COMMIT: ${{ needs.verify-release.outputs.release_commit }}
         run: python trusted-control/scripts/ci/release_sdist_consumer.py prepare sdist-proof/sdist.tsv sdist-input sdist-consumer
+      - name: Select reviewed license bundle for sdist consumer target
+        working-directory: sdist-consumer/source
+        shell: bash
+        run: bash tools/select_third_party_license.sh "${{ matrix.target }}"
       - name: Build this wheel target from the verified sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
@@ -682,6 +700,9 @@ jobs:
           maturin-version: v1.15.0
           docker-options: -e SOURCE_DATE_EPOCH
           args: --release --out dist-consumer -i ${{ matrix.interpreter }}
+      - name: Verify sdist consumer wheel license bytes
+        working-directory: sdist-consumer/source
+        run: python tools/verify_wheel_license.py dist-consumer
       - name: Capture target sdist consumer wheel
         shell: bash
         env:
