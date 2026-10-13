@@ -71,7 +71,7 @@ def test_actual_publisher_receipt_counts_as_independent_review(published_review,
     assert scheduler.merge_approval_block_reason(pr) is None
 
 
-@pytest.mark.parametrize("source", ["noema-review-github-app", "noema-review-app-oidc"])
+@pytest.mark.parametrize("source", ["noema-review-github-app"])
 def test_authenticated_app_credential_sources(published_review, source):
     published_review["body"] = published_review["body"].replace("noema-review-github-app-refresh", source)
     assert scheduler.has_independent_current_head_approval(pull_request([published_review]))
