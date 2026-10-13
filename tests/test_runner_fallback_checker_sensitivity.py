@@ -118,6 +118,60 @@ def test_static_checker_requires_exact_group_name(tmp_path, monkeypatch, suffix)
         check_static()
 
 
+K_CSAP_LABELS = ['self-hosted', 'Linux', 'X64', 'k-csap-isolated']
+
+
+def install_repository_scoped_fixture(tmp_path, monkeypatch, suffix, block, labels,
+                                      name='k-csap-skills-quality', job_id='quality'):
+    """Exercise the actual aggregate checker with the existing repo-scoped shape."""
+    workflows = tmp_path / '.github/workflows'
+    workflows.mkdir(parents=True)
+    document = {'jobs': {job_id: {'runs-on': labels}}}
+    (workflows / f'{name}.{suffix}').write_text(
+        yaml.safe_dump(document, default_flow_style=not block),
+    )
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.parametrize('suffix', ['yml', 'yaml'])
+@pytest.mark.parametrize('block', [False, True])
+def test_static_checker_accepts_repository_scoped_isolated_list(tmp_path, monkeypatch, suffix, block):
+    """Case-insensitive GitHub labels retain all four existing requirements."""
+    install_repository_scoped_fixture(tmp_path, monkeypatch, suffix, block, K_CSAP_LABELS)
+    check_static()
+
+
+@pytest.mark.parametrize('suffix', ['yml', 'yaml'])
+@pytest.mark.parametrize('missing', K_CSAP_LABELS)
+def test_static_checker_rejects_repository_scoped_missing_label(tmp_path, monkeypatch, suffix, missing):
+    """Neither repository scoping nor list syntax excuses a missing label."""
+    labels = [label for label in K_CSAP_LABELS if label != missing]
+    install_repository_scoped_fixture(tmp_path, monkeypatch, suffix, False, labels)
+    with pytest.raises(AssertionError):
+        check_static()
+
+
+@pytest.mark.parametrize('labels', [
+    ['self-hosted', 'Linux', 'X64', 'k-csap-isolated-extra'],
+    ['self-hosted', 'Linux', 'X64', 'cwlab-ci-isolated'],
+    ['self-hosted', 'Linux', 'X64', None],
+    K_CSAP_LABELS + ['privileged'],
+])
+def test_static_checker_rejects_repository_scoped_label_drift(tmp_path, monkeypatch, labels):
+    """A lookalike, foreign label, malformed element or extra routing cannot pass."""
+    install_repository_scoped_fixture(tmp_path, monkeypatch, 'yml', False, labels)
+    with pytest.raises(AssertionError):
+        check_static()
+
+
+@pytest.mark.parametrize(('name', 'job_id'), [('ordinary', 'quality'), ('k-csap-skills-quality', 'ordinary')])
+def test_static_checker_rejects_repository_scoped_list_in_other_jobs(tmp_path, monkeypatch, name, job_id):
+    """The existing caller-repo selector is not a new global label-only exemption."""
+    install_repository_scoped_fixture(tmp_path, monkeypatch, 'yaml', True, K_CSAP_LABELS, name, job_id)
+    with pytest.raises(AssertionError):
+        check_static()
+
+
 def test_static_checker_requires_nonempty_inventory(tmp_path, monkeypatch):
     """An empty workflow population is not proof of ordinary runner admission."""
     (tmp_path / '.github/workflows').mkdir(parents=True)
