@@ -67,6 +67,19 @@ def test_fast_mlsirm_reusable_workflows_keep_isolated_runner_and_gate_contracts(
     assert "cargo test --locked --manifest-path crates/fast-mlsirm-py/Cargo.toml" in ci
 
 
+def test_release_wheel_and_sdist_consumer_keep_selected_license_bytes():
+    """Keep target selection and byte verification around both actual builds."""
+    text = workflow_text("fast-mlsirm-publish-pypi.yml")
+    wheel_selection = '      - name: Select reviewed license bundle for wheel target\n        shell: bash\n        run: bash tools/select_third_party_license.sh "${{ matrix.target }}"\n'
+    wheel_verification = '      - name: Verify wheel license bytes\n        run: python tools/verify_wheel_license.py dist\n'
+    consumer_selection = '      - name: Select reviewed license bundle for sdist consumer target\n        working-directory: sdist-consumer/source\n        shell: bash\n        run: bash tools/select_third_party_license.sh "${{ matrix.target }}"\n'
+    consumer_verification = '      - name: Verify sdist consumer wheel license bytes\n        working-directory: sdist-consumer/source\n        run: python tools/verify_wheel_license.py dist-consumer\n'
+    for step in (wheel_selection, wheel_verification, consumer_selection, consumer_verification):
+        assert text.count(step) == 1
+    assert text.index(wheel_selection) < text.index("      - name: Build wheel\n") < text.index(wheel_verification) < text.index("      - name: Capture first native-runner build graph\n")
+    assert text.index("      - name: Verify and unpack the same-run sdist\n") < text.index(consumer_selection) < text.index("      - name: Build this wheel target from the verified sdist\n") < text.index(consumer_verification) < text.index("      - name: Capture target sdist consumer wheel\n")
+
+
 def test_disabled_release_legs_fail_the_caller_instead_of_reporting_success():
     """Expose the intentional release hold as a failing required job."""
     text = workflow_text("fast-mlsirm-publish-pypi.yml")
