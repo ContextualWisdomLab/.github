@@ -218,6 +218,8 @@ jobs:
           curl -sSLf \
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
             -o "${RUNNER_TEMP}/${archive}"
+          audit_sha256="ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39"
+          printf '%s  %s\n' "$audit_sha256" "${RUNNER_TEMP}/${archive}" | sha256sum --check --strict -
           tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/cargo-audit-bin"
           install -m 0755 \

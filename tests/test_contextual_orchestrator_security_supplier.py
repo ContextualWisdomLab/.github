@@ -40,6 +40,15 @@ def assert_supplier(current):
         for key in ('name','permissions','defaults'):
             assert job.get(key) == old.get(key)
         expected_steps = deepcopy(old['steps'])
+        # Exactly two intentional baseline workload repairs: SARIF status and
+        # official 0.22.2 release-asset SHA256 admission before extraction.
+        if name == 'rust':
+            audit = next(s for s in expected_steps if s['name'] == 'Install cargo-audit')
+            audit['run'] = audit['run'].replace(
+                'tar -xzf',
+                'audit_sha256="ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39"\n'
+                'printf \'%s  %s\\n\' "$audit_sha256" "${RUNNER_TEMP}/${archive}" | sha256sum --check --strict -\n'
+                'tar -xzf', 1)
         if name == 'security':
             upload = next(s for s in expected_steps if s['name'] == 'Upload CodeQL SARIF with transient retries')
             upload['run'] = upload['run'].replace(
@@ -56,7 +65,8 @@ def test_fixed_caller_supplier_keeps_every_security_workload():
 
 
 @pytest.mark.parametrize('mutation', ['label', 'privileged', 'hosted', 'workload',
-                                    'secrets', 'caller', 'permission', 'tolerant'])
+                                    'secrets', 'caller', 'permission', 'tolerant',
+                                    'audit_hash', 'audit_order', 'audit_missing_check'])
 def test_supplier_contract_rejects_otherwise_valid_drift(mutation):
     """Sensitivity controls for the shared actual-source oracle, not CI admission."""
     current = deepcopy(load(WORKFLOW))
@@ -77,6 +87,17 @@ def test_supplier_contract_rejects_otherwise_valid_drift(mutation):
         job['permissions'] = {'contents':'write'}
     elif mutation == 'tolerant':
         job['steps'][0]['continue-on-error'] = True
+    elif mutation.startswith('audit_'):
+        audit = next(s for s in current['jobs']['rust']['steps'] if s['name'] == 'Install cargo-audit')
+        lines = audit['run'].splitlines(keepends=True)
+        if mutation == 'audit_hash':
+            audit['run'] = audit['run'].replace('ab28a1bd', '00000000')
+        else:
+            check = next(line for line in lines if 'sha256sum --check' in line)
+            lines.remove(check)
+            if mutation == 'audit_order':
+                lines.append(check)
+            audit['run'] = ''.join(lines)
     with pytest.raises(AssertionError):
         assert_supplier(current)
 
