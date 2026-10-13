@@ -237,6 +237,52 @@ def test_route_key_prefixes_provider() -> None:
     assert policy._route_key("nvidia_nim", "/leda/nemotron") == "nvidia_nim/leda/nemotron"
 
 
+def test_discovery_modalities_survive_into_catalog_tags() -> None:
+    """Explicit input evidence survives parse and the actual catalog consumer."""
+    report = _report()
+    report["models"][0]["input_modalities"] = [" TEXT ", "Image", "text"]
+    rows = policy.parse_discovery_report(report)
+    assert rows[0].get("input_modalities") == ["text", "image"]
+    result = policy.build_zdr_prioritized_catalog(rows, zdr_endpoints=ZDR_FEED)
+    agent = next(item for item in result["agents"] if item["model"] == rows[0]["model"])
+    assert [tag for tag in agent["tags"] if tag.startswith("input:")] == [
+        "input:text", "input:image"
+    ]
+    assert "cost:free" in agent["tags"] and "zdr" in agent["tags"]
+
+
+@pytest.mark.parametrize("value", ["text", {"text": True}, [False], ["text", 1],
+                                   [""], ["image extra"], ["../image"], ["追加"]])
+def test_catalog_rejects_malformed_input_evidence(value: object) -> None:
+    """Direct normalized-row consumers cannot inject or lose modality tags."""
+    rows = policy.parse_discovery_report(_report())
+    rows[0]["input_modalities"] = value
+    with pytest.raises(policy.PolicyError, match="input_modalities"):
+        policy.build_zdr_prioritized_catalog(rows, zdr_endpoints=ZDR_FEED)
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, []), ([], []),
+    ((" TEXT ", "image", "text", "audio_2", "video-1"),
+     ["text", "image", "audio_2", "video-1"]),
+])
+def test_modality_normalization_preserves_only_explicit_evidence(
+    value: object, expected: list[str]
+) -> None:
+    """Absent modalities are not guessed; tokens retain order without duplicates."""
+    assert policy.normalize_input_modalities(value) == expected
+
+
+@pytest.mark.parametrize("value", ["text", {"text": True}, [False], ["text", 1],
+                                   [""], ["image extra"], ["../image"], ["追加"]])
+def test_discovery_rejects_malformed_input_evidence(value: object) -> None:
+    """Malformed discovery evidence is rejected before catalog construction."""
+    report = _report()
+    report["models"][0]["input_modalities"] = value
+    with pytest.raises(policy.PolicyError, match="input_modalities"):
+        policy.parse_discovery_report(report)
+
+
 def test_parse_discovery_report_normalizes_rows() -> None:
     """Base URL, credential, and auth scheme fall back to the policy table."""
     rows = policy.parse_discovery_report(_report())

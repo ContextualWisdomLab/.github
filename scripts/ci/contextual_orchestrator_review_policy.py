@@ -143,6 +143,29 @@ def _normalize_cost_evidence(
     )
 
 
+def normalize_input_modalities(value: object) -> list[str]:
+    """Preserve explicit input evidence as normalized catalog-tag tokens.
+
+    Match the pinned contextual-orchestrator ``input:<modality>`` grammar.
+    Missing evidence remains empty, never guessed text. Malformed nonempty
+    evidence fails closed rather than silently dropping provider exclusions.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise PolicyError("input_modalities must be a list or tuple of tokens")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise PolicyError("input_modalities contains a non-string token")
+        token = item.strip().casefold()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", token):
+            raise PolicyError("input_modalities contains an invalid token")
+        if token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
 def _bytez_non_token_price_evidence(
     *,
     is_free: bool,

@@ -22,6 +22,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 from typing import Any
+from urllib.error import HTTPError
 
 try:
     import tomllib
@@ -376,8 +377,11 @@ def _download_trusted_uv_archive() -> bytes:
                     break
                 payload.extend(chunk)
     except OSError as exc:
+        error_type = type(exc).__name__
+        if isinstance(exc, HTTPError):
+            exc.close()
         raise RuntimeError(
-            f"trusted uv archive download failed: {type(exc).__name__}"
+            f"trusted uv archive download failed: {error_type}"
         ) from exc
 
     if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:

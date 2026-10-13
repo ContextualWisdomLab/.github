@@ -25,6 +25,7 @@ def _load_module() -> ModuleType:
 
 
 def _patch_live_gate(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> None:
+    """Bind the gate's PR lookup to an author-bearing immutable fixture."""
     monkeypatch.setattr(
         module.gate,
         "fetch_pr",
@@ -32,6 +33,7 @@ def _patch_live_gate(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> Non
             "isDraft": False,
             "headRefOid": HEAD,
             "baseRefOid": BASE,
+            "author": {"login": "seonghobae"},
         },
     )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
@@ -40,7 +42,15 @@ def _patch_live_gate(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> Non
     monkeypatch.setattr(module.gate, "existing_noema_review", lambda _pr, _actor: False)
 
 
-def test_prepare_seals_validated_verdict_without_publishing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_query_requests_the_pr_author_identity() -> None:
+    """The model/publication gate queries the author instead of inferring it."""
+    module = _load_module()
+    assert "\n      author { login }\n" in module.gate.PR_QUERY
+
+
+def test_prepare_seals_validated_verdict_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Preparation performs model work but cannot submit GitHub review evidence."""
     module = _load_module()
     _patch_live_gate(monkeypatch, module)
@@ -56,10 +66,12 @@ def test_prepare_seals_validated_verdict_without_publishing(tmp_path: Path, monk
     payload = module._read_envelope(envelope)
     assert payload["verdict"] == verdict
     assert payload["expected_base"] == BASE
+    assert payload["reviewer_actor"] == "cwl-noema-review[bot]"
+    assert payload["pull_request_author"] == "seonghobae"
 
 
 def test_publish_refetches_exact_head_and_base_with_fresh_actor_and_removes_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Publication rebinds repository/head/base/actor and consumes the private handoff."""
+    """Publication rebinds repository/head/base/author/actor and consumes the private handoff."""
     module = _load_module()
     _patch_live_gate(monkeypatch, module)
     envelope = tmp_path / "verdict.json"
@@ -70,6 +82,8 @@ def test_publish_refetches_exact_head_and_base_with_fresh_actor_and_removes_enve
         "pull_request_number": 7,
         "expected_head": HEAD,
         "expected_base": BASE,
+        "reviewer_actor": "cwl-noema-review[bot]",
+        "pull_request_author": "seonghobae",
         "verdict": verdict,
     })
     submitted: list[tuple[object, ...]] = []
@@ -108,6 +122,8 @@ def test_publish_rejects_stale_head_and_never_submits(tmp_path: Path, monkeypatc
         "pull_request_number": 7,
         "expected_head": HEAD,
         "expected_base": BASE,
+        "reviewer_actor": "cwl-noema-review[bot]",
+        "pull_request_author": "seonghobae",
         "verdict": {"decision": "approve"},
     })
 
@@ -135,6 +151,8 @@ def test_publish_rejects_base_drift_with_unchanged_head(tmp_path: Path, monkeypa
         "pull_request_number": 7,
         "expected_head": HEAD,
         "expected_base": BASE,
+        "reviewer_actor": "cwl-noema-review[bot]",
+        "pull_request_author": "seonghobae",
         "verdict": {"decision": "approve", "summary": "stale base"},
     })
     monkeypatch.setattr(module.gate, "submit_review", lambda *_args: pytest.fail("base-drifted evidence must not publish"))
@@ -153,6 +171,7 @@ def test_prepare_skip_creates_no_publishable_envelope(tmp_path: Path, monkeypatc
             "isDraft": True,
             "headRefOid": HEAD,
             "baseRefOid": BASE,
+            "author": {"login": "seonghobae"},
         },
     )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
@@ -265,6 +284,55 @@ def test_prepare_marks_exhausted_capacity_budget_ineligible(
     assert "transport_retry_eligible=false" in written
     assert "transport_retry_delay_seconds=" not in written
     assert "automatic re-dispatch budget is exhausted" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("author", (None, "cwl-noema-review[bot]"))
+def test_prepare_rejects_missing_or_self_author_before_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, author: str | None
+) -> None:
+    """An unknown or author-owned reviewer identity fails before inference."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    monkeypatch.setattr(module.gate, "fetch_pr", lambda *_: {
+        "state": "OPEN", "isDraft": False, "headRefOid": HEAD, "baseRefOid": BASE,
+        "author": {"login": author} if author is not None else None,
+    })
+    monkeypatch.setattr(module.gate, "fetch_diff", lambda *_: ("diff", False))
+    monkeypatch.setattr(module.gate, "fetch_changed_files", lambda *_: [("src/a.py", "MODIFIED")])
+    monkeypatch.setattr(module.gate, "build_review_context", lambda *_: "context")
+    monkeypatch.setattr(module.gate, "call_llm", lambda *_: pytest.fail("model reached"))
+    envelope = tmp_path / "verdict.json"
+    with pytest.raises(RuntimeError, match="author"):
+        module.prepare_verdict("ContextualWisdomLab/example", 7, HEAD, envelope)
+    assert not envelope.exists()
+
+
+@pytest.mark.parametrize("author,actor", (
+    ("cwl-noema-review[bot]", "cwl-noema-review[bot]"),
+    (None, "cwl-noema-review[bot]"),
+    ("seonghobae", "other-review[bot]"),
+))
+def test_publication_rejects_author_or_reviewer_identity_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, author: str | None, actor: str
+) -> None:
+    """A refreshed actor must match preparation and remain distinct from the author."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    source = {"state": "OPEN", "isDraft": False, "headRefOid": HEAD, "baseRefOid": BASE,
+              "author": {"login": "seonghobae"}}
+    monkeypatch.setattr(module.gate, "fetch_pr", lambda *_: source)
+    monkeypatch.setattr(module.gate, "fetch_diff", lambda *_: ("diff", False))
+    monkeypatch.setattr(module.gate, "fetch_changed_files", lambda *_: [("src/a.py", "MODIFIED")])
+    monkeypatch.setattr(module.gate, "build_review_context", lambda *_: "context")
+    monkeypatch.setattr(module.gate, "call_llm", lambda *_: {"decision": "approve", "summary": "bounded"})
+    monkeypatch.setattr(module.gate, "submit_review", lambda *_: pytest.fail("invalid actor must not publish"))
+    envelope = tmp_path / "verdict.json"
+    assert module.prepare_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
+    source["author"] = {"login": author} if author is not None else None
+    monkeypatch.setattr(module.gate, "current_actor", lambda: actor)
+    with pytest.raises(RuntimeError, match="author|actor"):
+        module.publish_verdict("ContextualWisdomLab/example", 7, HEAD, envelope)
+    assert not envelope.exists()
 
 
 def test_sidecar_failure_outputs_reach_existing_continuation():

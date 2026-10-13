@@ -9,7 +9,11 @@ import os
 from pathlib import Path
 import subprocess
 
-from tests.test_opencode_required_verdict_regression import HEAD, fail_closed_script
+from tests.test_opencode_required_verdict_regression import (
+    HEAD,
+    RECEIPT_HELPER,
+    fail_closed_script,
+)
 
 
 REQUIRED = Path(".github/workflows/opencode-review.yml")
@@ -67,10 +71,10 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$CALLS"
 if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
   printf '%s' "$LIVE_PR"
-elif [[ "$*" == "api repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA} --jq .content" ]]; then
-  printf '%s' "$HELPER_BASE64"
-elif [[ "$*" == "api --paginate --slurp repos/owner/repo/pulls/7/reviews?per_page=100" ]]; then
-  printf '[[]]'
+elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
+  base64 <"$REAL_RECEIPT_HELPER"
+elif [[ "$*" == *"/pulls/7/reviews?per_page=100"* ]]; then
+  printf '[]'
 else
   exit 19
 fi
@@ -90,8 +94,9 @@ fi
             "HEAD_SHA": HEAD,
             "PR_ACTION": "synchronize",
             "PR_DRAFT": "false",
-            "WORKFLOW_SHA": workflow_sha,
-            "HELPER_BASE64": base64.b64encode(helper).decode("ascii"),
+            "CHANGED_SCOPE_CODE": "true",
+            "WORKFLOW_SHA": "6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3",
+            "REAL_RECEIPT_HELPER": str(RECEIPT_HELPER.resolve()),
             "LIVE_PR": json.dumps(
                 {"draft": False, "head": {"sha": HEAD}, "state": "open"}
             ),
@@ -106,7 +111,6 @@ fi
     assert "Current-head OpenCode verdict:" not in result.stdout
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "api repos/owner/repo/pulls/7",
-        "api repos/ContextualWisdomLab/.github/contents/scripts/ci/"
-        f"opencode_review_receipt_gate.py?ref={workflow_sha} --jq .content",
         "api --paginate --slurp repos/owner/repo/pulls/7/reviews?per_page=100",
+        "api repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3 --jq .content",
     ]

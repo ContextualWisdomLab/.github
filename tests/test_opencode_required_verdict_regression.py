@@ -110,42 +110,45 @@ def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, ob
 
 
 def runtime_verdict(reviews: list[dict[str, object]], head_sha: str = HEAD) -> str:
-    """Execute the exact production step with explicit offline read fixtures."""
+    """Execute the actual verdict step with strict offline-only GitHub reads."""
     import base64
 
-    fixture_cli = Path(__file__).with_name('fixture_github_reads.py')
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        fake_gh = root / 'gh'
-        fake_gh.write_text(f'#!{sys.executable}\n' + fixture_cli.read_text())
-        fake_gh.chmod(0o700)
-        fixture = root / 'fixture.json'
-        fixture.write_text(json.dumps({
-            'pull': {'head': {'sha': head_sha}, 'draft': False, 'state': 'open'},
-            'reviews': reviews, 'lookup_fail': False, 'malformed': False,
-            'calls': str(root / 'calls.jsonl'),
-            'helper_base64': base64.b64encode(RECEIPT_HELPER.read_bytes()).decode(),
-        }))
-        env = {
-            'PATH': str(root) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.defpath,
-            'HOME': str(root), 'TMPDIR': str(root), 'FIXTURE_FILE': str(fixture),
-            'TARGET_REPOSITORY': 'ContextualWisdomLab/fast-mlsirm', 'PR_NUMBER': '2018',
-            'HEAD_SHA': head_sha, 'PR_ACTION': 'synchronize', 'PR_DRAFT': 'false',
-            'CHANGED_SCOPE_CODE': 'true', 'WORKFLOW_SHA': '6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3',
-            'PYTHONDONTWRITEBYTECODE': '1',
-        }
-        result = subprocess.run(
-            [shutil.which('bash') or '/bin/bash', '-c', fail_closed_script()], cwd=root, env=env,
-            text=True, capture_output=True, check=False, timeout=15,
+        fake_gh = root / "gh"
+        fake_gh.write_text(
+            f"#!{sys.executable}\n" + Path(__file__).with_name("fixture_github_reads.py").read_text()
         )
-        calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        fake_gh.chmod(0o700)
+        fixture = root / "fixture.json"
+        fixture.write_text(json.dumps({
+            "pull": {"head": {"sha": head_sha}, "draft": False, "state": "open"},
+            "reviews": reviews, "lookup_fail": False, "malformed": False,
+            "calls": str(root / "calls.jsonl"),
+            "helper_base64": base64.b64encode(RECEIPT_HELPER.read_bytes()).decode(),
+        }))
+        bash = shutil.which("bash")
+        assert bash is not None
+        result = subprocess.run(
+            [bash, "-c", fail_closed_script()], cwd=root,
+            env={
+                "PATH": str(root) + os.pathsep + str(Path(bash).parent) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+                "HOME": str(root), "TMPDIR": str(root), "FIXTURE_FILE": str(fixture),
+                "TARGET_REPOSITORY": "ContextualWisdomLab/fast-mlsirm", "PR_NUMBER": "2018",
+                "HEAD_SHA": head_sha, "PR_ACTION": "synchronize", "PR_DRAFT": "false",
+                "CHANGED_SCOPE_CODE": "true", "WORKFLOW_SHA": "6a37e4cdfbd8bf6f3a60645a0ad7c13e1b9c1ae3",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            capture_output=True, text=True, timeout=15,
+        )
+        calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
         assert len(calls) == 3, result.stdout + result.stderr
-        assert all('POST' not in call and '-X' not in call for call in calls)
+        assert all("POST" not in call and "-X" not in call for call in calls)
     assert result.returncode in (0, 1), result.stderr
     if result.returncode:
-        assert 'No current-head formal OpenCode verdict:' in result.stderr
-        return ''
-    match = re.search(r'Current-head OpenCode verdict: (APPROVED|CHANGES_REQUESTED)\.', result.stdout)
+        assert "No current-head formal OpenCode verdict:" in result.stderr
+        return ""
+    match = re.search(r"Current-head OpenCode verdict: (APPROVED|CHANGES_REQUESTED)\.", result.stdout)
     assert match is not None, result.stdout + result.stderr
     return match.group(1)
 

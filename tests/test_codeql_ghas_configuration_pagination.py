@@ -1,21 +1,38 @@
-"""Synthetic paginated HTTP inputs, not captured GitHub analyses."""
-from urllib.parse import parse_qs, urlsplit
+"""Synthetic paginated HTTP inputs, not captured GitHub analyses.
+
+Pages advance through GitHub Link headers (main #2555 contract), not page counts.
+"""
+from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 from scripts.ci import codeql_ghas_configuration_identity as identity
 
 BASE = 'a' * 40
 HEAD = 'b' * 40
 
+def _link_next(url, response_headers, has_next):
+    """Expose main's Link-header pagination contract for a synthetic page."""
+    if response_headers is None:
+        return
+    if not has_next:
+        response_headers['Link'] = ''
+        return
+    parts = urlsplit(url)
+    query = {key: values[0] for key, values in parse_qs(parts.query).items()}
+    query['page'] = str(int(query.get('page', '1')) + 1)
+    response_headers['Link'] = f'<{parts.scheme}://{parts.netloc}{parts.path}?{urlencode(query)}>; rel="next"'
+
+
 def row(sha, category='/language:actions'):
     return {'commit_sha': sha, 'category': category, 'analysis_key': identity.DEFAULT_SETUP_ANALYSIS_KEY, 'tool': {'name': 'CodeQL'}}
 
 def test_base_identity_beyond_first_page_must_prevent_false_pairing_pass(monkeypatch):
     calls = []
-    def request(url, *, token, timeout_seconds):
+    def request(url, *, token, timeout_seconds, response_headers=None):
         params = parse_qs(urlsplit(url).query)
         page = int(params.get('page', ['1'])[0])
         calls.append(page)
         assert params['ref'] == ['refs/heads/main']
+        _link_next(url, response_headers, page == 1)
         if page == 1:
             return [row('c' * 40, '/language:python') for _ in range(100)]
         assert page == 2
@@ -30,9 +47,10 @@ def test_base_identity_beyond_first_page_must_prevent_false_pairing_pass(monkeyp
 
 def test_head_identity_on_later_page_satisfies_exact_pairing(monkeypatch):
     calls = []
-    def request(url, *, token, timeout_seconds):
-        page = int(parse_qs(urlsplit(url).query)['page'][0])
+    def request(url, *, token, timeout_seconds, response_headers=None):
+        page = int(parse_qs(urlsplit(url).query).get('page', ['1'])[0])
         calls.append(page)
+        _link_next(url, response_headers, page == 1)
         return [row('c' * 40) for _ in range(100)] if page == 1 else [row(HEAD)]
     monkeypatch.setattr(identity, '_request_json', request)
     head = identity.list_codeql_analyses('ContextualWisdomLab/example', token='synthetic-fixture', ref='refs/pull/1/head')
@@ -42,8 +60,9 @@ def test_head_identity_on_later_page_satisfies_exact_pairing(monkeypatch):
 
 @pytest.mark.parametrize('later', [{'malformed': True}, 'transport_error'])
 def test_later_page_error_cannot_return_partial_analyses(monkeypatch, later):
-    def request(url, *, token, timeout_seconds):
-        page = int(parse_qs(urlsplit(url).query)['page'][0])
+    def request(url, *, token, timeout_seconds, response_headers=None):
+        page = int(parse_qs(urlsplit(url).query).get('page', ['1'])[0])
+        _link_next(url, response_headers, page == 1)
         if page == 1:
             return [row(BASE) for _ in range(100)]
         if later == 'transport_error':
@@ -68,9 +87,10 @@ def test_invalid_page_size_rejected_before_request(monkeypatch, per_page):
 
 def test_full_page_filtered_rows_still_requires_next_page(monkeypatch):
     calls = []
-    def request(url, *, token, timeout_seconds):
-        page = int(parse_qs(urlsplit(url).query)['page'][0])
+    def request(url, *, token, timeout_seconds, response_headers=None):
+        page = int(parse_qs(urlsplit(url).query).get('page', ['1'])[0])
         calls.append(page)
+        _link_next(url, response_headers, page == 1)
         return [None for _ in range(100)] if page == 1 else [row(BASE)]
     monkeypatch.setattr(identity, '_request_json', request)
     assert identity.list_codeql_analyses('ContextualWisdomLab/example', token='synthetic-fixture') == [row(BASE)]
