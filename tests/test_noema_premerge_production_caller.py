@@ -38,6 +38,7 @@ def test_normal_noema_uses_read_only_metadata_then_scoped_app_publication():
     assert 'permission-pull-requests: read' in metadata
     assert 'permission-pull-requests: write' in publication
     assert source.index('Prepare Noema model verdict\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
+    assert source.index('Refresh read-only Noema GitHub App metadata token after model\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
 
 
 def test_actual_cli_refuses_missing_independent_pins(tmp_path):
