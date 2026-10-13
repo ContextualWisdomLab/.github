@@ -1208,6 +1208,50 @@ def test_reviewed_source_notice_refuses_unbound_git_evidence(
         )
 
 
+def test_ndk_sys_source_notice_requires_exact_reviewed_grants(monkeypatch, tmp_path):
+    subject = "cargo/ndk-sys@0.6.0+11769913"
+    archive_sha, repository, commit, digest, choices, grants = gate._REVIEWED_SOURCE_NOTICES[subject]
+    fixture = Path(__file__).parent / "fixtures/release_license_texts"
+    parts = [(fixture / f"ndk-sys-0.6.0+11769913-upstream-{name}.txt").read_bytes()
+             for name, _, _ in grants]
+    assert choices == {"MIT"}
+    assert all(len(part) == size and hashlib.sha256(part).hexdigest() == sha
+               for part, (_, size, sha) in zip(parts, grants))
+    notice = b"\n\n".join(parts)
+    assert hashlib.sha256(notice).hexdigest() == digest
+    path = "python/fast_mlsirm/_licenses/ndk-sys-0.6.0+11769913-MIT.txt"
+    upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{commit}/{name}",
+                 "sha256": sha} for name, _, sha in grants]
+    choice = {"ecosystem": "cargo", "name": "ndk-sys", "version": "0.6.0+11769913",
+              "chosen": "MIT", "rationale": "Exact upstream grants retained.",
+              "archive_sha256": archive_sha, "upstream_licenses": upstream,
+              "bundled_notice": {"path": path, "sha256": digest}}
+    blobs = {"selection": json.dumps([choice]).encode(), "notice": notice}
+
+    def git_blob(command, **kwargs):
+        operation = command[3]
+        if operation == "ls-tree":
+            key = "selection" if command[-1] == "docs/release-license-selections.json" else "notice"
+            return f"100644 blob {key}\t{command[-1]}\n"
+        key = command[5]
+        if command[4] == "-s":
+            size = len(blobs[key])
+            return f"{size}\n" if kwargs.get("text") else f"{size}\n".encode()
+        return blobs[key]
+
+    monkeypatch.setattr(gate.subprocess, "check_output", git_blob)
+    evidence = {"ecosystem": "cargo", "source_sha256": archive_sha}
+    texts, proof = gate._source_license_notice(tmp_path, "a" * 40, subject, evidence, choice)
+    assert proof == {"source_sha": "a" * 40, "path": path, "sha256": digest,
+                     "archive_sha256": archive_sha, "upstream_commit": commit,
+                     "upstream_licenses": upstream}
+    assert [texts[row["url"]].encode() for row in upstream] == parts
+    blobs["notice"] = notice[:-1]
+    with pytest.raises(gate.GateError) as refusal:
+        gate._source_license_notice(tmp_path, "a" * 40, subject, evidence, choice)
+    assert refusal.value.code == gate.SOURCE_HASH_MISMATCH
+
+
 @pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "nonexact_sha",
                                       "foreign_workspace", "workspace_version", "foreign_path",
                                       "changed_manifest", "changed_lock", "captured_lock",

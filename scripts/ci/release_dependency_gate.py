@@ -2094,6 +2094,12 @@ _REVIEWED_SOURCE_NOTICES = {
         "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b", {"MIT", "Apache-2.0"},
         (("LICENSE-MIT", 1093, "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"),
          ("LICENSE-APACHE", 10818, "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"))),
+    "cargo/ndk-sys@0.6.0+11769913": (
+        "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873",
+        "rust-mobile/ndk", "49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25",
+        "c712de4f395778ea52b76c5795f61fa5ee0ed4a802f01a661dbe087c9fdea224", {"MIT"},
+        (("LICENSE-MIT", 1036, "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"),
+         ("LICENSE-APACHE", 11357, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"))),
     "cargo/jni-sys-macros@0.4.1": (
         "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
         "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
