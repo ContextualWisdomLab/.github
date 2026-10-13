@@ -63,6 +63,15 @@ by the OpenCode GitHub App. A GitHub Actions-authored review is not OpenCode
 approval evidence. The separate scheduler also listens for that App review,
 waits for the publishing OpenCode check to finish, and then retries direct
 merge outside the review job when repository auto-merge is unavailable.
+The OpenCode job's own post-publication scheduler is assessment-only:
+`--dry-run`, `--merge-mode disabled`, `--no-enable-auto-merge`, and
+`--no-update-branches`. Review publication never grants mutation authority to
+that follow-up. Separately authorized review-event and scheduled scheduler
+runs retain their existing policy; these flags do not disable those runs.
+
+Central Noema handoff and live base binding are tracked separately in
+ContextualWisdomLab/.github#2111. This assessment-only follow-up change does not
+claim that handoff is deployed. A dispatch is neither review nor approval.
 
 Every merge keeps `--match-head-commit`. It prefers squash and retries with a
 merge commit only when the target repository explicitly reports that squash

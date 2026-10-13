@@ -1,0 +1,26 @@
+name: TEPP Documentation Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+
+jobs:
+  validate:
+    name: Validate planning and governance contracts
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate documentation
+        run: python3 scripts/validate_documentation.py
+      - name: Reject whitespace errors
+        run: git diff --check HEAD^ HEAD

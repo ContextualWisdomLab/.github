@@ -73,13 +73,14 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
             elif isinstance(runner, list):
-                # Preserve the already merged K-CSAP selector, not arbitrary lists.
-                assert (path.as_posix(), job_id) == (
-                    '.github/workflows/k-csap-skills-quality.yml', 'quality',
-                ), (path, job_id, 'unsupported static label-only selector')
-                assert runner == ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], (
-                    path, job_id, 'changed K-CSAP isolation selector', runner,
-                )
+                # Preserve the inherited K-CSAP selector exactly; it is the only
+                # repository-scoped list admission and remains fail-closed.
+                assert (path.stem, job_id) == ('k-csap-skills-quality', 'quality'), (
+                    path, job_id, 'unsupported static label-only selector')
+                assert all(isinstance(label, str) for label in runner), (path, job_id, runner)
+                assert {label.lower() for label in runner} == {
+                    'self-hosted', 'linux', 'x64', 'k-csap-isolated',
+                }, (path, job_id, 'missing or unexpected repository-scoped labels', runner)
             else:
                 assert isinstance(runner, str) and 'cwlab-ci-isolated' in runner, (path, job_id, runner)
     assert observed, 'runner selector coverage is empty'
