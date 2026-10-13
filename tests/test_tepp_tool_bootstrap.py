@@ -186,7 +186,23 @@ class SupplierBootstrapTests(unittest.TestCase):
             original = subprocess.check_output(["git", "show", f"{BASE}:{relative}"], cwd=ROOT, text=True)
             original_steps = dict(step_blocks(original))
             for name, body in original_steps.items():
-                self.assertEqual(current[name], body, name)
+                if name == "Verify pinned Rust quality tool versions":
+                    # Executed against missing/wrong/valid private tools by PrivateRustTests.
+                    self.assertIn('"$CARGO_HOME/bin/cargo-nextest" --version', current[name])
+                    self.assertIn('"$CARGO_HOME/bin/cargo-deny" --version', current[name])
+                else:
+                    self.assertEqual(current[name].replace(' --root "$CARGO_HOME"', ""), body, name)
+            # Retain every original single-line gate and toolchain pin verbatim;
+            # only explicit private install-root and version admission may change.
+            for line in original.splitlines():
+                if not line.startswith("        run: ") or line.strip() == "run: |":
+                    continue
+                if "cargo llvm-cov --version" in line:
+                    self.assertIn('"$CARGO_HOME/bin/cargo-llvm-cov" llvm-cov --version', (ROOT / relative).read_text())
+                elif "cargo install cargo-llvm-cov" in line:
+                    self.assertIn(line.replace(" --locked", ' --root "$CARGO_HOME" --locked'), (ROOT / relative).read_text())
+                else:
+                    self.assertIn(line, (ROOT / relative).read_text())
 
 
 if __name__ == "__main__":

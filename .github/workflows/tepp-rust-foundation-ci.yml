@@ -86,7 +86,10 @@ jobs:
       - name: Bootstrap hash-verified Rustup
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output "$rustup_init" \
             https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
@@ -94,31 +97,31 @@ jobs:
             dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
             "$rustup_init" | sha256sum --check --strict
           chmod 0755 "$rustup_init"
-          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
-            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
           rm -f -- "$rustup_init"
-          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
-          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
-          "$HOME/.cargo/bin/rustup" --version
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
-      - name: Restore pinned Rust quality tools
-        id: rust-tools-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/.cargo/bin/cargo-nextest
-            ~/.cargo/bin/cargo-deny
-          key: ${{ runner.os }}-${{ runner.arch }}-tepp-rust-tools-nextest-${{ env.CARGO_NEXTEST_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}
       - name: Install pinned Rust quality tools
-        if: steps.rust-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo install cargo-nextest --locked --version "$CARGO_NEXTEST_VERSION"
-          cargo install cargo-deny --locked --version "$CARGO_DENY_VERSION"
+          cargo install cargo-nextest --root "$CARGO_HOME" --locked --version "$CARGO_NEXTEST_VERSION"
+          cargo install cargo-deny --root "$CARGO_HOME" --locked --version "$CARGO_DENY_VERSION"
       - name: Verify pinned Rust quality tool versions
         run: |
-          cargo nextest --version | grep -F "$CARGO_NEXTEST_VERSION"
-          cargo deny --version | grep -F "$CARGO_DENY_VERSION"
+          test -x "${CARGO_HOME:?}/bin/cargo-nextest"
+          test -x "$CARGO_HOME/bin/cargo-deny"
+          version="$("$CARGO_HOME/bin/cargo-nextest" --version)"
+          case "$version" in
+            "cargo-nextest $CARGO_NEXTEST_VERSION"|"cargo-nextest $CARGO_NEXTEST_VERSION "*) ;;
+            *) echo "Unexpected cargo-nextest version: $version" >&2; exit 1 ;;
+          esac
+          version="$("$CARGO_HOME/bin/cargo-deny" --version)"
+          case "$version" in
+            "cargo-deny $CARGO_DENY_VERSION"|"cargo-deny $CARGO_DENY_VERSION "*) ;;
+            *) echo "Unexpected cargo-deny version: $version" >&2; exit 1 ;;
+          esac
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run Clippy
@@ -158,7 +161,10 @@ jobs:
       - name: Bootstrap hash-verified Rustup
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output "$rustup_init" \
             https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
@@ -166,27 +172,25 @@ jobs:
             dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
             "$rustup_init" | sha256sum --check --strict
           chmod 0755 "$rustup_init"
-          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
-            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
           rm -f -- "$rustup_init"
-          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
-          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
-          "$HOME/.cargo/bin/rustup" --version
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
       - name: Install pinned Rust toolchain with LLVM tools
         run: rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
       - name: Install pinned nightly with LLVM tools
         run: rustup toolchain install nightly-2026-08-21 --profile minimal --component llvm-tools-preview
-      - name: Restore pinned cargo-llvm-cov
-        id: llvm-cov-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ~/.cargo/bin/cargo-llvm-cov
-          key: ${{ runner.os }}-${{ runner.arch }}-tepp-cargo-llvm-cov-${{ env.CARGO_LLVM_COV_VERSION }}
       - name: Install cargo-llvm-cov
-        if: steps.llvm-cov-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+        run: cargo install cargo-llvm-cov --root "$CARGO_HOME" --locked --version "$CARGO_LLVM_COV_VERSION"
       - name: Verify pinned cargo-llvm-cov version
-        run: cargo llvm-cov --version | grep -F "$CARGO_LLVM_COV_VERSION"
+        run: |
+          test -x "${CARGO_HOME:?}/bin/cargo-llvm-cov"
+          version="$("$CARGO_HOME/bin/cargo-llvm-cov" llvm-cov --version)"
+          case "$version" in
+            "cargo-llvm-cov $CARGO_LLVM_COV_VERSION"|"cargo-llvm-cov $CARGO_LLVM_COV_VERSION "*) ;;
+            *) echo "Unexpected cargo-llvm-cov version: $version" >&2; exit 1 ;;
+          esac
       - name: Generate exact line coverage with region diagnostics
         id: line-report
         # mlx_native_receipt is excluded exactly like sqlx_live.rs: it is a
@@ -322,7 +326,10 @@ jobs:
       - name: Bootstrap hash-verified Rustup
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
             --output "$rustup_init" \
             https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
@@ -330,12 +337,11 @@ jobs:
             dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
             "$rustup_init" | sha256sum --check --strict
           chmod 0755 "$rustup_init"
-          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
-            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
           rm -f -- "$rustup_init"
-          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
-          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
-          "$HOME/.cargo/bin/rustup" --version
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Run live-sqlx PostgreSQL integration
