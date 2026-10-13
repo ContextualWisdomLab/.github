@@ -26,6 +26,7 @@ def _post_approval_arguments() -> list[str]:
     """Return the exact OpenCode post-publication scheduler signature."""
 
     return [
+        "--dry-run",
         "--repo",
         "ContextualWisdomLab/example-service",
         "--base-branch",
@@ -41,9 +42,9 @@ def _post_approval_arguments() -> list[str]:
         "--review-dispatch-limit",
         "0",
         "--no-trigger-reviews",
-        "--enable-auto-merge",
+        "--no-enable-auto-merge",
         "--merge-mode",
-        "direct_or_auto",
+        "disabled",
         "--no-update-branches",
         "--pr-number",
         "42",
@@ -351,6 +352,28 @@ def test_org_sweep_rate_limit_remains_nonzero_and_stops_rotation(
     monkeypatch.setenv("GITHUB_WORKFLOW", "Required PR Review Merge Scheduler")
 
     assert scheduler_facade.run_cli(argument_values) == 1
+
+
+def test_scheduler_followup_requires_dry_run_for_rate_limit_defer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never treat a mutation-capable follow-up as a review-only defer."""
+
+    argument_values = [
+        value for value in _post_approval_arguments() if value != "--dry-run"
+    ]
+    calls: list[list[str]] = []
+
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setattr(scheduler_core, "run", lambda args, **_: calls.append(list(args)))
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
+
+    assert scheduler_facade.run_cli(argument_values) == 1
+    assert calls == []
 
 
 def test_caller_name_alone_cannot_relabel_org_scan_as_accepted_defer(

@@ -53,7 +53,7 @@ jobs:
     # Skip before runner admission when coalescing is off. Do not move this
     # gate back to step scope: that reintroduces multi-hour queue wait for
     # an inert echo under the org concurrent-job ceiling.
-    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
+    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true' && github.repository == 'ContextualWisdomLab/.github' && github.event_name == 'schedule' && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review-coalesce-tick.yml@refs/heads/main'
     runs-on:
       group: CWL CI isolated
       labels: [self-hosted, linux, x64, cwlab-ci-isolated]
@@ -130,6 +130,7 @@ jobs:
               --review-dispatch-limit -1 \
               --branch-update-limit 0 \
               --no-enable-auto-merge \
+              --merge-mode disabled \
               --no-update-branches \
               --trigger-reviews \
               || echo "::warning::Coalesce tick pass failed for ${repo}; continuing with remaining repositories."
