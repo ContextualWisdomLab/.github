@@ -154,7 +154,11 @@ class PrivateRustTests(unittest.TestCase):
                                     version + ".99" if state == "near_version" else
                                     version + " (fixture metadata)" if state == "with_metadata" else version)
                         binary = private / "bin" / name
-                        binary.write_text(f'#!/bin/bash\nprintf "{name} {reported}\\n"\nexit {43 if state == "nonzero" else 0}\n')
+                        argv_guard = (
+                            '[ "$1" = llvm-cov ] || { printf "expected llvm-cov subcommand\\n" >&2; exit 44; }\n'
+                            if name == "cargo-llvm-cov" else ""
+                        )
+                        binary.write_text(f'#!/bin/bash\n{argv_guard}printf "{name} {reported}\\n"\nexit {43 if state == "nonzero" else 0}\n')
                         binary.chmod(0o755)
                 for script in scripts:
                     result = subprocess.run(["/bin/bash", "-e", "-o", "pipefail", "-c", script],

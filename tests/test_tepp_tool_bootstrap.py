@@ -198,7 +198,7 @@ class SupplierBootstrapTests(unittest.TestCase):
                 if not line.startswith("        run: ") or line.strip() == "run: |":
                     continue
                 if "cargo llvm-cov --version" in line:
-                    self.assertIn('"$CARGO_HOME/bin/cargo-llvm-cov" --version', (ROOT / relative).read_text())
+                    self.assertIn('"$CARGO_HOME/bin/cargo-llvm-cov" llvm-cov --version', (ROOT / relative).read_text())
                 elif "cargo install cargo-llvm-cov" in line:
                     self.assertIn(line.replace(" --locked", ' --root "$CARGO_HOME" --locked'), (ROOT / relative).read_text())
                 else:

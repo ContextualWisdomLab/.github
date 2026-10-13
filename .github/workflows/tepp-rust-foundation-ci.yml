@@ -202,7 +202,7 @@ jobs:
       - name: Verify pinned cargo-llvm-cov version
         run: |
           test -x "${CARGO_HOME:?}/bin/cargo-llvm-cov"
-          version="$("$CARGO_HOME/bin/cargo-llvm-cov" --version)"
+          version="$("$CARGO_HOME/bin/cargo-llvm-cov" llvm-cov --version)"
           case "$version" in
             "cargo-llvm-cov $CARGO_LLVM_COV_VERSION"|"cargo-llvm-cov $CARGO_LLVM_COV_VERSION "*) ;;
             *) echo "Unexpected cargo-llvm-cov version: $version" >&2; exit 1 ;;
