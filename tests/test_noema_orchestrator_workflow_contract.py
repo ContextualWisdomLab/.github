@@ -878,3 +878,74 @@ def test_evidence_initialization_rejects_path_aliases_without_deletion(tmp_path:
     for path in evidence.iterdir():
         if path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1:
             assert path.read_text() == "old evidence\n"
+
+
+@pytest.mark.parametrize(
+    "metadata,expected",
+    [
+        pytest.param({"visibility": "public"}, "false", id="public"),
+        pytest.param({"visibility": "private"}, "true", id="private"),
+        pytest.param({"visibility": "internal"}, "true", id="internal"),
+        pytest.param({"private": True}, "true", id="legacy-true"),
+        pytest.param({"private": False}, "false", id="legacy-false"),
+        pytest.param({}, None, id="missing"),
+        pytest.param({"private": None}, None, id="null"),
+        pytest.param({"private": "false"}, None, id="string"),
+        pytest.param({"visibility": "unknown"}, None, id="unknown"),
+        pytest.param({"private": 0}, None, id="zero"),
+        pytest.param({"private": 1}, None, id="one"),
+        pytest.param({"private": []}, None, id="array"),
+        pytest.param({"private": {}}, None, id="object"),
+        pytest.param({"visibility": None, "private": False}, "false", id="null-visibility-boolean"),
+        pytest.param({"visibility": "unknown", "private": False}, None, id="unknown-overrides-fallback"),
+    ],
+)
+def test_noema_visibility_requires_explicit_visibility_or_boolean_fallback(
+    tmp_path: Path, metadata: dict, expected: str | None
+) -> None:
+    """Execute the actual gh/jq visibility shell; malformed metadata must not route."""
+    assert shutil.which("jq") is not None
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Resolve Noema target repository visibility",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\n'
+        'test "$1" = api\ntest "$2" = /repos/ContextualWisdomLab/example\n'
+        'test "$3" = --jq\ntest "$#" = 4\n'
+        'printf called >> "$FAKE_GH_CALLS"\n'
+        'printf "%s" "$FAKE_METADATA" | jq -r "$4"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    calls = tmp_path / "gh-calls"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(tmp_path),
+            "GITHUB_OUTPUT": str(output),
+            "GH_TOKEN": "synthetic-review-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "FAKE_METADATA": json.dumps(metadata),
+            "FAKE_GH_CALLS": str(calls),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    assert calls.read_text(encoding="utf-8") == "called"
+    assert "synthetic-review-token" not in result.stdout + result.stderr
+    if expected is None:
+        assert result.returncode != 0, (metadata, result.stdout)
+        assert not output.exists()
+        assert "visibility is missing or unsupported" in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert output.read_text(encoding="utf-8") == f"require_zdr={expected}\n"
