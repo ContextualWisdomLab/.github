@@ -1829,5 +1829,159 @@
     "normalized_sha256": "105203a621bb4c0886ffcff5770891778376d1e6b0aefb349d9043fc7021064c",
     "identifier": "MIT",
     "fixture": "shlex-2.0.1-MIT.txt"
+  },
+  {
+    "package": "ndk-sys@0.6.0+11769913 upstream LICENSE-MIT",
+    "fixture": "ndk-sys-0.6.0+11769913-upstream-LICENSE-MIT.txt",
+    "identifier": "MIT",
+    "raw_sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+    "normalized_sha256": "7c9b48b52decb9837c70f608678129e1ac79e056829c8d1e82e8cdd8aed562f8",
+    "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-MIT",
+    "source_members": [
+      {
+        "member": "ndk-sys-0.6.0+11769913/.gitignore",
+        "sha256": "6b937008e0a58a438c32574627db6961a4d2aff4bf5c703d4e45cb56ef3b168a",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/.gitignore",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/CHANGELOG.md",
+        "sha256": "7910d431a63bb1437708f9a75435419941b2b27ba15e50ecafb159c2564e5d84",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/CHANGELOG.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/Cargo.toml.orig",
+        "sha256": "c860c6b92e9c7fb701d0ab8ba09b2ec6f35c78a3c609fcc32e73581b3e230eb1",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/Cargo.toml",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/README.md",
+        "sha256": "27fdcf69714fcf6f81b1d2fe4e185cd698056681dfa539c716d33bb9bcc9ff6f",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/README.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/generate_bindings.sh",
+        "sha256": "ac09eddd85323507a4b4a77634163b0da94c3e3f9f04ad061300c024b974ab1c",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/generate_bindings.sh",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_aarch64.rs",
+        "sha256": "d93eb87810876180e906cf02b599dbb299c581384b38e5c3e9617000e1fd332e",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_aarch64.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_arm.rs",
+        "sha256": "62b88068ea170726581c6b7077e2ae07dca3dc1f636af1cac20bf3cf4ccaefb3",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_arm.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_i686.rs",
+        "sha256": "ede1fa2a87d3c15697e0fd452d4cdf6c35ee889046064e3b2c7bfcbc629914c5",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_i686.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_x86_64.rs",
+        "sha256": "0a4fc4dc60378ca3433927d1ad500fa9e33e7069e974fa3f89a3c97e7fcabf6b",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_x86_64.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/lib.rs",
+        "sha256": "22999084db740073e1db22d0d47ed56035cc665c1ce353c1753a8e9cb917efdd",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/lib.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/wrapper.h",
+        "sha256": "43f5ed0d881f221df76be881760da0ec9f355c2fc1dc11461975cc21cd297092",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/wrapper.h",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "limitation": "Separate immutable upstream grant, absent from original crate; admission additionally requires exact source Git notice proof."
+  },
+  {
+    "package": "ndk-sys@0.6.0+11769913 upstream LICENSE-APACHE",
+    "fixture": "ndk-sys-0.6.0+11769913-upstream-LICENSE-APACHE.txt",
+    "identifier": "Apache-2.0",
+    "raw_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+    "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-APACHE",
+    "source_members": [
+      {
+        "member": "ndk-sys-0.6.0+11769913/.gitignore",
+        "sha256": "6b937008e0a58a438c32574627db6961a4d2aff4bf5c703d4e45cb56ef3b168a",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/.gitignore",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/CHANGELOG.md",
+        "sha256": "7910d431a63bb1437708f9a75435419941b2b27ba15e50ecafb159c2564e5d84",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/CHANGELOG.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/Cargo.toml.orig",
+        "sha256": "c860c6b92e9c7fb701d0ab8ba09b2ec6f35c78a3c609fcc32e73581b3e230eb1",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/Cargo.toml",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/README.md",
+        "sha256": "27fdcf69714fcf6f81b1d2fe4e185cd698056681dfa539c716d33bb9bcc9ff6f",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/README.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/generate_bindings.sh",
+        "sha256": "ac09eddd85323507a4b4a77634163b0da94c3e3f9f04ad061300c024b974ab1c",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/generate_bindings.sh",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_aarch64.rs",
+        "sha256": "d93eb87810876180e906cf02b599dbb299c581384b38e5c3e9617000e1fd332e",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_aarch64.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_arm.rs",
+        "sha256": "62b88068ea170726581c6b7077e2ae07dca3dc1f636af1cac20bf3cf4ccaefb3",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_arm.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_i686.rs",
+        "sha256": "ede1fa2a87d3c15697e0fd452d4cdf6c35ee889046064e3b2c7bfcbc629914c5",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_i686.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/ffi_x86_64.rs",
+        "sha256": "0a4fc4dc60378ca3433927d1ad500fa9e33e7069e974fa3f89a3c97e7fcabf6b",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/ffi_x86_64.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/src/lib.rs",
+        "sha256": "22999084db740073e1db22d0d47ed56035cc665c1ce353c1753a8e9cb917efdd",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/src/lib.rs",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "ndk-sys-0.6.0+11769913/wrapper.h",
+        "sha256": "43f5ed0d881f221df76be881760da0ec9f355c2fc1dc11461975cc21cd297092",
+        "upstream_url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/ndk-sys/wrapper.h",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "limitation": "Separate immutable upstream grant, absent from original crate; admission additionally requires exact source Git notice proof."
   }
 ]
