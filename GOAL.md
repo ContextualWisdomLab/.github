@@ -1,6 +1,21 @@
 # Goal — K-CSAP 중앙 self-hosted 실행과 조건부 병합
 
-갱신: 2026-10-11 KST. 이 worktree의 단일 작성자는 goosefish 부모다.
+갱신: 2026-10-13 KST. 이 worktree의 단일 작성자는 goosefish 부모다.
+
+## 최신 직접 권한과 실행 분해
+
+사용자는 인프라 장애에 대응하기 위한 bypass merge를 직접 허용했다. 아래 이전의 일반 병합 전용·일괄 HOLD 조건은 이 권한 범위에서 대체한다. 소스 전달과 운영 활성화를 분리한다. 확인된 코드·보안 결함은 수리하고, 미실행 CI/App 검사는 PASS나 APPROVED로 만들지 않는다. 사람 팀원을 추가로 요구하지 않는다. 미래 head 실행을 그 head의 게시 선행조건으로 두지 않는다.
+
+| 조각 | 담당 | 다음 실제 동작 | 완료 증거 | 진짜 선행 조건 |
+|---|---|---|---|---|
+| 현재 PR2615 전달 가능성 | 부모 + 읽기전용 평가자 | live head/base/checks/threads와 retained source review를 대조하고 우회할 인프라 check를 특정 | exact-head 병합 사전판정, 실제 merge와 readback 또는 실제 거절 | 미해결 substantive 소스 결함이 없음 |
+| 전체 gate 실패 분리 | 별도 읽기전용 평가자 | 기존 9개 실패와 coverage 미달을 환경·상속 소스·미검증으로 분류하고 기존 수리 찾아 결합 범위 제시 | 현재 bytes에 근거한 최소 수리 경로 | label/runner/App 대기 불필요 |
+| canonical label | 기존 shared owner + 부모 | 기존 한 줄 patch 수락과 producer config 연결, 기본 actionlint 실행 | canonical invocation 직접 exit | shared 파일 쓰기 경계만 직렬화 |
+| central exact-head runtime 연결 | 부모 producer + oscar runtime | 실제 consumer 인자·승인 계약에 맞춘 adapter 구현·시험 | runnable adapter와 승인된 Linux lifecycle 증거 | 실행 시 runner custody·credential 분리 |
+| literal auto/App 복구 | Remora/#2560 | 기존 경로의 실제 inference와 독립 App 게시 복구 | 실제 verdict/review object | 키·비공개 자료 보호 |
+
+인프라 복구는 source delivery와 병렬로 진행한다. bypass는 exact PR/head/base와 실제 인프라 실패에 한정한다. 보호 설정 삭제·가짜 status·자기 승인·force push·키/ACL 확대는 하지 않는다. 로컬 untracked CLI의 검증은 현재 원격 PR의 검증과 구별한다. 이전 head와 일정은 아래 역사적 기록이며 live 조회로 대체한다.
+
 
 ## 완료 결과
 
@@ -8,11 +23,11 @@
 
 사용자는 commit/push/조건부 merge와 Startup failure 경로의 중앙 self-hosted 전환을 승인했다. 전환 불가 hosted 절차의 비활성화도 승인했다. 이는 검증·개인정보·키 관리·보호 규칙 완화나 미실행 증거의 통과 승격 승인이 아니다. 별도의 인간 개발자를 전제로 하지 않는다.
 
-## 현재 직접 확인
+## 2026-10-10 기준 직접 확인 (역사 기록; 현재 값은 위 표와 live 조회로 대체)
 
 - PR #2615 head: `aacc387349c62b54ed96a9bd96b17c022296897b`; OPEN/Draft/BLOCKED, formal review 0.
 - 중앙 protected base: `7554587c2e3106a388998bcad048a3d7121de25e`.
-- 공유 #2565 head: `ef0c9d4c668fac7f01609b8fbd61a4126b103f5c`, 아직 protected main에 전달되지 않았다.
+- 2026-10-10 기준 공유 #2565 head: `ef0c9d4c668fac7f01609b8fbd61a4126b103f5c`; 당시 아직 protected main에 전달되지 않았다. 이후 #2565는 main에 병합됐다.
 - callee workflow SHA-256: `2b14845ebf761652ca78ecdaac86c6e851ea41dc573312f41ade2695b0a719b7`.
 - test SHA-256: `36bbf733ea0bec7e0cd3b03cb07d6c466cf19fffb578f16114e820a9d69c3737`.
 - fresh source review `dbc0d58d24a098c68f33268fcd8dc1a6de00f57bfe729aa0dd0272fd4e29ff62`: 조건부 소스 수용. actual admission 35개와 SHA 소비자 4개 통과, frozen test 28개 통과. 실행 도구 대체는 합성 fixture이며 제품 runtime 실행이 아니다.

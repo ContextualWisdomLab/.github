@@ -24,8 +24,19 @@ def test_reusable_only_and_no_hosted_fallback():
     source = CENTRAL.read_text(encoding="utf-8")
     assert "ubuntu-latest" not in source and "ubuntu-24.04" not in source
     assert "secrets:" not in source and "continue-on-error" not in source
-    assert "concurrency:" not in source
+    assert "concurrency" not in job
     assert job["timeout-minutes"] <= 20
+
+
+def test_workflow_scope_concurrency_supersedes_same_pr_only():
+    """AGENTS.md: PR 번호로 runner 배정 전 병합하고, 비PR 실행은 서로 취소하지 않는다."""
+    concurrency = workflow()["concurrency"]
+    group = concurrency["group"]
+    assert concurrency["cancel-in-progress"] is True
+    assert "github.repository" in group
+    assert "github.event.pull_request.number" in group
+    assert "github.run_id" in group
+    assert "sha" not in group
 
 
 def test_runner_assignment_admits_only_trusted_caller_before_lease():
@@ -134,7 +145,6 @@ def test_locked_quality_steps_and_scope_are_executable():
         assert required in source
     assert "set -euo pipefail" in source
     assert "git rev-parse HEAD" in source
-    assert "RUNNER_TEMP" in source
     assert "trap " in source
     assert "UV_PYTHON_INSTALL_DIR" in source
     assert "UV_CACHE_DIR" in source
@@ -163,6 +173,7 @@ def test_quality_shell_keeps_original_status_and_removes_private_runtime(tmp_pat
     work = tmp_path / "source"
     work.mkdir()
     (work / ".git").mkdir()
+    (work / ".ci-tools/tmp").mkdir(parents=True)
     sentinel = tmp_path / "untouched"
     sentinel.write_text("keep")
     bindir = tmp_path / "bin"
@@ -173,7 +184,7 @@ def test_quality_shell_keeps_original_status_and_removes_private_runtime(tmp_pat
         tool.write_text(
             "#!/bin/sh\n"
             "if [ \"$1\" = rev-parse ]; then printf '%s\\n' \"$EXPECTED_SHA\"; exit 0; fi\n"
-            "if [ \"$1\" = diff ]; then exit 0; fi\n"
+            "if [ \"$1\" = diff ] || [ \"$1\" = hash-object ]; then exit 0; fi\n"
             "if [ \"$1\" = python ] && [ \"$2\" = install ]; then : >\"$MARKER\"; fi\n"
             "if [ \"$FAIL_AT\" = install ] && [ \"$1\" = python ]; then exit 37; fi\n"
             "if [ \"$FAIL_AT\" = test ] && [ \"$1\" = run ] && "
@@ -189,7 +200,50 @@ def test_quality_shell_keeps_original_status_and_removes_private_runtime(tmp_pat
     assert proc.returncode == {"success": 0, "install": 37, "test": 43}[failed_at], proc.stderr
     assert sentinel.read_text() == "keep"
     assert list(tmp_path.glob("k-csap-quality.*")) == []
+    assert list((work / ".ci-tools/tmp").glob("k-csap-quality.*")) == []
     assert marker.exists()
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_quality_shell_checks_committed_whitespace_in_run_owned_temp(tmp_path, dirty):
+    """깨끗한 checkout에서도 커밋된 공백 오류를 거부하고 공유 RUNNER_TEMP를 쓰지 않는다."""
+    import os
+    import subprocess
+
+    verify = next(
+        step for step in workflow()["jobs"]["quality"]["steps"]
+        if step.get("name", "").startswith("Verify K-CSAP")
+    )
+    work = tmp_path / "source"
+    work.mkdir()
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run([*git, "init", "-q"], cwd=work, check=True)
+    (work / "a.txt").write_text("x  \n" if dirty else "x\n")
+    subprocess.run([*git, "add", "a.txt"], cwd=work, check=True)
+    subprocess.run([*git, "commit", "-qm", "c"], cwd=work, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
+    (work / ".ci-tools/tmp").mkdir(parents=True)
+    shared = tmp_path / "shared-runner-temp"
+    shared.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    seen = tmp_path / "seen"
+    uv = bindir / "uv"
+    uv.write_text('#!/bin/sh\nprintf "%s\\n" "$UV_PROJECT_ENVIRONMENT" >>"$SEEN"\nexit 0\n')
+    uv.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
+           "RUNNER_TEMP": str(shared), "EXPECTED_SHA": sha, "SEEN": str(seen)}
+    proc = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", verify["run"]],
+                          cwd=work, env=env, capture_output=True, text=True, check=False)
+    assert (proc.returncode != 0) is dirty, proc.stdout + proc.stderr
+    if dirty:
+        assert "trailing whitespace" in proc.stdout + proc.stderr
+    venvs = seen.read_text().split()
+    assert venvs and all(
+        Path(v).resolve().is_relative_to((work / ".ci-tools/tmp").resolve()) for v in venvs
+    )
+    assert list(shared.iterdir()) == []
+    assert list((work / ".ci-tools/tmp").iterdir()) == []
 
 
 @pytest.mark.parametrize(

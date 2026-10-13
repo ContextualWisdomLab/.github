@@ -6,6 +6,12 @@ on:
 permissions:
   contents: read
 
+# Coalesce superseded heads of the same PR before runner assignment. Non-PR runs
+# use the unique run id so protected-branch runs never cancel each other.
+concurrency:
+  group: k-csap-skills-quality-${{ github.repository }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     name: k-csap-skills-quality
@@ -136,7 +142,8 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
-          job_root="$(mktemp -d "${RUNNER_TEMP:?}/k-csap-quality.XXXXXX")"
+          test -d .ci-tools/tmp && test ! -L .ci-tools/tmp
+          job_root="$(mktemp -d "$PWD/.ci-tools/tmp/k-csap-quality.XXXXXX")"
           cleanup() { rm -rf -- "$job_root"; }
           trap cleanup EXIT
           unset PYTHONHOME PYTHONPATH
@@ -150,7 +157,8 @@ jobs:
           uv run --python 3.11.14 ruff check .
           uv run --python 3.11.14 pytest -q
           uv run --python 3.11.14 python scripts/validate.py
-          git diff --check
+          # A clean checkout has no working-tree diff; check committed content.
+          git diff --check "$(git hash-object -t tree /dev/null)" HEAD
 
       - name: Clean run-owned source after any step result
         if: always()

@@ -1,6 +1,15 @@
 # K-CSAP 중앙 품질 실행 상태
 
-확인일: 2026-10-09 KST. 관련 issue: 중앙 #2612. 이 문서는 실행 성공 또는 출시 승인이 아니다.
+기준일: 2026-10-09 KST. 최종 갱신: 2026-10-13 KST. 관련 issue: 중앙 #2612. 이 문서는 실행 성공 또는 출시 승인이 아니다.
+
+## 2026-10-13 갱신
+
+- canonical `.github/actionlint.yaml`에 `k-csap-isolated`를 등록했다. 기본 actionlint 호출 exit 0이다.
+- 리뷰 지적에 따라 workflow-scope `concurrency`(같은 PR의 이전 head 취소, 비PR은 run id 분리)를 추가했다.
+- `git diff --check`는 깨끗한 checkout에서 빈 결과만 내므로 빈 tree 대비 HEAD 전체를 검사하도록 바꿨다. 실제 git 저장소로 커밋된 공백의 거부를 시험했다.
+- job 전용 임시 디렉터리를 공유 `RUNNER_TEMP`가 아닌 run-owned `.ci-tools/tmp` 아래에 만든다.
+- 아래의 workflow SHA-256 `9c4cc914…`, `2b14845e…` 등은 당시 기록이다. 현재 head의 workflow 바이트는 이후 수정되었으므로 그 리뷰를 현재 head의 승인으로 재사용하지 않는다.
+- 실제 Linux runner 실행·App 승인은 여전히 미검증이다.
 
 ## 현재 단계
 
