@@ -45,3 +45,45 @@ jobs:
           mode: code-change
           output-sarif: true
           sanitizer: ${{ matrix.sanitizer }}
+      - name: Restore runner access to ClusterFuzzLite workspace
+        if: ${{ always() }}
+        run: |
+          # Docker creates root-owned storage/work directories. Restore directory
+          # access for the next checkout; retain evidence and file ownership.
+          sudo python3 - "$GITHUB_WORKSPACE" "$(id -u)" "$(id -g)" <<'PY'
+          import os
+          import stat
+          import sys
+
+          root, uid, gid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+          if uid <= 0 or gid <= 0 or root == '/' or not os.path.isabs(root) or os.path.realpath(root) != root:
+              raise SystemExit("Unsafe ClusterFuzzLite workspace identity")
+          flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+          identity = os.stat(root, follow_symlinks=False)
+          directory = os.open(root, flags)
+          try:
+              opened = os.fstat(directory)
+              if (identity.st_dev, identity.st_ino, identity.st_uid) != (opened.st_dev, opened.st_ino, uid):
+                  raise SystemExit("ClusterFuzzLite workspace changed during cleanup")
+              device = opened.st_dev
+
+              def restore(fd):
+                  for name in os.listdir(fd):
+                      entry = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                      if entry.st_dev != device or stat.S_ISLNK(entry.st_mode):
+                          continue
+                      if stat.S_ISDIR(entry.st_mode):
+                          child = os.open(name, flags, dir_fd=fd)
+                          try:
+                              opened_child = os.fstat(child)
+                              if (opened_child.st_dev, opened_child.st_ino) == (entry.st_dev, entry.st_ino):
+                                  restore(child)
+                                  if os.fstat(child).st_uid == 0:
+                                      os.fchown(child, uid, gid)
+                          finally:
+                              os.close(child)
+
+              restore(directory)
+          finally:
+              os.close(directory)
+          PY
