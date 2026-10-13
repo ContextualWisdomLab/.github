@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import os
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -288,6 +289,138 @@ def test_verify_caller_contract_rejects_source_bound_mutations(monkeypatch, muta
         test_verify_runs_product_owned_caller_contract_oracles()
 
 
+@pytest.mark.parametrize(
+    ("output", "cargo_exit", "accepted"),
+    [
+        (
+            "\nrunning 1 test\n"
+            "test rootless_podman_effective_isolation_and_cleanup ... ok\n\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            "1 filtered out; finished in 0.25s\n",
+            0,
+            True,
+        ),
+        (
+            "\nrunning 0 tests\n\n"
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; "
+            "2 filtered out; finished in 0.00s\n",
+            0,
+            False,
+        ),
+        ("", 0, False),
+        (
+            "running 1 test\ntest renamed_isolation_test ... ok\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            "1 filtered out; finished in 0.00s\n",
+            0,
+            False,
+        ),
+        (
+            "running 1 test\n"
+            "test rootless_podman_effective_isolation_and_cleanup ... ignored\n"
+            "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; "
+            "1 filtered out; finished in 0.00s\n",
+            0,
+            False,
+        ),
+        (
+            "running 1 test\n"
+            "test rootless_podman_effective_isolation_and_cleanup ... FAILED\n"
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; "
+            "1 filtered out; finished in 0.00s\n",
+            101,
+            False,
+        ),
+        (
+            "running 1 test\ntest rootless_podman_effective_isolation_and_cleanup ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.25s\nrunning 1 test\ntest rootless_podman_effective_isolation_and_cleanup ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.25s\n",
+            0,
+            False,
+        ),
+        (
+            "running 1 test\ntest rootless_podman_effective_isolation_and_cleanup ... ok\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.25s\n",
+            0,
+            False,
+        ),
+        (
+            "running 1 test\ntest rootless_podman_effective_isolation_and_cleanup ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.25s\n",
+            42,
+            False,
+        ),
+        (
+            "running 1 test\ntest rootless_podman_effective_isolation_and_cleanup ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.25s\ntest extra_test ... ok\n",
+            0,
+            False,
+        ),
+    ],
+)
+def test_positive_lsm_actual_shell_rejects_missing_execution(
+    tmp_path, output, cargo_exit, accepted
+):
+    """Exercise the actual YAML command with synthetic Cargo output and exit."""
+    script = next(
+        step["run"]
+        for step in workflow()["jobs"]["podman-e2e-positive-lsm"]["steps"]
+        if step.get("name")
+        == "Execute real positive LSM isolation and cleanup acceptance"
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    expected_argv = (
+        "test --locked --test podman_rootless_e2e -- --ignored --exact "
+        "rootless_podman_effective_isolation_and_cleanup "
+        "--color never --format pretty --test-threads=1"
+    )
+    cargo = tools / "cargo"
+    cargo.write_text(
+        "#!/bin/sh\n"
+        f'test "$*" = "{expected_argv}" || exit 64\n'
+        'test "$RUST_TEST_NOCAPTURE" = "0" || exit 65\n'
+        'printf "%s" "$CARGO_OUTPUT"\n'
+        'exit "$CARGO_EXIT"\n',
+        encoding="utf-8",
+    )
+    cargo.chmod(0o700)
+    (tools / "python3").symlink_to(sys.executable)
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        cwd=tmp_path,
+        env={
+            "PATH": str(tools) + os.pathsep + os.defpath,
+            "CARGO_OUTPUT": output,
+            "CARGO_EXIT": str(cargo_exit),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert (result.returncode == 0) == accepted, (
+        "LSM-TEST-001: execution witness was misclassified",
+        result.returncode,
+        result.stdout,
+        result.stderr,
+    )
+    if cargo_exit:
+        assert result.returncode == cargo_exit, "Cargo producer failure was masked"
+
+
+def test_positive_lsm_exact_filter_requires_one_passing_test_witness():
+    """Require capture mode and an unconditionally executed counted witness."""
+    step = next(
+        step
+        for step in workflow()["jobs"]["podman-e2e-positive-lsm"]["steps"]
+        if step.get("name")
+        == "Execute real positive LSM isolation and cleanup acceptance"
+    )
+    assert set(step) == {"name", "run"}
+    script = step["run"]
+    assert script.startswith("RUST_TEST_NOCAPTURE=0 python3 -I - <<'PY'\n")
+    assert "LSM-TEST-001" in script
+    assert "--nocapture" not in script
+    assert "--no-capture" not in script
+    assert "tee " not in script, "do not introduce a fixed evidence file"
+
+
 def test_preserves_all_four_job_mechanics():
     """Preserve each required lane and keep admission evidence separate."""
     jobs = workflow()["jobs"]
@@ -304,11 +437,14 @@ def test_preserves_all_four_job_mechanics():
             not in {"Verify exact checkout", "Verify caller and event before checkout"}
         ]
         if name == "podman-e2e-positive-lsm":
-            # Only the independently reproduced baseline cleanup error is repaired.
-            assert steps[:-1] == expected["steps"][:-1], name
-            assert steps[-1]["name"] == expected["steps"][-1]["name"]
-            assert steps[-1]["if"] == "always()"
-            assert steps[-1]["run"].startswith(
+            # Only the exact-test witness and the known cleanup bug differ.
+            assert len(steps) == len(expected["steps"])
+            assert steps[0:3] == expected["steps"][0:3], name
+            assert steps[3]["name"] == expected["steps"][3]["name"]
+            test_positive_lsm_exact_filter_requires_one_passing_test_witness()
+            assert steps[4]["name"] == expected["steps"][-1]["name"]
+            assert steps[4]["if"] == "always()"
+            assert steps[4]["run"].startswith(
                 expected["steps"][-1]["run"].split("leaked_networks=", 1)[0]
             )
         else:

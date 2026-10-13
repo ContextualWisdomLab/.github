@@ -303,10 +303,42 @@ jobs:
           podman pull --quiet "$QSR_PODMAN_E2E_IMAGE"
           podman image inspect "$QSR_PODMAN_E2E_IMAGE" >/dev/null
       - name: Execute real positive LSM isolation and cleanup acceptance
-        run: >-
-          cargo test --locked
-          --test podman_rootless_e2e
-          -- --ignored --exact rootless_podman_effective_isolation_and_cleanup --nocapture
+        run: |
+          RUST_TEST_NOCAPTURE=0 python3 -I - <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          test_name = "rootless_podman_effective_isolation_and_cleanup"
+          command = [
+              "cargo", "test", "--locked", "--test", "podman_rootless_e2e", "--",
+              "--ignored", "--exact", test_name, "--color", "never", "--format", "pretty",
+              "--test-threads=1",
+          ]
+          completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          output = completed.stdout.decode("utf-8", errors="replace")
+          print(output, end="", flush=True)
+          if completed.returncode:
+              raise SystemExit(completed.returncode)
+          lines = output.splitlines()
+          expected_result = re.compile(
+              r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+              r"[0-9]+ filtered out; finished in [0-9.]+s"
+          )
+          observed = [
+              line for line in lines
+              if line.startswith("running ")
+              or line.startswith("test ")
+              or line.startswith("test result:")
+          ]
+          expected = [
+              "running 1 test",
+              f"test {test_name} ... ok",
+          ]
+          if len(observed) != 3 or observed[:2] != expected or not expected_result.fullmatch(observed[2]):
+              print("LSM-TEST-001: expected exactly one passing isolation test", file=sys.stderr)
+              raise SystemExit(1)
+          PY
       - name: Reject leaked runtime-owned resources
         if: always()
         run: |

@@ -72,9 +72,51 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                 assert required.issubset(label.lower() for label in labels), (
                     path, job_id, 'missing required static labels', required.difference(labels),
                 )
+            elif isinstance(runner, list):
+                # Preserve the already merged K-CSAP selector, not arbitrary lists.
+                assert (path.as_posix(), job_id) == (
+                    '.github/workflows/k-csap-skills-quality.yml', 'quality',
+                ), (path, job_id, 'unsupported static label-only selector')
+                assert runner == ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], (
+                    path, job_id, 'changed K-CSAP isolation selector', runner,
+                )
             else:
                 assert isinstance(runner, str) and 'cwlab-ci-isolated' in runner, (path, job_id, runner)
     assert observed, 'runner selector coverage is empty'
+
+
+@pytest.mark.parametrize(
+    ('workflow_name', 'job_id', 'labels', 'accepted'),
+    [
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], True),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64'], False),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'k-csap-isolated'], False),
+        ('k-csap-skills-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'cwlab-control'], False),
+        ('foreign-quality.yml', 'quality',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], False),
+        ('k-csap-skills-quality.yml', 'foreign-job',
+         ['self-hosted', 'Linux', 'X64', 'k-csap-isolated'], False),
+    ],
+)
+def test_existing_kcsap_list_selector_remains_exact(
+    tmp_path, monkeypatch, workflow_name, job_id, labels, accepted
+):
+    """Admit one inherited label-only selector, not arbitrary runner lists."""
+    directory = tmp_path / '.github/workflows'
+    directory.mkdir(parents=True)
+    (directory / workflow_name).write_text(
+        yaml.safe_dump({'jobs': {job_id: {'runs-on': labels}}}), encoding='utf-8'
+    )
+    monkeypatch.chdir(tmp_path)
+    if accepted:
+        test_nonprivileged_runners_require_isolated_label()
+    else:
+        with pytest.raises(AssertionError):
+            test_nonprivileged_runners_require_isolated_label()
 
 
 def test_static_runner_group_policy_is_explicit_and_fail_closed() -> None:

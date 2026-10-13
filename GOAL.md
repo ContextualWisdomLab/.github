@@ -1,0 +1,84 @@
+# Goal — K-CSAP 중앙 self-hosted 실행과 조건부 병합
+
+갱신: 2026-10-13 KST. 이 worktree의 단일 작성자는 goosefish 부모다.
+
+## 최신 직접 권한과 실행 분해
+
+사용자는 인프라 장애에 대응하기 위한 bypass merge를 직접 허용했다. 아래 이전의 일반 병합 전용·일괄 HOLD 조건은 이 권한 범위에서 대체한다. 소스 전달과 운영 활성화를 분리한다. 확인된 코드·보안 결함은 수리하고, 미실행 CI/App 검사는 PASS나 APPROVED로 만들지 않는다. 사람 팀원을 추가로 요구하지 않는다. 미래 head 실행을 그 head의 게시 선행조건으로 두지 않는다.
+
+| 조각 | 담당 | 다음 실제 동작 | 완료 증거 | 진짜 선행 조건 |
+|---|---|---|---|---|
+| 현재 PR2615 전달 가능성 | 부모 + 읽기전용 평가자 | live head/base/checks/threads와 retained source review를 대조하고 우회할 인프라 check를 특정 | exact-head 병합 사전판정, 실제 merge와 readback 또는 실제 거절 | 미해결 substantive 소스 결함이 없음 |
+| 전체 gate 실패 분리 | 별도 읽기전용 평가자 | 기존 9개 실패와 coverage 미달을 환경·상속 소스·미검증으로 분류하고 기존 수리 찾아 결합 범위 제시 | 현재 bytes에 근거한 최소 수리 경로 | label/runner/App 대기 불필요 |
+| canonical label | 기존 shared owner + 부모 | 기존 한 줄 patch 수락과 producer config 연결, 기본 actionlint 실행 | canonical invocation 직접 exit | shared 파일 쓰기 경계만 직렬화 |
+| central exact-head runtime 연결 | 부모 producer + oscar runtime | 실제 consumer 인자·승인 계약에 맞춘 adapter 구현·시험 | runnable adapter와 승인된 Linux lifecycle 증거 | 실행 시 runner custody·credential 분리 |
+| literal auto/App 복구 | Remora/#2560 | 기존 경로의 실제 inference와 독립 App 게시 복구 | 실제 verdict/review object | 키·비공개 자료 보호 |
+
+인프라 복구는 source delivery와 병렬로 진행한다. bypass는 exact PR/head/base와 실제 인프라 실패에 한정한다. 보호 설정 삭제·가짜 status·자기 승인·force push·키/ACL 확대는 하지 않는다. 로컬 untracked CLI의 검증은 현재 원격 PR의 검증과 구별한다. 이전 head와 일정은 아래 역사적 기록이며 live 조회로 대체한다.
+
+
+## 완료 결과
+
+중앙 `ContextualWisdomLab/.github` PR #2615를 검증과 독립 App 승인 후 일반 병합으로 `main`에 전달한다. 제품 `k-csap-skills`에는 검증된 중앙 commit을 호출하는 얇은 caller만 남긴다. 실제 self-hosted job과 개인 LiteLLM `auto` 리뷰를 실행하고, 작성자와 다른 Noema/OpenCode App의 현재 head 승인을 확인한다.
+
+사용자는 commit/push/조건부 merge와 Startup failure 경로의 중앙 self-hosted 전환을 승인했다. 전환 불가 hosted 절차의 비활성화도 승인했다. 이는 검증·개인정보·키 관리·보호 규칙 완화나 미실행 증거의 통과 승격 승인이 아니다. 별도의 인간 개발자를 전제로 하지 않는다.
+
+## 2026-10-10 기준 직접 확인 (역사 기록; 현재 값은 위 표와 live 조회로 대체)
+
+- PR #2615 head: `aacc387349c62b54ed96a9bd96b17c022296897b`; OPEN/Draft/BLOCKED, formal review 0.
+- 중앙 protected base: `7554587c2e3106a388998bcad048a3d7121de25e`.
+- 2026-10-10 기준 공유 #2565 head: `ef0c9d4c668fac7f01609b8fbd61a4126b103f5c`; 당시 아직 protected main에 전달되지 않았다. 이후 #2565는 main에 병합됐다.
+- callee workflow SHA-256: `2b14845ebf761652ca78ecdaac86c6e851ea41dc573312f41ade2695b0a719b7`.
+- test SHA-256: `36bbf733ea0bec7e0cd3b03cb07d6c466cf19fffb578f16114e820a9d69c3737`.
+- fresh source review `dbc0d58d24a098c68f33268fcd8dc1a6de00f57bfe729aa0dd0272fd4e29ff62`: 조건부 소스 수용. actual admission 35개와 SHA 소비자 4개 통과, frozen test 28개 통과. 실행 도구 대체는 합성 fixture이며 제품 runtime 실행이 아니다.
+- setup-uv review `2159eec4f6343b82250124b78af57ed8925deaa8a63dc007a6f7e15a9670da83`: 실제 pinned dist macOS arm64/Node24 설치·checksum 거부·post cleanup 확인. Linux X64/Node20 및 Python runtime 무결성은 미검증이다.
+- 제품 repo runner id 2 `k-csap-isolated-linux`는 online/idle이며 labels `[self-hosted, Linux, X64, k-csap-isolated]`다. online/label은 격리·실행 증거가 아니다. Group 13은 사용하지 않는다.
+- 제품은 비공개다. 원문·추출본·private 증적·키를 공개 중앙 저장소로 전송하지 않는다.
+
+## 소유권과 기존 경로
+
+| 영역 | 단일 담당 | 이 Goal의 경계 |
+|---|---|---|
+| PR #2615 producer, 전용 tests/hash lock, 이 Goal, doctoring 문서 | goosefish 부모 | exact reviewed bytes만 수정·출판 |
+| 제품 thin caller와 runner 활성화 | oscar 및 기존 운영 담당 | 승인된 새 caller/격리 packet을 받아 연결; 경쟁 편집·runner 이동 금지 |
+| acceptance 조정 | salmon, 독립 admission oracle | actual packet을 확인하며 보고를 승인으로 승격하지 않음 |
+| shared routing/Noema/OpenCode/canonical actionlint | #2565/Remora 담당 | accepted exact-hunk 인계 전 shared 파일 편집 금지 |
+| 서비스 키·relay·effective auto route | 기존 #2560 담당 | Secret 값 읽기·중복 발급·덮어쓰기 금지 |
+| 제품 dynamic Code Quality 설정 | kelp | GET not-configured 확인 완료, 이 session 제품 설정 write 0 |
+
+## 실행 계약
+
+- `workflow_call`만 사용하고 executable inputs/inherited secrets는 없다.
+- caller 신뢰 gate를 runner 배정 전 job-level `if`에 둔다. 첫 step는 checkout 전 방어층이며 host 격리를 대신하지 않는다. skip은 quality 통과가 아니다.
+- same-repo open PR과 positive-number `refs/pull/N/merge`만 허용한다. PR head와 event SHA/state는 분리한다. missing head/state fallback은 금지한다.
+- PR exact head, master push/manual event SHA를 admission에서 확정한다. checkout과 HEAD 검증은 동일 `expected_sha` 출력만 소비한다. merge candidate 검증은 별도다.
+- 일회용 source child와 private uv tool/cache/temp/venv, archive checksum 및 정상 종료 cleanup을 유지한다. hostile same-UID 동시 작업·잔류 프로세스·강제 종료에 대한 격리는 별도 운영 gate다.
+- Python 3.11.14와 uv 0.9.7로 locked ruff/pytest/validate/diff-check를 실행한다. 로컬 contract 환경 Python 3.11.16을 workflow pin 실행으로 주장하지 않는다.
+- canonical actionlint의 `k-csap-isolated` vocabulary와 전용 test lock 설치 linkage를 수락해야 한다. scratch vocabulary 통과는 canonical gate 통과가 아니다.
+- 모델은 literal `auto`, endpoint는 `https://litellm.poinnetworks.net`다. `orchestrator/free` 실행은 대체 수락하지 않는다. 비용·private retention 사실을 임의 attestation으로 만들지 않는다.
+
+## 병합 전 수락 단계
+
+1. 실제 source bytes와 로컬 독립 review의 hash binding을 유지한다. unchanged suite 반복 대신 다음 미충족 gate로 진행한다.
+2. exact-head 운영 packet에서 Linux/Node runtime, toolchain provenance, 격리·동시 작업·network·cleanup을 확인한다. approved runtime이 없으면 운영 담당과 좁게 수리한다.
+3. 공유 auto route의 base chain을 default `main`까지 추적한다. feature-stack merge는 배포가 아니다. canonical lint label과 test dependency linkage도 해당 소유자와 결합한다.
+4. 실제 self-hosted run/job ID와 runner_name, 실행된 source SHA 및 required step exits를 확인한다.
+5. 실제 개인 gateway 인증 추론과 substantive verdict, author-distinct canonical App의 현재 head/base review를 확인한다. Draft skip/무료 요약/인프라 오류는 approval이 아니다.
+6. 리뷰 요청 단계와 병합 수락 단계를 분리한다. Ready는 승인·검증 통과가 아니다. 소스 검토와 live head/base/필수 규칙/미해결 finding 확인 후, 실행 가능한 승인된 reviewer 경로가 있으면 Ready만 전환할 수 있다. 실제 callee 증거는 oscar가 승인된 임시 caller에서 immutable 후보 SHA를 사용해 병합 전에 확보한다. legacy/다른 모델 실행은 요구된 `auto` 증거로 세지 않는다.
+7. 병합 직전 live head/checks/required rules/unresolved findings를 fail-closed로 판정한다. 실패·skip·부재·다른 head 증거가 있으면 merge하지 않는다. 모든 조건 충족 후 일반 merge를 수행하고 state/mergedAt/mergeCommit/default branch를 읽어 확인한다. 최종 제품 caller는 immutable protected producer pin으로 전환하고 실제 caller-context 실행을 확인한다. hosted fallback 없이 교체한다.
+
+## 현재 수락 상태
+
+현재 사용자 지시에 따라 병합 작업까지 진행한다. PR #2615는 `OPEN/DRAFT/BLOCKED`, head `aacc387349c62b54ed96a9bd96b17c022296897b`, source review는 `CONDITIONAL_SOURCE_ACCEPTANCE`다. 이는 merge gate 충족이 아니다. source owner scope는 #2615의 여섯 파일이며 shared #2565, #2560, Remora, kelp 설정 파일은 소유하지 않는다.
+
+## 다음 실제 작업
+
+1. 읽기전용 운영 보고의 최종 해시를 검증했다. online/container 관측은 배타 lease나 process settlement/cleanup 통과가 아니다. oscar의 기존 운영 수리와 caller 후보를 재사용한다.
+2. permissive umask에서 source와 `.ci-tools`가 0777로 만들어지는 실제 shell RED 2개를 확인했다. 각 생성 단계에 `umask 077`을 적용하고 계약 테스트 30개 통과를 확인했다. 이는 다른 UID의 접근 제한이며 같은 UID의 적대적 writer 격리 증거가 아니다. 독립 delta 리뷰 후 게시한다.
+3. canonical CI lock의 PyYAML 누락은 실제 collection RED exit 2로 확인했다. dedicated PyYAML 6.0.3 hash block을 추가한 scratch 제안은 28개 통과다. shared 소유자에게 comment `6098771884`로 전달했다. 2026-10-11 remote head `b78007bfc976faaa4d416d2b6578b114e2725a82`의 canonical lock에 PyYAML pin이 추가된 사실을 확인했다. 해당 pin의 설치 검증 및 보호된 main 통합은 별도다. canonical lint의 `k-csap-isolated`는 이 head에서도 없다.
+4. bootstrap plan review `5eaa615dc1f6ac143f526329ae46d68f95284452114cada4a83c77e3391586b1`의 CHANGES_REQUESTED를 채택했다. Ready와 merge를 분리하고 임시 exact-SHA caller로 실행 순환을 해소한다. 실제 `auto`/App 및 운영 수락 조건은 유지한다.
+5. 기존 caller 후보는 PR32 base 위의 oscar 소유 2파일이며 아직 미게시다. source가 바뀌면 기존 후보 pin의 증거를 새 SHA로 이전하지 않는다. 독립 리뷰와 운영 승인 후 소유자가 pin을 갱신하고 실행한다.
+
+## Hosted 절차 중단 상태
+
+중앙 동적 Code Quality는 supported PATCH로 `not-configured`를 설정하고 GET으로 확인했다. generic workflow disable은 422여서 registry active identity와 feature 활성화를 구분한다. advanced CodeQL security workflow는 보존했다. 제품 설정은 kelp receipt `92e725eaa5422cbc0d3356a74afc749f75f4779854bcfda270572ea24e734f94`에서 not-configured이며 중복 write는 하지 않았다. 과거 billing failure와 artifact quota 실패는 역사 증거로 유지한다. disabled/unavailable 절차를 성공·보안 면제·merge 우회로 간주하지 않는다.

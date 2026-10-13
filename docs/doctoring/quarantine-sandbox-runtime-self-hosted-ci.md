@@ -15,10 +15,14 @@ and operational acceptance. Both issue bodies were read on 2026-10-08; neither
 is closed by this source-only extraction. Existing central control, CodeQL,
 OpenCode, isolated and remediation groups are not fallback capacity.
 
-Owned files are the reusable workflow, its static Python contract tests and this
-record only. Shared governance files, Goal thresholds and runner policy are not
-changed. Independent security review and parent review remain required; this
-writer supplies no self-approval.
+Owned QSR implementation consists of the reusable workflow, its Python contract
+tests and this record. Source integration also declares the QSR custom labels in
+`.github/actionlint.yaml` and binds the named group in the organization runner
+contract. When merging the K-CSAP successor, keep its existing label and exact
+workflow/job selector, and preserve the combined label set in its config test.
+These source-only changes do not register runners or change ACLs or thresholds.
+Independent source review is separate from a formal App review; this writer
+supplies no self-approval.
 
 ## Fixed interface and candidate binding
 
@@ -133,7 +137,8 @@ lineage. Do not claim #150 coverage/adoption without an explicit rebase/merge an
 separate verification. The peer's candidate_sha/lane oracle is not acceptance
 of this no-input interface; a new independent verification must bind these final
 source hashes, actual published central SHA and observed check-name mapping.
-There is no published central SHA in this uncommitted, unpushed handoff.
+The caller must retain its existing immutable pin until a reviewed successor is
+published. A local integration or a new main revision does not update that pin.
 
 ## Admission and evidence still missing
 
@@ -168,10 +173,29 @@ Tests use PyYAML BaseLoader (preserving `on`) and a frozen in-test oracle from
 the actual product CI bytes, not a runtime sibling-checkout dependency. Sequential
 RED/GREEN receipts cover missing workflow, preserved mechanics, exact candidate,
 read-only token, dedicated routing, admission, concurrency and this gap record.
-Validation runs terminal `python3 -m pytest` only. Actionlint uses shellcheck and
-pyflakes disabled as requested; custom-label configuration is scratch-only and
-contains no expression suppressions. Neither static tests nor lint establishes
-runner availability, operational isolation, qualifying approval or release readiness.
+Verification uses the QSR contract module plus the adjacent runner-policy and
+K-CSAP integration contracts. Actionlint runs against the QSR workflow with its
+normal external scanners and the committed custom-label config; a scoped pass is
+not a repository-wide actionlint pass. Neither static tests nor lint establishes
+runner availability, operational isolation, qualifying App approval or release readiness.
+
+## Exact positive-LSM execution witness
+
+`LSM-TEST-001` addresses the zero-test-success finding on central PR #2601:
+`--exact` alone does not require a matching test. The trusted inline wrapper
+executes the immutable named ignored test with libtest pretty output, one test
+thread, no color and stdout capture enabled. It preserves a nonzero Cargo exit
+and requires exactly one running-count line, exactly the named passing-test line,
+and exactly one summary with one pass and zero failures, ignored or measured
+tests. Empty, renamed, ignored, duplicate or inconsistent results fail closed.
+
+The transcript stays in the executing wrapper rather than a reusable fixed file;
+Python isolated mode prevents candidate-root module imports by this wrapper.
+Synthetic Cargo-output controls test admission, not Podman or kernel isolation.
+This check detects absent/renamed tests, not a malicious candidate that forges
+libtest output or weakens the test body. Code review and disposable host custody
+remain necessary. Fresh source/tool/evidence directories (SRC03) and actual
+positive-LSM execution are separate, unfinished activation work.
 
 Primary platform references: GitHub Docs, **Secure use reference** (self-hosted
 PR-code risk), **Reusing workflow configurations** (caller context/concurrency),

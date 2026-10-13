@@ -1,4 +1,8 @@
 from pathlib import Path
+import textwrap
+from xml.etree import ElementTree as ET
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +12,43 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 def workflow_text(name: str) -> str:
     """Return one central fast-mlsirm workflow as UTF-8 text."""
     return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+
+GPU_IDENTITIES = (
+    ("tests.test_marginal_parity", "test_marginal_gpu_agrees_with_cpu_loosely"),
+    ("tests.test_bifactor_gpu_high_q", "test_bifactor_gpu_parity_q121"),
+    ("tests.test_bifactor_gpu_high_q", "test_bifactor_gpu_parity_q241"),
+    ("tests.test_bifactor_gpu_high_q", "test_bifactor_gpu_parity_q481"),
+    ("tests.test_bifactor_gpu_high_q", "test_bifactor_gpu_parity_q241_wide_items_metal_workgroups"),
+    ("tests.test_bifactor_gpu_high_q", "test_bifactor_cpu_q121_vs_q241_agree"),
+    ("tests.test_bifactor_bootstrap_benchmark", "test_joint_bootstrap_cpu_vs_gpu_wall_time_q121"),
+)
+
+
+def _gpu_suite(identities=GPU_IDENTITIES) -> ET.Element:
+    suite = ET.Element("testsuite", tests=str(len(identities)), failures="0", errors="0", skipped="0")
+    for classname, name in identities:
+        ET.SubElement(suite, "testcase", classname=classname, name=name)
+    return suite
+
+
+def _run_gpu_guard(xml: ET.Element, tmp_path, monkeypatch) -> None:
+    step = workflow_text("fast-mlsirm-ci.yml").split("      - name: Reject skipped GPU evidence\n", 1)[1]
+    script = textwrap.dedent(step.split("python - <<'PY'\n", 1)[1].split("          PY\n", 1)[0])
+    (tmp_path / "gpu-junit.xml").write_bytes(ET.tostring(xml))
+    monkeypatch.chdir(tmp_path)
+    exec(compile(script, "fast-mlsirm-ci.yml::gpu-junit-guard", "exec"), {})
+
+
+def test_gpu_guard_accepts_only_the_exact_successful_seven(tmp_path, monkeypatch):
+    """Execute the producer guard against complete and false-admission evidence."""
+    _run_gpu_guard(_gpu_suite(), tmp_path, monkeypatch)
+    partial = _gpu_suite(GPU_IDENTITIES[:1])
+    skipped = _gpu_suite()
+    ET.SubElement(skipped[0], "skipped")
+    for xml in (partial, skipped):
+        with pytest.raises(SystemExit):
+            _run_gpu_guard(xml, tmp_path, monkeypatch)
 
 
 def test_fast_mlsirm_reusable_workflows_keep_isolated_runner_and_gate_contracts():

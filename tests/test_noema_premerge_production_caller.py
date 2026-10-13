@@ -6,36 +6,39 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_workflow_phases_use_controller_and_preserve_refresh_order():
-    """Both real phase steps must enter the controller, with refresh between them."""
+def test_workflow_phases_use_existing_two_phase_handoff_and_preserve_refresh_order():
+    """Normal reviews use the existing exact-head handoff without external pins."""
     source = (ROOT / '.github/workflows/noema-review.yml').read_text()
     prepare = source.split('      - name: Prepare Noema model verdict\n', 1)[1].split('      - name:', 1)[0]
     publish = source.split('      - name: Publish prepared Noema verdict on the exact live head\n', 1)[1].split('\n  continue-noema-transport:', 1)[0]
-    issuer = (ROOT / 'scripts/ci/noema_existing_app_issuer.cjs').read_text()
     for step, phase in [(prepare, 'prepare'), (publish, 'publish')]:
-        assert 'noema_existing_app_issuer.cjs' in step, 'phase bypasses issuer/controller'
-        assert '--phase ' + phase in step
-        assert "child('premerge_review_tooling.py',args,env)" in issuer
-        assert "'--'+phase+'-production'" in issuer
-        assert "'--phase-issuance',file" in issuer
-        assert '.github/actions/noema-review/two_phase.py"' not in step
+        assert '.github/actions/noema-review/two_phase.py"' in step
+        assert f'--{phase}-verdict-file "$verdict_file"' in step
+        assert '--expected-head "$EXPECTED_HEAD_SHA"' in step
+        assert 'noema_existing_app_issuer.cjs' not in step
     assert source.index('Prepare Noema model verdict\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n') < source.index('Publish prepared Noema verdict on the exact live head\n')
 
 
 
-def test_production_noema_requires_pinned_admission_before_reviewer_credentials():
-    """Production must invoke admission before minting model/publication authority."""
+def test_normal_noema_has_no_unprovisioned_external_admission():
+    """No absent custodian file may block every real pull request review."""
     source = (ROOT / '.github/workflows/noema-review.yml').read_text()
-    name = '      - name: Admit independently pinned premerge tooling and execution\n'
-    assert name in source, 'production Noema has no premerge controller admission caller'
-    step = source.split(name, 1)[1].split('      - name:', 1)[0]
-    assert 'scripts/ci/premerge_review_tooling.py' in step
-    assert '--admit-production' in step
-    assert 'vars.NOEMA_TOOLING_MANIFEST_SHA256' in step
-    assert 'vars.NOEMA_EXECUTION_ADMISSION_SHA256' in step
-    assert source.index(name) < source.index('      - name: Select fail-closed Noema reviewer credential\n')
-    assert 'LLM_GATEWAY_API_KEY' not in step
-    assert '--accepted-digest "$NOEMA_TOOLING_MANIFEST_SHA256"' in step
+    assert 'Admit independently pinned premerge tooling and execution' not in source
+    assert 'NOEMA_TOOLING_MANIFEST_SHA256' not in source
+    assert 'NOEMA_EXECUTION_ADMISSION_SHA256' not in source
+    assert 'noema-tooling-supplier' not in source
+    assert 'noema-accepted-tooling.json' not in source
+
+
+def test_normal_noema_uses_read_only_metadata_then_scoped_app_publication():
+    """Ordinary reviews read PR scope before granting a fresh write token."""
+    source = (ROOT / '.github/workflows/noema-review.yml').read_text()
+    metadata = source.split('      - name: Refresh read-only Noema GitHub App metadata token after model\n', 1)[1].split('      - name:', 1)[0]
+    publication = source.split('      - name: Refresh repository-scoped Noema GitHub App token for publication\n', 1)[1].split('      - name:', 1)[0]
+    assert 'permission-pull-requests: read' in metadata
+    assert 'permission-pull-requests: write' in publication
+    assert source.index('Prepare Noema model verdict\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
+    assert source.index('Refresh read-only Noema GitHub App metadata token after model\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
 
 
 def test_actual_cli_refuses_missing_independent_pins(tmp_path):

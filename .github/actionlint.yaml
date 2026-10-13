@@ -5,3 +5,4 @@ self-hosted-runner:
     - cwlab-control
     - cwl-hostile-workload
     - selinux
+    - k-csap-isolated
