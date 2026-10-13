@@ -1,0 +1,82 @@
+name: Traveling Agent PoC quality
+on:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: traveling-agent-poc-quality-${{ github.repository }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: true
+jobs:
+  offline-contracts:
+    if: >-
+      github.repository == 'ContextualWisdomLab/traveling-agent' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.base.repo.full_name == github.repository &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.sha != '') ||
+       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.ref == 'refs/heads/main'))
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+    timeout-minutes: 10
+    steps:
+      - name: Admit owned same-repository caller
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          path="$(command -v python3)"
+          case "$path" in
+            /*) ;;
+            *) exit 1 ;;
+          esac
+          test -x "$path"
+          "$path" --version
+          python3 - <<'PY'
+          import json, os, re
+          assert os.environ['CALLER_REPOSITORY'] == 'ContextualWisdomLab/traveling-agent'
+          event = os.environ['CALLER_EVENT']
+          assert event in ('pull_request', 'push', 'workflow_dispatch')
+          payload = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+          if event == 'pull_request':
+              pr = payload['pull_request']
+              assert pr['head']['repo']['full_name'] == os.environ['CALLER_REPOSITORY']
+              assert pr['base']['repo']['full_name'] == os.environ['CALLER_REPOSITORY']
+              assert pr['base']['ref'] == 'main'
+              assert re.fullmatch(r'[0-9a-f]{40}', pr['head']['sha'])
+              assert pr['head']['sha'] == os.environ['EXPECTED_SHA']
+          else:
+              assert os.environ['GITHUB_REF'] == 'refs/heads/main'
+          PY
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify runner toolchain and checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          for tool in python3 node git; do
+            path="$(command -v "$tool")"
+            case "$path" in
+              /*) ;;
+              *) exit 1 ;;
+            esac
+            test -x "$path"
+            "$path" --version
+          done
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Verify offline Python contracts
+        run: python3 -m unittest discover -s poc/tests -v
+      - name: Verify JavaScript syntax and real renderer contract
+        run: |
+          node --check poc/web/app.js
+          node poc/tests/ui_contract_test.js
+      - name: Check whitespace
+        run: git diff --check
