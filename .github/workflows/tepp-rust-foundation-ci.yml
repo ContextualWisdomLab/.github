@@ -27,6 +27,18 @@ jobs:
         uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
         with:
           persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
       - name: Install pinned Python quality dependency
         run: python3 -m pip install --disable-pip-version-check --no-deps --require-hashes -r requirements-quality.txt
       - name: Exercise repository tooling with branch coverage
@@ -59,6 +71,35 @@ jobs:
         uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
         with:
           persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
+          "$HOME/.cargo/bin/rustup" --version
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
       - name: Restore pinned Rust quality tools
@@ -102,6 +143,35 @@ jobs:
         uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
         with:
           persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
+          "$HOME/.cargo/bin/rustup" --version
       - name: Install pinned Rust toolchain with LLVM tools
         run: rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
       - name: Install pinned nightly with LLVM tools
@@ -237,6 +307,35 @@ jobs:
         uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
         with:
           persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rustup_init="${RUNNER_TEMP:?}/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$HOME/.rustup" "$HOME/.cargo" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$HOME/.cargo" >>"${GITHUB_PATH:?}"
+          "$HOME/.cargo/bin/rustup" --version
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Run live-sqlx PostgreSQL integration
