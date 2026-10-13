@@ -30,6 +30,17 @@ def test_normal_noema_has_no_unprovisioned_external_admission():
     assert 'noema-accepted-tooling.json' not in source
 
 
+def test_normal_noema_uses_read_only_metadata_then_scoped_app_publication():
+    """Ordinary reviews read PR scope before granting a fresh write token."""
+    source = (ROOT / '.github/workflows/noema-review.yml').read_text()
+    metadata = source.split('      - name: Refresh read-only Noema GitHub App metadata token after model\n', 1)[1].split('      - name:', 1)[0]
+    publication = source.split('      - name: Refresh repository-scoped Noema GitHub App token for publication\n', 1)[1].split('      - name:', 1)[0]
+    assert 'permission-pull-requests: read' in metadata
+    assert 'permission-pull-requests: write' in publication
+    assert source.index('Prepare Noema model verdict\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
+    assert source.index('Refresh read-only Noema GitHub App metadata token after model\n') < source.index('Refresh repository-scoped Noema GitHub App token for publication\n')
+
+
 def test_actual_cli_refuses_missing_independent_pins(tmp_path):
     """An unconfigured production caller cannot silently return success."""
     result = subprocess.run(
