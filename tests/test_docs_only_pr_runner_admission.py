@@ -215,9 +215,10 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
     # Keep both substantive consumer guards and every new prerequisite guard.
     guard = "needs.detect-languages.outputs.code == 'true'"
     guarded = re.findall(r"(?m)^        if: (.+)$", analyze_head)
-    assert len(guarded) == 5
+    assert len(guarded) == 6
     assert guarded.count(guard) == 4
     assert guarded.count("always() && " + guard) == 1
+    assert guarded.count("always() && env.CWL_GH_ROOT != ''") == 1
     assert "analyze-merge:" not in workflow
 
 

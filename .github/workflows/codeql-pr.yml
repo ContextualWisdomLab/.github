@@ -266,6 +266,10 @@ jobs:
                   output.write(str(bindir) + "\n")
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
                   output.write("CWL_GH_BIN=" + str(executable) + "\n")
+                  info = root.stat()
+                  output.write("CWL_GH_ROOT=" + str(root) + "\n")
+                  output.write("CWL_GH_ROOT_DEVICE=" + str(info.st_dev) + "\n")
+                  output.write("CWL_GH_ROOT_INODE=" + str(info.st_ino) + "\n")
               print("Installed checksum-verified job-local GitHub CLI " + version)
           except BaseException:
               shutil.rmtree(root)
@@ -473,6 +477,41 @@ jobs:
               ;;
           esac
 
+      - name: Clean up this job's pinned GitHub CLI
+        if: always() && env.CWL_GH_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+
+          root = Path(os.environ["CWL_GH_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if (not root.is_absolute() or root.parent != parent
+                  or not re.fullmatch(r"cwl-gh-[A-Za-z0-9_-]+", root.name)
+                  or any(ord(c) < 32 for c in str(root))):
+              raise RuntimeError("refusing unrelated GitHub CLI cleanup path")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed GitHub CLI temporary ancestry")
+          try:
+              info = root.lstat()
+          except FileNotFoundError:
+              print("Owned GitHub CLI directory is already absent.")
+          else:
+              if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                      or info.st_dev != int(os.environ["CWL_GH_ROOT_DEVICE"])
+                      or info.st_ino != int(os.environ["CWL_GH_ROOT_INODE"])):
+                  raise RuntimeError("refusing changed GitHub CLI directory identity")
+              # No glob or shared-temp sweep: delete only this job's original directory.
+              shutil.rmtree(root)
+              print("Removed this job's checksum-verified GitHub CLI directory.")
+          PY
+
   dispatch-current-head:
     name: Dispatch current-head CodeQL scan
     needs: [detect-languages, analyze-head]
@@ -576,6 +615,10 @@ jobs:
                   output.write(str(bindir) + "\n")
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
                   output.write("CWL_GH_BIN=" + str(executable) + "\n")
+                  info = root.stat()
+                  output.write("CWL_GH_ROOT=" + str(root) + "\n")
+                  output.write("CWL_GH_ROOT_DEVICE=" + str(info.st_dev) + "\n")
+                  output.write("CWL_GH_ROOT_INODE=" + str(info.st_ino) + "\n")
               print("Installed checksum-verified job-local GitHub CLI " + version)
           except BaseException:
               shutil.rmtree(root)
@@ -750,3 +793,37 @@ jobs:
             --arg producer_source_sha "$live_merge" \
             '{event_type:"codeql-scan-v2",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head:{schema:"1",ref:$pr_head_ref,sha:$pr_head_sha},producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+      - name: Clean up this job's pinned GitHub CLI
+        if: always() && env.CWL_GH_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+
+          root = Path(os.environ["CWL_GH_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if (not root.is_absolute() or root.parent != parent
+                  or not re.fullmatch(r"cwl-gh-[A-Za-z0-9_-]+", root.name)
+                  or any(ord(c) < 32 for c in str(root))):
+              raise RuntimeError("refusing unrelated GitHub CLI cleanup path")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed GitHub CLI temporary ancestry")
+          try:
+              info = root.lstat()
+          except FileNotFoundError:
+              print("Owned GitHub CLI directory is already absent.")
+          else:
+              if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                      or info.st_dev != int(os.environ["CWL_GH_ROOT_DEVICE"])
+                      or info.st_ino != int(os.environ["CWL_GH_ROOT_INODE"])):
+                  raise RuntimeError("refusing changed GitHub CLI directory identity")
+              # No glob or shared-temp sweep: delete only this job's original directory.
+              shutil.rmtree(root)
+              print("Removed this job's checksum-verified GitHub CLI directory.")
+          PY

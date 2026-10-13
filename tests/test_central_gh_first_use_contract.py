@@ -94,6 +94,50 @@ def test_strix_bootstrap_does_not_introduce_fixed_network_deadline() -> None:
     assert not calls[0].keywords, "fixed network deadline introduced before Strix review"
 
 
+@pytest.mark.parametrize("filename,job", TARGETS)
+def test_owned_installation_is_cleaned_after_last_consumer(filename: str, job: str) -> None:
+    """Do not accumulate successful CLI copies on persistent runner temp storage."""
+    steps = _steps(filename, job)
+    cleanup = steps[-1]
+    assert cleanup.get("name") == "Clean up this job's pinned GitHub CLI"
+    assert cleanup.get("if") == "always() && env.CWL_GH_ROOT != ''"
+    assert cleanup.get("shell") == "bash"
+    assert "CWL_GH_ROOT_INODE" in cleanup.get("run", "")
+    assert "shutil.rmtree(root)" in cleanup.get("run", "")
+
+
+@pytest.mark.parametrize("mutation", ["owned", "identity-drift", "foreign-prefix", "symlink"])
+def test_actual_cleanup_preserves_other_job_directories(monkeypatch, tmp_path, mutation) -> None:
+    """Execute the exact job-end cleaner with real private directory identities."""
+    parent = tmp_path / "runner"
+    parent.mkdir()
+    root = parent / ("foreign-job" if mutation == "foreign-prefix" else "cwl-gh-owned")
+    root.mkdir()
+    (root / "binary").write_bytes(b"owned synthetic content")
+    unrelated = parent / "cwl-gh-unrelated"
+    unrelated.mkdir()
+    (unrelated / "sentinel").write_bytes(b"untouched")
+    info = root.stat()
+    monkeypatch.setenv("RUNNER_TEMP", str(parent))
+    monkeypatch.setenv("CWL_GH_ROOT", str(root))
+    monkeypatch.setenv("CWL_GH_ROOT_DEVICE", str(info.st_dev))
+    monkeypatch.setenv("CWL_GH_ROOT_INODE", str(info.st_ino + (mutation == "identity-drift")))
+    if mutation == "symlink":
+        import shutil
+        shutil.rmtree(root)
+        root.symlink_to(unrelated, target_is_directory=True)
+    run = _steps(*TARGETS[0])[-1]["run"]
+    payload = run.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    if mutation == "owned":
+        exec(compile(payload, "<actual-workflow-cleanup>", "exec"), {})
+        assert not root.exists()
+    else:
+        with pytest.raises(RuntimeError, match="refusing"):
+            exec(compile(payload, "<actual-workflow-cleanup>", "exec"), {})
+        assert root.exists()
+    assert (unrelated / "sentinel").read_bytes() == b"untouched"
+
+
 def _installer_tree():
     """Compile only the Python payload actually embedded in executable YAML."""
     import ast
@@ -171,7 +215,11 @@ def _run_installer_fixture(monkeypatch, tmp_path, *, kind="regular", mismatch=No
         assert not list(runner.iterdir()), "failed install must clean its exclusive directory"
         assert not envfile.exists() and not pathfile.exists()
         raise
-    executable = Path(envfile.read_text().strip().split("=", 1)[1])
+    installed = dict(line.split("=", 1) for line in envfile.read_text().splitlines())
+    executable = Path(installed["CWL_GH_BIN"])
+    assert installed["CWL_GH_ROOT"] == str(executable.parent.parent)
+    assert installed["CWL_GH_ROOT_DEVICE"] == str(executable.parent.parent.stat().st_dev)
+    assert installed["CWL_GH_ROOT_INODE"] == str(executable.parent.parent.stat().st_ino)
     assert executable.read_bytes() == binary
     assert pathfile.read_text() == str(executable.parent) + "\n"
     assert not executable.is_symlink()
