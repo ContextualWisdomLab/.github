@@ -3,3 +3,5 @@ self-hosted-runner:
   labels:
     - cwlab-ci-isolated
     - cwlab-control
+    - cwl-hostile-workload
+    - selinux

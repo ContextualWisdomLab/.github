@@ -17,6 +17,7 @@ STATIC_RUNNER_GROUP_LABELS = {
     'CWL central OpenCode': set(),
     'CWL CI isolated': {'cwlab-ci-isolated'},
     'CWL law CI': {'law-ai-agent-ci'},
+    'CWL QSR hostile workload': {'cwl-hostile-workload'},
 }
 
 
@@ -80,6 +81,9 @@ def test_static_runner_group_policy_is_explicit_and_fail_closed() -> None:
     """Bind dedicated groups to their isolation labels and reject unknown groups."""
     assert required_static_labels('CWL law CI') == {
         'self-hosted', 'linux', 'x64', 'law-ai-agent-ci',
+    }
+    assert required_static_labels('CWL QSR hostile workload') == {
+        'self-hosted', 'linux', 'x64', 'cwl-hostile-workload',
     }
     with pytest.raises(AssertionError, match='unsupported static group'):
         required_static_labels('CWL ungoverned CI')

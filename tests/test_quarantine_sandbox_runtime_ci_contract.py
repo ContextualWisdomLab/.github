@@ -456,7 +456,7 @@ def test_admission_job_rejects_unsupported_callers_before_product_checkout():
     assert "if" not in admission
     assert admission["runs-on"] == {
         "group": "CWL QSR hostile workload",
-        "labels": ["self-hosted", "linux", "cwl-hostile-workload"],
+        "labels": ["self-hosted", "linux", "x64", "cwl-hostile-workload"],
     }
     assert admission["permissions"] == {"contents": "read"}
     assert set(admission) == {"runs-on", "permissions", "steps"}
@@ -505,7 +505,7 @@ def test_token_is_contents_read_only_without_secret_or_write_surfaces():
 def test_all_jobs_require_the_operator_requested_dedicated_group():
     """No hosted fallback, control pool or user-controlled runner selection."""
     for name, job in workflow()["jobs"].items():
-        labels = ["self-hosted", "linux", "cwl-hostile-workload"]
+        labels = ["self-hosted", "linux", "x64", "cwl-hostile-workload"]
         if name == "podman-e2e-positive-lsm":
             labels.append("selinux")
         assert job["runs-on"] == {

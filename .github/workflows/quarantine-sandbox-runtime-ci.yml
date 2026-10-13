@@ -16,7 +16,7 @@ jobs:
   admission:
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload]
     permissions:
       contents: read
     steps:
@@ -44,7 +44,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository))
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload]
     steps:
       - name: Verify caller and event before checkout
         env:
@@ -108,7 +108,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository))
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload]
     steps:
       - name: Verify caller and event before checkout
         env:
@@ -174,7 +174,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository))
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload]
     steps:
       - name: Verify caller and event before checkout
         env:
@@ -246,7 +246,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository))
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload, selinux]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload, selinux]
     env:
       # Required profile only: NOT_PROVISIONED pending .github#1590; no custody claim.
       QSR_PODMAN_E2E_IMAGE: docker.io/library/python@sha256:94457973ea8a27a799f0b8ea1fe3e3147fcbebaed63497a8af63b28195a08108
@@ -324,7 +324,7 @@ jobs:
     needs: [admission, verify, coverage, branch-coverage, podman-e2e-positive-lsm]
     runs-on:
       group: CWL QSR hostile workload
-      labels: [self-hosted, linux, cwl-hostile-workload]
+      labels: [self-hosted, linux, x64, cwl-hostile-workload]
     permissions:
       contents: read
     steps:

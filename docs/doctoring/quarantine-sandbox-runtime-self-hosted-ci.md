@@ -65,7 +65,9 @@ There is no central helper-code checkout and no new `job.workflow_*` expression.
 ## Retained lanes and lost capability
 
 All jobs require group `CWL QSR hostile workload` with labels `self-hosted`,
-`linux`, `cwl-hostile-workload`; positive LSM additionally requires `selinux`.
+`linux`, `x64`, `cwl-hostile-workload`; positive LSM additionally requires `selinux`.
+The organization runner policy contract admits this static group only with
+`cwl-hostile-workload`; actionlint label declarations are source validation only.
 There is no GitHub-hosted fallback or user-selected runner routing.
 
 | Child job | Preserved mechanics |
