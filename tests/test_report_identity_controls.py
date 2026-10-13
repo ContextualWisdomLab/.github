@@ -14,6 +14,9 @@ CHANGED = "scripts/ci/strix_quick_gate.sh"
     "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/`.",
     "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh`.",
     "Scope: `/workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh:42:7`.",
+    "Reviewed scripts/ci/strix_quick_gate.sh. No findings.",
+    "Reviewed (scripts/ci/strix_quick_gate.sh.)",
+    "Reviewed scripts/ci/strix_quick_gate.sh:42. No findings.",
 ])
 def test_valid_identity_controls(text, tmp_path):
     """Complete paths and scoped directories remain valid report identities."""
@@ -32,6 +35,12 @@ def test_valid_identity_controls(text, tmp_path):
     "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/../unrelated.",
     "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh:backup.",
     "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh/notes.",
+    "Reviewed scripts/ci/strix_quick_gate.sh.:backup now.",
+    "Reviewed scripts/ci/strix_quick_gate.sh.@backup now.",
+    "Reviewed scripts/ci/strix_quick_gate.sh.#backup now.",
+    "Reviewed scripts/ci/strix_quick_gate.sh:42.:backup now.",
+    "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh.:backup now.",
+    "Scope: /workspace/strix-pr-scope.ABC123/scripts/ci/strix_quick_gate.sh.@backup now.",
 ])
 def test_invalid_identity_controls(text, tmp_path):
     """Longer names, child paths and traversal do not inherit source identity."""

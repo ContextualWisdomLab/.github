@@ -10,10 +10,13 @@ from pathlib import Path
 
 # The PR scan target is a private directory holding only the changed files, so
 # a path under it (as Strix reports it) is bound to this invocation's scope.
+# A sentence period ends a token only when a real delimiter (or end) follows it;
+# "name.:suffix" or "name.@suffix" is a different file, not the changed path.
+_TOKEN_DELIMITER = r"(?=$|[\s`\"'<>,;!?)])"
 PATH_TOKEN_END = (
     r"(?=$|[\s`\"'<>,;!?)]"
-    r"|:(?=[0-9]+(?::[0-9]+)?(?:$|[\s`\"'<>,;!?)]|\.(?![\w./-])))"
-    r"|\.(?![\w./-]))"
+    r"|:(?=[0-9]+(?::[0-9]+)?(?:$|[\s`\"'<>,;!?)]|\." + _TOKEN_DELIMITER + r"))"
+    r"|\." + _TOKEN_DELIMITER + r")"
 )
 SCOPE_PATH_RE = re.compile(
     r"(?<![\w./-])/workspace/strix-pr-scope\.[A-Za-z0-9]+/([A-Za-z0-9_./-]+)"

@@ -4,8 +4,11 @@
   that a changed path token ended. A distinct Linux filename such as
   `scripts/ci/strix_quick_gate.sh:backup` now fails closed, including beneath
   the private Strix scope root, while numeric `path:line` and
-  `path:line:column` evidence remains valid. Focused evidence is 39 tests with
-  100% statement and branch coverage for `strix_report_scope.py`; hosted
+  `path:line:column` evidence remains valid. A sentence period also ends a
+  path token only before a real delimiter, so `strix_quick_gate.sh.:backup`
+  and `strix_quick_gate.sh.@backup` are rejected in both report forms.
+  Focused evidence is 69 tests across the three scope suites with 100%
+  statement and branch coverage for `strix_report_scope.py`; hosted
   exact-head Checks and qualifying independent review remain required.
 
 ### Law CI cleanup rejects symlinked PostgreSQL descendants
