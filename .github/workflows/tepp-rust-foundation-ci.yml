@@ -104,16 +104,7 @@ jobs:
           printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
-      - name: Restore pinned Rust quality tools
-        id: rust-tools-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ${{ env.CARGO_HOME }}/bin/cargo-nextest
-            ${{ env.CARGO_HOME }}/bin/cargo-deny
-          key: ${{ runner.os }}-${{ runner.arch }}-tepp-rust-tools-nextest-${{ env.CARGO_NEXTEST_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}
       - name: Install pinned Rust quality tools
-        if: steps.rust-tools-cache.outputs.cache-hit != 'true'
         run: |
           cargo install cargo-nextest --root "$CARGO_HOME" --locked --version "$CARGO_NEXTEST_VERSION"
           cargo install cargo-deny --root "$CARGO_HOME" --locked --version "$CARGO_DENY_VERSION"
@@ -190,14 +181,7 @@ jobs:
         run: rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
       - name: Install pinned nightly with LLVM tools
         run: rustup toolchain install nightly-2026-08-21 --profile minimal --component llvm-tools-preview
-      - name: Restore pinned cargo-llvm-cov
-        id: llvm-cov-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ env.CARGO_HOME }}/bin/cargo-llvm-cov
-          key: ${{ runner.os }}-${{ runner.arch }}-tepp-cargo-llvm-cov-${{ env.CARGO_LLVM_COV_VERSION }}
       - name: Install cargo-llvm-cov
-        if: steps.llvm-cov-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-llvm-cov --root "$CARGO_HOME" --locked --version "$CARGO_LLVM_COV_VERSION"
       - name: Verify pinned cargo-llvm-cov version
         run: |

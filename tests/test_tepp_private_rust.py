@@ -118,13 +118,18 @@ class PrivateRustTests(unittest.TestCase):
         docs = FOUNDATION.parent / "tepp-documentation-quality.yml"
         self.assertEqual(docs.read_text().count("  validate:\n"), 1)
 
-    def test_cache_paths_and_version_guards_use_private_binaries(self):
-        """Restored helpers cannot fall through to a matching persistent PATH binary."""
+    def test_private_version_guards_require_fresh_pinned_installations(self):
+        """No restored executable is admitted; helpers must stay in the fresh home."""
         text = FOUNDATION.read_text()
         for tool in ("cargo-nextest", "cargo-deny", "cargo-llvm-cov"):
-            self.assertIn('${{ env.CARGO_HOME }}/bin/' + tool, text)
             self.assertNotIn('~/.cargo/bin/' + tool, text)
             self.assertIn('--root "$CARGO_HOME"', text)
+        self.assertNotIn('uses: actions/cache@', text)
+        self.assertNotIn('cache-hit', text)
+        for tool, version in (("cargo-nextest", "CARGO_NEXTEST_VERSION"),
+                              ("cargo-deny", "CARGO_DENY_VERSION"),
+                              ("cargo-llvm-cov", "CARGO_LLVM_COV_VERSION")):
+            self.assertIn(f'cargo install {tool} --root "$CARGO_HOME" --locked --version "${version}"', text)
         scripts = [step_body(FOUNDATION, "Verify pinned Rust quality tool versions"),
                    step_body(FOUNDATION, "Verify pinned cargo-llvm-cov version")]
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as directory:
