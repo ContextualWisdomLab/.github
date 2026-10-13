@@ -53,6 +53,7 @@ def test_workload_steps_and_checkout_security_are_unchanged():
     checkout = next(step for step in steps if "actions/checkout@" in step.get("uses", ""))
     assert checkout["uses"] == "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
     assert checkout["with"]["persist-credentials"] is False
+    assert checkout["with"]["fetch-depth"] == 0
     assert "github.event.pull_request.head.sha" in checkout["with"]["ref"]
     assert "github.sha" in checkout["with"]["ref"]
     assert steps[-3]["run"] == "python3 -m unittest discover -s poc/tests -v"
@@ -60,7 +61,160 @@ def test_workload_steps_and_checkout_security_are_unchanged():
         "node --check poc/web/app.js",
         "node poc/tests/ui_contract_test.js",
     ]
-    assert steps[-1]["run"] == "git diff --check"
+
+
+def _whitespace_step():
+    steps = load_workflow()["jobs"]["offline-contracts"]["steps"]
+    return next(step for step in steps if step["name"] == "Check whitespace")
+
+
+def _git(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def test_whitespace_probe_rejects_committed_trailing_space_in_pr_range(tmp_path):
+    """A clean checkout must still check committed base-to-head content."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "tracked.txt").write_text("committed trailing space  \n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "bad head")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    env = {
+        **os.environ,
+        "EVENT_NAME": "pull_request",
+        "BASE_SHA": base,
+        "HEAD_SHA": head,
+        "BEFORE_SHA": "",
+        "AFTER_SHA": head,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", _whitespace_step()["run"]],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_whitespace_probe_accepts_clean_committed_pr_range(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "tracked.txt").write_text("cleaner\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "clean head")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    env = {
+        **os.environ,
+        "EVENT_NAME": "pull_request",
+        "BASE_SHA": base,
+        "HEAD_SHA": head,
+        "BEFORE_SHA": "",
+        "AFTER_SHA": head,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", _whitespace_step()["run"]],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("event, root", [
+    ("pull_request", False), ("push", False), ("push", True),
+    ("workflow_dispatch", False), ("workflow_dispatch", True),
+])
+@pytest.mark.parametrize("bad", [False, True])
+def test_whitespace_event_ranges(tmp_path, event, root, bad):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    if not root:
+        (repo / "base.txt").write_text("base\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "base")
+        base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    else:
+        base = "0" * 40
+    (repo / "candidate.txt").write_text("candidate  \n" if bad else "candidate\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "candidate")
+    if event in ("pull_request", "push") and not root:
+        # The earlier bad addition remains in a multi-commit event range.
+        (repo / "later.txt").write_text("later clean commit\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "later")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert _git(repo, "status", "--porcelain").stdout == ""
+    env = {**os.environ, "EVENT_NAME": event, "BASE_SHA": base,
+           "HEAD_SHA": head, "BEFORE_SHA": base, "AFTER_SHA": head}
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", _whitespace_step()["run"]],
+                            cwd=repo, env=env, capture_output=True, text=True, timeout=10)
+    assert (result.returncode == 0) is (not bad), result.stdout + result.stderr
+    if bad:
+        assert "trailing whitespace" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_base", "bad_base", "missing_before", "bad_before", "wrong_head",
+    "wrong_after", "unsupported", "shallow",
+])
+def test_whitespace_range_fails_closed(tmp_path, mutation):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    (repo / "clean.txt").write_text("clean\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "root")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    env = {**os.environ, "EVENT_NAME": "pull_request", "BASE_SHA": head,
+           "HEAD_SHA": head, "BEFORE_SHA": head, "AFTER_SHA": head}
+    if mutation in ("missing_base", "bad_base"):
+        env["BASE_SHA"] = "a" * 40 if mutation == "missing_base" else "$(touch sentinel)"
+    elif mutation in ("missing_before", "bad_before", "wrong_after"):
+        env["EVENT_NAME"] = "push"
+        if mutation == "wrong_after":
+            env["AFTER_SHA"] = "0" * 40
+        else:
+            env["BEFORE_SHA"] = "a" * 40 if mutation == "missing_before" else ""
+    elif mutation == "wrong_head":
+        env["HEAD_SHA"] = "a" * 40
+    elif mutation == "unsupported":
+        env["EVENT_NAME"] = "pull_request_target"
+    else:
+        (repo / ".git/shallow").write_text(head + "\n")
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", _whitespace_step()["run"]],
+                            cwd=repo, env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert not (repo / "sentinel").exists()
+
+
+def test_whitespace_policy_uses_env_without_expression_interpolation():
+    step = _whitespace_step()
+    assert "${{" not in step["run"]
+    assert step["env"] == {
+        "EVENT_NAME": "${{ github.event_name }}",
+        "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+        "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.sha }}",
+        "BEFORE_SHA": "${{ github.event.before }}",
+        "AFTER_SHA": "${{ github.event.after }}",
+    }
+    assert "complete history" in step["run"]
 
 
 def test_admission_rejects_forks_and_non_main_non_pr_runs():
@@ -170,15 +324,51 @@ def test_actual_toolchain_guard(tmp_path, case, allowed):
     assert (result.returncode == 0) is allowed, result.stdout + result.stderr
 
 
-def test_documented_caller_preserves_original_events_and_workflow_concurrency():
+def _documented_caller():
     doc = (ROOT / "docs/traveling-agent-poc-quality.md").read_text(encoding="utf-8")
-    caller = yaml.safe_load(doc.split("```yaml\n", 1)[1].split("```", 1)[0])
+    return yaml.safe_load(doc.split("```yaml\n", 1)[1].split("```", 1)[0])
+
+
+def _group_key(group, repository, event, ref, number=None):
+    """Evaluate only the two supported, asserted expression forms; never eval."""
+    fallback = "${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}"
+    rendered = group.replace(fallback, str(number) if number else f"{event}-{ref}")
+    rendered = rendered.replace("${{ github.repository }}", repository)
+    rendered = rendered.replace("${{ github.ref }}", ref)
+    assert "${{" not in rendered, "Unsupported concurrency expression"
+    return rendered
+
+
+def test_caller_probe_push_and_dispatch_do_not_collide():
+    group = _documented_caller()["concurrency"]["group"]
+    keys = [_group_key(group, "ContextualWisdomLab/traveling-agent", event, "refs/heads/main")
+            for event in ("push", "workflow_dispatch")]
+    assert keys[0] != keys[1], keys
+
+
+def test_caller_pr_coalescing_and_supplier_namespace():
+    group = _documented_caller()["concurrency"]["group"]
+    repo = "ContextualWisdomLab/traveling-agent"
+    key = _group_key(group, repo, "pull_request", "refs/pull/42/merge", 42)
+    assert key == _group_key(group, repo, "pull_request", "refs/pull/42/head", 42)
+    assert key != _group_key(group, repo, "pull_request", "refs/pull/43/merge", 43)
+    assert key != _group_key(group, "other/repository", "pull_request", "refs/pull/42/merge", 42)
+    assert key != _group_key(load_workflow()["concurrency"]["group"], repo,
+                             "pull_request", "refs/pull/42/merge", 42)
+    assert "github.sha" not in group and "github.event.pull_request.head.sha" not in group
+
+
+def test_documented_caller_preserves_original_events_and_workflow_concurrency():
+    caller = _documented_caller()
     assert caller.get("on", caller.get(True)) == {
         "pull_request": None, "push": {"branches": ["main"]}, "workflow_dispatch": None,
     }
     assert caller["permissions"] == {"contents": "read"}
     assert caller["concurrency"] == {
-        "group": "poc-quality-${{ github.ref }}", "cancel-in-progress": True,
+        "group": (
+            "poc-quality-${{ github.repository }}-"
+            "${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}"
+        ), "cancel-in-progress": True,
     }
     assert caller["jobs"] == {"offline-contracts": {
         "uses": "ContextualWisdomLab/.github/.github/workflows/traveling-agent-poc-quality.yml@<CENTRAL_PROTECTED_MAIN_SHA>",

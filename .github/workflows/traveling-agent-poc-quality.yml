@@ -57,6 +57,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - name: Verify runner toolchain and checkout identity
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -79,4 +80,44 @@ jobs:
           node --check poc/web/app.js
           node poc/tests/ui_contract_test.js
       - name: Check whitespace
-        run: git diff --check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, re, subprocess
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], input='', text=True).strip()
+
+          def commit(value):
+              if not re.fullmatch(r'[0-9a-f]{40}', value) or value == '0' * 40:
+                  raise SystemExit('Invalid whitespace range commit')
+              git('cat-file', '-e', value + '^{commit}')
+              return value
+
+          if git('rev-parse', '--is-shallow-repository') != 'false':
+              raise SystemExit('Whitespace check requires complete history')
+          head = commit(os.environ['HEAD_SHA'])
+          if git('rev-parse', 'HEAD') != head:
+              raise SystemExit('Whitespace checkout identity mismatch')
+          event = os.environ['EVENT_NAME']
+          if event == 'pull_request':
+              base = commit(os.environ['BASE_SHA'])
+          elif event == 'push':
+              if commit(os.environ['AFTER_SHA']) != head:
+                  raise SystemExit('Whitespace push identity mismatch')
+              before = os.environ['BEFORE_SHA']
+              base = git('hash-object', '-t', 'tree', '--stdin') if before == '0' * 40 else commit(before)
+          elif event == 'workflow_dispatch':
+              parents = git('rev-list', '--parents', '-n', '1', head).split()[1:]
+              base = parents[0] if parents else git('hash-object', '-t', 'tree', '--stdin')
+          else:
+              raise SystemExit('Unsupported whitespace event')
+          subprocess.run(['git', '-c', 'core.whitespace=blank-at-eol,blank-at-eof,space-before-tab',
+                          'diff', '--check', base, head, '--'], check=True)
+          PY
