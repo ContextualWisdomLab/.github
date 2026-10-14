@@ -40,6 +40,7 @@
 name: Security Scan
 
 on:
+  workflow_call: {}
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     # Do not restrict the base ref: stacked PRs must receive the same
@@ -61,7 +62,63 @@ permissions:
   contents: read
 
 jobs:
+  admit-security-pr:
+    name: Admit security PR context
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Validate security PR admission
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              if os.environ['EVENT_NAME'] not in ('pull_request', 'pull_request_target'):
+                  raise ValueError('unsupported event')
+              with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as source:
+                  event = json.load(source)
+              if not isinstance(event, dict):
+                  raise ValueError('invalid event shape')
+              action = event.get('action')
+              if not isinstance(action, str) or not action or any(ord(c) < 32 for c in action):
+                  raise ValueError('invalid PR action')
+              pr = event['pull_request']
+              number = event['number']
+              if not isinstance(pr, dict) or type(pr.get('number')) is not int:
+                  raise ValueError('invalid PR shape')
+              if type(number) is not int or number <= 0 or pr.get('number') != number:
+                  raise ValueError('invalid PR identity')
+              target = os.environ['TARGET_REPOSITORY']
+              repository_pattern = r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+              for side in ('base', 'head'):
+                  identity = pr[side]
+                  repository = identity['repo']['full_name']
+                  if not isinstance(repository, str) or not re.fullmatch(repository_pattern, repository):
+                      raise ValueError('invalid repository identity')
+                  if any(part in ('.', '..') for part in repository.split('/')):
+                      raise ValueError('invalid repository component')
+                  if side == 'base' and repository != target:
+                      raise ValueError('target mismatch')
+                  if not isinstance(identity['sha'], str) or not re.fullmatch(r'[0-9a-f]{40}', identity['sha']):
+                      raise ValueError('invalid immutable SHA')
+                  if not isinstance(identity['ref'], str) or not identity['ref'] or any(ord(c) < 32 for c in identity['ref']):
+                      raise ValueError('invalid ref')
+          except (KeyError, TypeError, ValueError, OSError):
+              print('Invalid security PR admission; no scanner checkout authorized.', file=sys.stderr)
+              sys.exit(1)
+          print('Security PR context admitted.')
+
   changed-scope:
+    needs: admit-security-pr
     name: Detect changed scope
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
@@ -461,6 +518,7 @@ jobs:
   # repository condition preserves the standalone workflow's previous scope;
   # push, schedule, and manual backstops remain in secret-scan.yml.
   gitleaks:
+    needs: admit-security-pr
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
     runs-on:
