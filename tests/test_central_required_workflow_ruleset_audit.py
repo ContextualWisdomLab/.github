@@ -118,6 +118,28 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     )
 
 
+def test_review_protection_preflight_rejects_live_p0_drift() -> None:
+    payload = ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_approving_review_count"] = 1
+    review_rule["parameters"]["require_last_push_approval"] = False
+
+    assert audit.audit_review_protection(payload) == [
+        "exactly two approving reviews are not required",
+        "last-push approval protection is disabled",
+    ]
+
+
+def test_review_protection_preflight_runs_before_org_scope_walk() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    preflight = "--review-protection-only"
+    scope_walk = 'orgs/${ORG_LOGIN}/repos?type=all&per_page=100'
+
+    assert workflow.index(preflight) < workflow.index(scope_walk)
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
