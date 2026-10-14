@@ -2,6 +2,7 @@
   "$comment": "Mirrors the live ContextualWisdomLab/.github repository variable OPENCODE_REPOSITORY_DISPATCH_TARGETS, which gates ALLOWED_TARGET_REPOSITORIES in pr-review-merge-scheduler.yml/pr-review-fix-scheduler.yml and the agent-mention dispatch allowlist. There is no API to commit an org/repo variable's value to source control, so this file is a hand-maintained mirror -- update it AND run `gh variable set OPENCODE_REPOSITORY_DISPATCH_TARGETS --repo ContextualWisdomLab/.github` in the same PR whenever a repository is added. tests/test_hourly_review_repair_callers.py::test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror locks every repository hourly-review-repair.yml dispatches to as a subset of this list -- see docs/doctoring/scheduler-target-list-drift-20260902.md for the incident history (governance-risk-compliance, nonnest2, quarantine-sandbox-runtime all silently failed their hourly heartbeat because this sync was missed) that this file and test exist to catch before it recurs.",
   "targets": [
     "ContextualWisdomLab/.github",
+    "ContextualWisdomLab/ConceptWeave",
     "ContextualWisdomLab/ContextualWisdomLab.github.io",
     "ContextualWisdomLab/DiagramWeave",
     "ContextualWisdomLab/EgressWeave",

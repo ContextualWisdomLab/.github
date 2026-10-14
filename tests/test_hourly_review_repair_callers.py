@@ -215,6 +215,13 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "retry_hours": "2",
             "concurrency_group": "semantic-data-portal-hourly-review-repair",
         },
+        {
+            "name": "conceptweave",
+            "target_repository": "ContextualWisdomLab/ConceptWeave",
+            "base_branch": "main",
+            "retry_hours": "2",
+            "concurrency_group": "conceptweave-hourly-review-repair",
+        },
     ],
 }
 
