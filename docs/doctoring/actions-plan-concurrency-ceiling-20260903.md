@@ -1,11 +1,16 @@
-# Doctoring record: the org's GitHub Actions concurrency ceiling is a plan-level quota, not a workflow defect (2026-09-03)
+# Actions 용량 한도와 workflow 부하: 관측 및 추론의 경계
+
+2026-09-07 정정: 아래 2026-09-03 관측은 역사적 기록으로 보존한다.
+용량 한도와 workflow 부하를 배타적 원인으로 단정했던 해석만 좁혔다.
+현재 운영 상태나 이번 수리의 효과를 증명하는 문서가 아니다.
 
 - **Date:** 2026-09-03
 - **Subject:** two peer sessions independently observed the org's GitHub Actions run queue growing rather
   than shrinking this week and, in that tick, proposed auditing/consolidating/centralizing workflow files
-  across the org as the fix. Before either session sank time into that plan, this root cause needed a
-  durable record: the actual bottleneck this session identified is a **plan-level concurrent-job quota**,
-  not workflow duplication, and consolidating workflow files cannot lift it.
+  across the org as the fix. 당시 사용자 보고는 동시 job 한도에 가까운 사용량을
+  뒷받침한다. 그러나 한도 포화와 중복 실행·장시간 점유·admission 결함은 함께
+  존재할 수 있다. 이 기록만으로 지배적 원인을 확정하거나 workflow 부하 원인을
+  배제할 수 없다. 파일 통합은 계약상 한도를 높이지 않지만 실행량은 줄일 수 있다.
 - **Decision record:** none in `docs/adr/` — this is a diagnostic/root-cause finding for the org owner's
   awareness and eventual plan-tier decision, not an architecture decision this repository can make.
 - **PR:** see the PR that carries this commit.
@@ -34,29 +39,24 @@ gh api "repos/ContextualWisdomLab/<repo>/actions/runs?status=in_progress&per_pag
 gh api "repos/ContextualWisdomLab/<repo>/actions/runs?status=queued&per_page=1"       --jq '.total_count'
 ```
 
-| Repository | `in_progress` | `queued` |
+| Repository | `in_progress` workflow runs | `queued` workflow runs |
 |---|---|---|
 | `.github` | 5 | 1,877 |
 | `contextual-orchestrator` | 0 | 727 |
 | `naruon` | 5 | 416 |
 | **Total (3-repo sample)** | **10** | **3,020** |
 
-This is a deliberately small sample, not a full 63-repo census — an attempted full sweep across every
-non-archived, non-fork repository (the same corpus as the 2026-09-02 workflow-duplication audit) hung
-indefinitely on this run and was aborted; a post-hoc `gh api rate_limit` check immediately after showed
-5,000/5,000 REST calls remaining, so the hang was not caused by hitting the org's shared REST rate limit
-(consistent with this session's standing practice of preferring REST over GraphQL to avoid that limit) —
-its actual cause is undetermined and not investigated further here, since the 3-repo sample already
-establishes the pattern this record needs.
+이 표는 당시 63개 저장소 전수가 아닌 세 저장소 표본이다. 당시 전체 조회는
+멈춘 상태가 지속돼 중단했고, 이후 `gh api rate_limit`은 5,000/5,000을 반환했다.
+실패 당시 응답과 헤더가 보존되지 않아 원인은 미확정이다. 사후 잔여량만으로
+같은 인증 주체·resource의 실패 당시 primary quota, reset 또는 secondary 제한을
+배제할 수 없다.
 
-The pattern itself is the useful signal: single-digit `in_progress` counts (5, 0, 5) against
-quadruple-digit `queued` counts (1,877; 727; 416) in the same moment, across independently-owned
-repositories, each triggering its own workflows on its own schedule. That shape — many jobs queued,
-very few ever concurrently running — is exactly what a hard, roughly-constant, **org-wide** (not
-per-repository) concurrent-job ceiling produces, and is hard to explain by per-repository causes alone
-(each repository's own workflow volume, trigger frequency, and CI design differ substantially). It is
-consistent with, though does not by itself prove, the specific 58-60/60 figure from the primary evidence
-above.
+이 API가 세는 대상은 job이나 점유 runner가 아니라 workflow run이다. Run 하나에
+여러 job이 있을 수 있고, in-progress run 안에서도 job이 대기할 수 있다.
+세 저장소의 비원자적 표본만으로 조직 전체 동시 job 수, 실제 한도 포화 또는
+저장소별 원인과 조직 공통 원인의 우선순위를 식별할 수 없다. 사용자 보고의
+58–60/60과 양립하는 관측이지만 그 수치를 독립적으로 증명하지는 않는다.
 
 ## Relationship to other queue-related findings already in this repository
 
@@ -86,29 +86,37 @@ on this tick as *the* fix for the growing queue — is real hygiene and can redu
 runs triggered* (fewer redundant CI paths competing for the same slots), which helps the queue drain
 somewhat faster once jobs are submitted. It does **not** change how many jobs GitHub will run concurrently
 for this organization at once: that number is set by the plan tier, not by how many `.yml` files exist or
-how many of them are centralized versus per-repository. A large cross-repo consolidation-and-deletion
-effort undertaken on the theory that it would resolve the backlog would be solving the wrong layer of the
-problem, at real cost (each deletion needs branch-protection `required_status_checks` re-verified per
-repo, and any repo-specific `with:` tuning preserved or intentionally dropped).
+how many of them are centralized versus per-repository.
+
+저장소 간 workflow 통합·삭제는 파일 재배치와 실제 중복 trigger·job·점유시간 감소를 구분해야 한다.
+후자는 한도를 바꾸지 않고도 backlog를 줄일 수 있다. 삭제할 때는 저장소별
+branch-protection required checks와 입력 조정값을 재검증하고 보존해야 한다.
 
 ## Recommendation
 
-This is a plan/billing decision, not a code change either agent session can make: raising the concurrent-job
-ceiling (a higher GitHub plan tier, purchasing additional included concurrency, or provisioning
-self-hosted/larger runners with their own separate capacity pool) is the org owner's call to make with the
-actual billing page in front of them, not something to infer further from repository-side evidence.
-Workflow consolidation remains worth pursuing for its own, independent hygiene reasons (see
-`docs/doctoring/ci-workflow-duplication-audit-20260902.md` for what is and is not already duplicated
-org-wide) — but should not be scoped or prioritized as *the* fix for the current backlog growth.
+용량 확대와 workflow 부하 감소는 별도 선택지다. 요금제·유료 용량·runner 추가는
+실제 설정과 비용을 확인한 조직 소유자의 결정이 필요하다. 그 판단과 별개로 중복
+실행, 불필요한 대기, stale-head 실행과 admission 결함은 기존 권한 안에서 수리한다.
+정확한 전후 revision, trigger, job 실행시간, 취소 원인과 queue 표본 범위를 남겨
+효과를 검증한다. 로컬 테스트 통과나 파일 수 감소만으로 운영 적체 해소를 주장하지 않는다.
 
 ## Audit trail
 
 - User-reported screenshot of the organization's Actions usage view, shared earlier in this session
   (primary source for the 58-60/60 figure; not independently re-verifiable from this record alone).
 - Live `gh api` sample gathered 2026-09-03 for this record (table above); `gh api rate_limit` confirmed
-  5,000/5,000 REST calls remaining immediately after the aborted full-org sweep, ruling out rate-limiting
-  as the sweep's failure cause.
+  5,000/5,000 REST calls remaining immediately after the aborted full-org sweep. 사후 해당
+  primary quota 소진이 관측되지 않았다는 뜻이며 실패 당시 rate-limit을 배제하지 않는다.
 - `docs/product-technical-gap-baseline.md` — the 2026-08-31 chained-poller-removal entry and the
   `ubuntu-latest` starved-image entry, both cross-referenced above.
 - `docs/doctoring/ci-workflow-duplication-audit-20260902.md` — the org-wide workflow-duplication sweep this
   record's "Implication" section points back to.
+
+## 정정 근거
+
+- GitHub. (n.d.). *Using jobs in a workflow*. Retrieved September 7, 2026, from
+  https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-jobs
+  — 하나의 workflow에 여러 job이 존재할 수 있으므로 두 개수를 구분한다.
+- GitHub. (n.d.). *Rate limits for the REST API*. Retrieved September 7, 2026, from
+  https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+  — 인증 방식과 resource별 primary 제한, 별도 secondary 제한 및 조회 한계를 구분한다.
