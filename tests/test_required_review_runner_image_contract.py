@@ -95,10 +95,17 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_hosted() -> None:
-    """Separate short metadata work from model work without granting PR runner access."""
+def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_isolated() -> None:
+    """Keep trusted workflow control separate from isolated PR execution."""
     workflow = Path(".github/workflows/codeql-pr.yml").read_text()
-    assert workflow.count('"group":"CWL central control"') == 3
-    assert workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'") == 3
-    assert workflow.count("|| '\"ubuntu-24.04\"'") == 3
+    trusted = "github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'"
+    selectors = [line for line in workflow.splitlines() if line.startswith("      group:")]
+    labels = [line for line in workflow.splitlines() if line.startswith("      labels:")]
+    assert len(selectors) == len(labels) == 3
+    for selector, label in zip(selectors, labels, strict=True):
+        assert trusted in selector and trusted in label
+        assert '"group":"CWL central control"' in selector
+        assert '"group":"CWL CI isolated"' in selector
+        assert '"cwlab-ci-isolated"' in selector and '"cwlab-ci-isolated"' in label
+        assert '"ubuntu-24.04"' not in selector + label
     assert '"group":"CWL MCP remediation"' not in workflow

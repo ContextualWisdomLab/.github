@@ -341,6 +341,20 @@ def test_workflow_is_callable_only() -> None:
     assert set(_workflow()[True]) == {"workflow_call"}
 
 
+def test_workflow_runner_is_central_isolated_self_hosted() -> None:
+    """Both jobs reject GitHub-hosted fallback and use the isolated pool."""
+    jobs = _workflow()["jobs"]
+    expected = {
+        "group": "CWL CI isolated",
+        "labels": ["self-hosted", "linux", "x64", "cwlab-ci-isolated"],
+    }
+    assert jobs["build-distribution"]["runs-on"] == expected
+    assert jobs["package-description-boundary"]["runs-on"] == expected
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "ubuntu-latest" not in text
+    assert "ubuntu-24.04" not in text
+
+
 def test_workflow_checks_out_the_gate_at_its_own_commit() -> None:
     """The caller must run the gate revision it pinned, not whatever main holds."""
     steps = _workflow()["jobs"]["package-description-boundary"]["steps"]
