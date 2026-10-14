@@ -204,20 +204,23 @@ def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]
     total_components = 0
 
     for repo_inventory in sorted(repo_inventories, key=lambda r: r.repo.lower()):
-        components_payload = [
-            {
-                "name": component.name,
-                "version": component.version,
-                "license": component.license,
-                "flagged": is_flagged_license(component.license),
-            }
-            for component in repo_inventory.components
-        ]
-        total_components += len(components_payload)
+        components_payload = []
+        # Optimization: Combine two iterations into a single pass and reuse the
+        # normalized license string and flagging result. This avoids redundant
+        # function calls and strings allocations, significantly improving performance.
         for component in repo_inventory.components:
             license_key = normalize_license(component.license)
+            is_flagged = is_flagged_license(license_key)
+            components_payload.append(
+                {
+                    "name": component.name,
+                    "version": component.version,
+                    "license": component.license,
+                    "flagged": is_flagged,
+                }
+            )
             license_totals[license_key] = license_totals.get(license_key, 0) + 1
-            if is_flagged_license(license_key):
+            if is_flagged:
                 flagged.append(
                     {
                         "repo": repo_inventory.repo,
@@ -226,6 +229,7 @@ def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]
                         "license": license_key,
                     }
                 )
+        total_components += len(components_payload)
         repos_payload.append(
             {
                 "repo": repo_inventory.repo,
