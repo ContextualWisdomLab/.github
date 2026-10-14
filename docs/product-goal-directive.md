@@ -29,17 +29,33 @@ elsewhere; link to this file instead.
 
 > 실행 목표와 지속 Loop 열린 PR마다 별도 중간 보고 없이 리뷰 확인→수정→GitHub Checks 재검증→병합→다음 개발을 반복하라. PRD를 읽고 Loop·Goal을 자율 생성·수정·제거해 PR을 병합 또는 0개로 만들며 상용화하라. 200억 달러에 판매할 자신이 있을 품질과 구매자가 체감할 제품 Gap 해소가 목표다. ADR·리서치·현행 데이터·PR로 기능 명세·PRD·TRD·UML·Gap·조치 상태를 도출해 docs/product-technical-gap-baseline.md에 갱신하라. 한 시간 간격으로 예약하고 메시지도 개선·갱신하라. PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다. 내가 온전히 소유한 ContextualWisdomLab 저장소를 레버리지 순으로 연계해 PR 병합·추가와 Connector 추가·수정 등 Ecosystem을 구축하라. Ecosystem 전 라이브러리 PRD를 숙지하고 조직·저장소명 대소문자를 지킨다. 리뷰·Checks 대기는 Blocker가 아니며, 실패 원인·수정·재실행 필요에 즉시 대응하며 안전한 작업을 계속한다. 결과 보고에 멈추지 말고 다음 Loop로 이동하라. 저장소는 이름이 아니라 제품 책임·재사용 경계·문서·구현·소비 저장소를 대조해 선택한다. ADR·Goal을 수시로 갱신하고 Goal 수정 불가 시 Loop를 갱신한다.
 
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** the "PR 병합 또는 0개" instruction is refined — PR 0개는 병합, 또는 검증된 successor가 유효 delta를 완전히 승계하는 경우로만 만들며 단순 Close로 만들지 않는다 (see the expanded Close-vs-repair policy added to §2 below, which this refinement is consistent with and should be read together with).
+
 ## 2. Concurrent operation, PR handling, and root-cause fixes
 
 > 동시 작업·PR 운영·근본 수정 원격 Agent의 동시 Commit·Push를 경합으로 단정해 Force Push·중단하지 말고 변경 취지·이유를 확인해 이어간다. Commit·Push 전 병합 여부를 확인하고 삭제 근거를 남긴다. Self-modifying/Source-fix Workflow는 목적 달성 후 삭제하고 잔존 시 관찰·제거한다. 가능한 PR은 Stack하고 not-merge-ready를 merge-ready로 전환한다. 유관 프로젝트 원인이 엮이면 함께 처리하고 Stacked PR을 중앙 OpenCode Agent가 리뷰하지 않으면 ContextualWisdomLab/.github를 수정한다. Agent 간 대화·Spawn을 활용한다. 수동 해법은 모두 코드·설정에 반영한다. PYTHONPATH=. 누락은 설정하고 GitHub Actions·런타임 오류는 로그·Root Cause Analysis로 제거한다. 전체 GitHub Checks 실패를 확인·수정한다. ContextualWisdomLab 내부 라이브러리 문제라면 원시 공급자 오류까지 고쳐 PR한다. 개발 프로세스에 https://github.com/DietrichGebert/ponytail 및 https://github.com/obra/superpowers 를 사용하되 superpowers의 "무조건 질문" 규칙은 무시한다. https://github.com/tirth8205/code-review-graph 와 https://github.com/colbymchenry/codegraph 도 사용하고 인덱싱은 스스로 수행한다. 이는 명시적으로 허가됐다.
+
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** the user's working text expands this section with an explicit Close-vs-repair policy and one more permitted tool, quoted verbatim:
+
+> single-writer·DDD 위반, 잘못된 base·충돌, ADR 번호 충돌, 성급한 Accepted, 미보호 dependency, 누락된 test·fixture·contract는 Close가 아닌 repair finding이다. Draft·Proposed로 낮추고 owner stack에 non-force restack·retarget해 수리한다. single-writer는 delta 폐기가 아닌 통합이다. 직접 못 고치면 successor가 delta를 완전 승계하고 predecessor를 잇는다. foundation 미착지 시 prerequisite를 완성하며 PR은 유지한다. 오폐쇄는 reopen·successor로 복구한다. Close는 사용자 명시, 유효 delta 없음, 악성 변경, 완전 승계에만 허용하며 표시는 종결이 아니다. 한국어 문구·문서·번역에는 https://github.com/epoko77-ai/im-not-ai를 적용하되 의미·사실·수치·고유명사를 보존한다.
+
+This addendum's Close-vs-repair rule is already this session's own established practice (every "repair, not Close" correction recorded in `docs/product-technical-gap-baseline.md` this cycle follows it); syncing it into this file makes that practice canonical rather than tribal.
 
 ## 3. Research, standards, and documentation traceability
 
 > 연구·표준·문서 추적성 모든 개발은 최신 권위 국제 표준·논문을 조사해 APA 7th로 인용하고 doctoring에 기록하며 누락 근거를 보충한다. Local Zotero API가 되면 기존 자료를 읽거나 OA 논문을 추가한다. 논문·표준은 exact-head·전체 PR·내부 모듈·API에 모순 없이 결합하고 충돌을 수정한다. AGENTS.md, CLAUDE.md, ARCHITECTURE.md, CHANGELOG.md 등 ADR 문서를 상시 갱신하고 Core ERD, UML, PRD, TRD, user stories, storyboard, wireframes, Storybook inventory, security·test·operability baseline 및 필요한 그림을 포함한다. 릴리즈 가능하면 버전을 올려 배포하고 CHANGELOG.md를 갱신한다. GitHub.io를 언급하려면 페이지를 실제 출판한다.
 
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** an explicit decision-record completeness bar, quoted verbatim:
+
+> 의사결정은 처음 보는 사람도 문제·제약·대안·선택/기각 이유·근거·위험·효과·후속 조치를 재구성하게 구체적이고 자세히 기록한다. 결론·전제를 생략하지 말고 사용자·운영·장애 장면이 보이는 사례와 증거를 exact-head·로그·이슈·PR·ADR·실험에 연결해 다른 Agent가 검증·계속하게 한다.
+
 ## 4. UX/UI and customer-facing expression
 
 > UX·UI와 고객 표현 필요하면 Figma와 Storybook(https://github.com/storybookjs/storybook), https://github.com/nextlevelbuilder/ui-ux-pro-max-skill, https://github.com/local-over/Anti-Slop-UI 를 함께 쓴다. 반복 웹 객체는 디자인 토큰화·모듈화하고 Figma File ID를 ADR에 기록한다. Storybook 장면별·Edge case별 Event를 조사·구현한다. UX·UI는 반드시 스크린샷으로 검수하고 ui-ux-pro-max로 Accessibility, Touch & Interaction, Performance, Style Selection, Layout & Responsive, Typography & Color, Animation, Forms & Feedback, Navigation Patterns, Charts & Data를 정의·검토·반영·적용·감사한다. 내부 구현 경계를 고객 화면에 노출하지 않고 문구로 고객의 다음 행동을 돕는다. Frontend는 디자인 토큰 CSS, 버튼 Action Edge, Interaction UX, i18n 번역 일관성까지 테스트한다.
+
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** i18n scope is now explicit — an 8-language list and a translation-storage architecture constraint, quoted verbatim:
+
+> i18n은 한국어·영어·일본어·중국어·베트남어·스페인어·독일어·프랑스어를 지원한다. UI 크기·줄바꿈·CJK·텍스트 팽창·font fallback·locale을 고려하고 언어별 Storybook·E2E로 잘림·겹침을 막는다. 번역 원장은 파일·JS bundle이 아닌 DB versioned resource다. server/native는 화면 key만 조회·cache하며 전체 catalog·무거운 i18n JavaScript·SPA를 전제하지 않는다. 공통 관리 제품이 없으면 새 저장소에서 제품별 번역·검토·승인·배포·rollback API·관리 UI를 제공한다.
 
 ## 5. Architecture, naming, and database conventions
 
@@ -58,7 +74,15 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 ## 7. Realistic verification, load, and container testing
 
-> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
+> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다.
+
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** an explicit latency target, quoted verbatim:
+
+> 웹은 비동기 처리·k6 E2E를 적용해 모든 페이지 p95≤20ms를 맞춘다. 초과하면 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·언어로 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up은 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·rendering·Frontend stack을 교체한다.
+
+`p95≤20ms` is an aggressive, binding target (competitive with p50 for many stacks), not aspirational — the directive states it as a requirement ("맞춘다"), and this addendum does not soften that. §7's existing verification-first posture and this session's own realistic-benchmark discipline (no artificial cache warm-up, no sample-shrinking, no measurement exclusion) govern *how* the target must be measured honestly; they are not an exception to whether it applies.
+
+> close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
 ## 8. LLM, orchestration, and embedding
 
@@ -67,6 +91,12 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 **Note (flagged by CodeRabbit on this PR, 2026-08-30):** section 8's quoted text describes `contextual-orchestrator`'s general product capability — broad model/modality support and all-five-secret auto model discovery as a *design principle for the orchestrator itself*. It does not specify, and must not be read as overriding, which pool each CI consumer routes through: that is governed exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and its doctoring records — `OpenCode` and `Noema` use the fail-closed, ZDR-prioritized `orchestrator/free` pool; only `Strix` security analysis uses the provider-diverse `orchestrator/auto` pool; private/internal review targets require an attested ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen any CI consumer's pool or credential scope on the strength of this section's general wording alone.
 
 **Note (2026-08-30, superseded by the merged pin flip — see the correction below):** an earlier draft of this note said Strix stayed on `orchestrator/auto` pending `free_family_diversity` reaching `>= 2`. That is no longer true and must not be read as current: `.github/workflows/strix.yml` now hardcodes `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` and fails closed on any other value. This note originally went on to say that ADR-0003's 2026-08-30 amendment "records the owner's decision to accept the residual single-outage-domain risk immediately rather than wait for the evidence-gated threshold this note originally described" — that framing was false, as ADR-0003's own 2026-08-31 correction now records: no owner reviewed or accepted this switch or its risk. `free_account_diversity` (`scripts/ci/contextual_orchestrator_review_policy.py`; renamed from `free_family_diversity` once every KV credential became an independent discovery account rather than being grouped into a vendor "family", see #1468) remains useful as ongoing monitoring evidence for that open, unreviewed risk, not as a gate blocking the pin.
+
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** explicit timeout-null semantics and admin-web model-management scope, quoted verbatim:
+
+> Model timeout은 application·Agent·Gateway 공통 상한 없이 기본 null이다. 통신 장애는 upstream provider가 끝낸다. 관리자 Web은 모델별 조회·설정·해제·복원, 단위·우선순위·상속·검증·감사·API를 제공하고 설정된 모델만 제한한다. reasoning·streaming·tool call은 시간만으로 끊지 않으며 사용자 취소·provider 종료·관리자 timeout을 구분한다.
+
+The null-default-timeout principle is already this ecosystem's established, repeatedly-enforced practice (every caller-side-timeout removal recorded in `docs/product-technical-gap-baseline.md` this cycle — Noema's retired 900-second repair deadline included — follows it); this addendum makes the admin-web-scoped exception ("설정된 모델만 제한") explicit for the first time in this file.
 
 ## 9. Reference libraries, tool invocations, and ecosystem repositories
 
@@ -81,6 +111,20 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 - **disksage** — https://github.com/ContextualWisdomLab/disksage — Windows/Linux/macOS 디스크 공간 관리자. 드라이브를 스캔하고 완전 오프라인 온디바이스 LLM이 삭제 안전성을 조언하며 OWL ontology로 파일을 정리한다.
 - **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline.
 - **LineageWeave** — https://github.com/ContextualWisdomLab/LineageWeave — 명시적 선후행 링크 없는 짧은 timestamped record에서 git-branch식 lineage DAG를 재구성해 평면 자료를 탐색 가능한 branching thread로 바꾼다. 수리 연산은 소관이 아니므로 다른 라이브러리로 이관한다.
+
+**Addendum (2026-09-03, synced from the user's current `/loop` invocation text — see `docs/doctoring/product-goal-directive-sync-20260903.md`):** the reference list above predates a fuller "core foundation" categorization the user's working text now uses — a substantially larger, explicitly-categorized ownership map, plus an owner/consumer boundary rule that was not previously written into this file at all. Quoted verbatim (this does not supersede the per-repo descriptions above — both describe the same repositories from complementary angles):
+
+> Core foundation의 의미와 개발·사용 경계 @Superpowers·@GitHub·@Figma·@Visualize·@Context7·@Product Design·@Consensus를 쓴다. Core foundation은 전 제품의 공통 설치물이 아니다. 여러 제품에서 반복되는 책임을 한 저장소가 canonical owner로서 독립 배포·versioned contract를 제공하는 선택형 control plane·service·library다. 보호 브랜치의 문서·API/schema·release evidence로 역할·성숙도를 확인하며 open PR은 Proposed 상태다.
+>
+> - **조직·계약** — .github: 공통 CI·review·security·release; enterprise-architecture-core: 전사 Context Map·architecture decision; context-graph-contracts: assertion·event·schema·fixture·conformance. domain truth는 제품에 남긴다.
+> - **의미·데이터** — ConceptWeave: ontology·semantic-layer 생성·검증·release. semantic-data-portal: catalog·governance·검색·제공. EmbedRelay: embedding identity·migration. mhtml-etl-gateway: MHTML 검사·schema proposal·load lineage.
+> - **AI·운영** — CO(contextual-orchestrator): provider discovery·model capability·routing/delegation/verification/admin. noema: GitHub Actions OIDC 단기 repository capability·exact-revision evidence. pg-llm-batch: DB token count·batch 처리.
+> - **Identity·보안·runtime** — keyverse: identity·federation·token. EgressWeave: 안전한 outbound HTTP. OriginWeave: governed browser. pingora-gateway: Rust edge. quarantine-sandbox-runtime: 격리. appguardrail: scan·SARIF·remediation. wardnet: gateway·WAF·IDS·SOC.
+> - **재사용 기능** — fast-mlsirm: IRT·MLSIRM. TEPP: 다국어·시간·event·relation 측정. RankWeave: retrieval fusion·evaluation·통계 비교·tuning·TREC. ThreadWeave: JWZ/RFC 5256 threading. inkspan: editor·serialization·문서 변환. DiagramWeave: diagram patch·render·CLI·LSP.
+>
+> owner가 미성숙하거나 API가 없어도 consumer가 복제·우회하지 않는다. owner에서 RED test→기능·문서·release를 개발해 CI GREEN과 immutable version을 낸 뒤 채택한다. 그 전에는 port·ACL·feature flag·test double로 경계를 지키고 owner의 source·DB·임시 branch를 직접 읽지 않는다.
+
+Repositories named here but not in the per-repo list above (`enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`, `semantic-data-portal`, `EmbedRelay`, `mhtml-etl-gateway`, `noema`, `pg-llm-batch`, `EgressWeave`, `OriginWeave`, `pingora-gateway`, `quarantine-sandbox-runtime`, `appguardrail`, `inkspan`, `DiagramWeave`) are core-foundation control-plane/library repositories under this categorization; `disksage` and `LineageWeave` above remain valid reference repositories, just outside this specific "core foundation" frame (they are product-owned tooling, not shared control-plane/service infrastructure other products depend on).
 
 ## How to point a `/goal` session at this directive
 
