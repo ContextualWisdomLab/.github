@@ -258,6 +258,25 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
+      - name: Refuse private source on a public artifact destination
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's ACL, not the
+          # private target's ACL. A one-day expiry is not access control.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if [ "$ARTIFACT_REPOSITORY_PRIVATE" != true ]; then
+                echo '::error::Private coverage source requires a private artifact destination; public or unknown destinations are refused before source transport.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
+
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
@@ -1079,12 +1098,26 @@ jobs:
             fi
             sudo rm -rf "$coverage_build_dir"
 
+            # Use the daemon's capacity, not the runner host's CPU count.
+            # Keep four CPUs as an upper limit without rejecting smaller guests.
+            if ! coverage_daemon_cpus="$(docker info --format '{{.NCPU}}')"; then
+              echo '::error::Coverage Docker daemon CPU capacity is unavailable.'
+              exit 1
+            fi
+            if [[ ! "$coverage_daemon_cpus" =~ ^[1-9][0-9]*$ ]]; then
+              echo '::error::Coverage Docker daemon CPU capacity is invalid.'
+              exit 1
+            fi
+            case "$coverage_daemon_cpus" in
+              1|2|3) coverage_sandbox_cpus="$coverage_daemon_cpus" ;;
+              *) coverage_sandbox_cpus=4 ;;
+            esac
             sandbox_status=0
             docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --pids-limit 2048 \
               --memory 14g \
-              --cpus 4 \
+              --cpus "$coverage_sandbox_cpus" \
               --security-opt no-new-privileges:true \
               --cap-drop ALL \
               --cap-add CHOWN \

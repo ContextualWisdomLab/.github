@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -27,6 +28,68 @@ def test_public_transfer_does_not_require_an_artifact_upload() -> None:
     download = _step(jobs["coverage-evidence"], "Download materialized pull request merge tree")
     assert download.get("if") == "needs.validate-pr-metadata.outputs.is_private == 'true'"
     assert download["with"]["name"] == upload["with"]["name"]
+
+
+def test_private_source_refuses_public_artifact_destination_before_transport() -> None:
+    """비공개 PR 원문이 공개 리뷰 저장소의 artifact 저장소에 전달되지 않음을 검증한다."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    steps = jobs["validate-pr-metadata"]["steps"]
+    names = [step.get("name") for step in steps]
+    guard = _step(jobs["validate-pr-metadata"], "Refuse private source on a public artifact destination")
+    assert names.index(guard["name"]) < names.index("Exchange OpenCode app token for target repository coverage reads")
+    assert names.index(guard["name"]) < names.index("Materialize pull request merge tree for coverage measurement")
+    assert names.index(guard["name"]) < names.index("Upload materialized pull request merge tree")
+    assert "if" not in guard
+    assert guard.get("continue-on-error", False) is False
+    assert guard["env"]["SOURCE_REPOSITORY_PRIVATE"] == "${{ steps.validate.outputs.is_private }}"
+    assert guard["env"]["ARTIFACT_REPOSITORY_PRIVATE"] == "${{ github.event.repository.private }}"
+    for source, destination, allowed in (
+        ("true", "false", False), ("true", "", False), ("true", "unknown", False),
+        ("true", "true", True), ("false", "false", True), ("false", "true", True),
+        ("true", "True", False), ("true", "true\n", False),
+        ("", "true", False), ("unknown", "true", False), ("True", "true", False),
+    ):
+        result = subprocess.run(
+            ["/bin/bash", "-c", guard["run"]], capture_output=True, text=True,
+            check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/dev/null",
+                              "SOURCE_REPOSITORY_PRIVATE": source,
+                              "ARTIFACT_REPOSITORY_PRIVATE": destination},
+        )
+        assert (result.returncode == 0) is allowed, (source, destination, result.stderr)
+
+
+@pytest.mark.parametrize("destination, reaches_git", [("false", False), ("", False), ("true", True)])
+def test_private_destination_guard_stops_actual_materialization(destination, reaches_git, tmp_path):
+    """실제 guard와 materialize shell을 연결해 Git 진입 전 거부를 검증한다."""
+    metadata = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["validate-pr-metadata"]
+    guard = _step(metadata, "Refuse private source on a public artifact destination")["run"]
+    materialize = _step(metadata, "Materialize pull request merge tree for coverage measurement")["run"]
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    marker = tmp_path / "git-called"
+    git = binary / "git"
+    git.write_text(
+        f"#!{sys.executable}\nimport os\nfrom pathlib import Path\n"
+        "Path(os.environ['GIT_MARKER']).write_text('synthetic git boundary')\n"
+        "raise SystemExit(37)\n"
+    )
+    git.chmod(0o755)
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    result = subprocess.run(
+        ["/bin/bash", "-c", guard + "\n" + materialize],
+        capture_output=True, text=True, check=False, timeout=15,
+        env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path),
+             "SOURCE_REPOSITORY_PRIVATE": "true", "ARTIFACT_REPOSITORY_PRIVATE": destination,
+             "RUNNER_TEMP": str(runner), "COVERAGE_SOURCE_WORKDIR": str(runner / "source"),
+             "COVERAGE_SOURCE_ARCHIVE": str(runner / "source.tar"), "GH_TOKEN": "synthetic-only",
+             "TARGET_REPOSITORY": "Fixture/private", "PR_NUMBER": "1",
+             "PR_BASE_SHA": "a" * 40, "PR_HEAD_SHA": "b" * 40,
+             "GITHUB_SERVER_URL": "https://fixture.invalid", "GIT_MARKER": str(marker)},
+    )
+    assert marker.exists() is reaches_git
+    assert result.returncode == (37 if reaches_git else 1)
+    assert not list(runner.iterdir())
 
 
 def test_public_source_is_reconstructed_in_the_credential_free_coverage_job() -> None:
