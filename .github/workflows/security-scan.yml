@@ -60,6 +60,16 @@ permissions:
   actions: read
   contents: read
 
+# Every `actions/checkout` below initialises a fresh repository before it
+# fetches the exact SHA; with no initial-branch setting Git 2.28+ prints the
+# "Using 'master' as the name for the initial branch" hint (and the Git 3.0
+# rename warning) on every job. Process-local config -- not a global
+# gitconfig write and not stderr suppression -- names it `main`. See #2101.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 jobs:
   changed-scope:
     name: Detect changed scope
