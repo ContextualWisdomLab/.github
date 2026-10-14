@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
@@ -721,15 +722,28 @@ def _trusted_uv_archive(
 ) -> bytes:
     """Build a deterministic uv tar archive for supply-chain boundary tests."""
     payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w:gz") as bundle:
-        member = tarfile.TarInfo(member_name)
-        if regular:
-            member.size = len(binary)
-            bundle.addfile(member, io.BytesIO(binary))
-        else:
-            member.type = tarfile.DIRTYPE
-            bundle.addfile(member)
+    with gzip.GzipFile(fileobj=payload, mode="wb", mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as bundle:
+            member = tarfile.TarInfo(member_name)
+            if regular:
+                member.size = len(binary)
+                bundle.addfile(member, io.BytesIO(binary))
+            else:
+                member.type = tarfile.DIRTYPE
+                bundle.addfile(member)
     return payload.getvalue()
+
+
+def test_trusted_uv_archive_has_stable_bytes_for_collection_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated supply-chain fixtures must not make pytest node IDs time-dependent."""
+    import gzip
+
+    instants = iter((1_000, 2_000))
+    monkeypatch.setattr(gzip.time, "time", lambda: next(instants))
+
+    assert _trusted_uv_archive(regular=False) == _trusted_uv_archive(regular=False)
 
 
 def test_download_trusted_uv_archive_accepts_fixed_https_origin(

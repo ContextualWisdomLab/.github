@@ -39,6 +39,38 @@ def _load_installer():
     return _load_module(INSTALLER, "install_strix_timeout_compat")
 
 
+def _fake_sandbox_modules(monkeypatch, backend=None):
+    """Supply pinned import interfaces without loading Docker or a third-party runtime."""
+    runtime = types.ModuleType("strix.runtime")
+    bootstrap = types.ModuleType("strix.runtime.caido_bootstrap")
+    bootstrap._login_as_guest = runpy.run_path(
+        str(ROOT / "tests/fixtures/strix_login_as_guest_1_5_3.py")
+    )["_login_as_guest"]
+    runtime.caido_bootstrap = bootstrap
+    backends = types.ModuleType("strix.runtime.backends")
+    async def docker_backend(*, image, manifest, exposed_ports, bind_mounts=None):
+        raise AssertionError("No real sandbox creation in compatibility installation tests")
+    backend = backend or docker_backend
+    backends._docker_backend = backend
+    registry = {"docker": backend}
+    backends.get_backend = lambda name: registry[name]
+    def register_backend(name, backend, *, supports_bind_mounts=False):
+        assert supports_bind_mounts is True
+        registry[name] = backend
+    backends.register_backend = register_backend
+    runtime.backends = backends
+    monkeypatch.setitem(sys.modules, "strix.runtime.backends", backends)
+    docker = types.ModuleType("agents.sandbox.sandboxes.docker")
+    docker.DockerSandboxSession = type("DockerSandboxSession", (), {})
+    monkeypatch.setitem(sys.modules, "strix.runtime", runtime)
+    monkeypatch.setitem(sys.modules, "strix.runtime.caido_bootstrap", bootstrap)
+    monkeypatch.setitem(sys.modules, "agents.sandbox.sandboxes.docker", docker)
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: {
+        "strix-agent": "1.5.3", "openai-agents": "0.19.4",
+    }[name])
+    return bootstrap
+
+
 def test_strix_timeout_compat_is_installed_after_the_pinned_runtime() -> None:
     """Keep the upstream 1.5.3 parser value from becoming a real inference deadline."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -143,6 +175,7 @@ def test_runtime_compatibility_patches_only_strix_model_boundaries(monkeypatch) 
     monkeypatch.setitem(sys.modules, "strix.interface.scan_setup", scan_setup_module)
     monkeypatch.setitem(sys.modules, "strix.interface.main", main_module)
     monkeypatch.setattr(launcher, "_require_supported_version", lambda: None)
+    _fake_sandbox_modules(monkeypatch)
     monkeypatch.setenv("LLM_TIMEOUT", "300")
     monkeypatch.setenv("LLM_STREAM_IDLE_TIMEOUT", "300")
 
@@ -393,7 +426,7 @@ def test_launcher_script_entrypoint_enters_patched_strix(monkeypatch) -> None:
         scan_setup_module,
     )
     monkeypatch.setitem(sys.modules, "strix.interface.main", main_module)
-    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.5.3")
+    _fake_sandbox_modules(monkeypatch)
     monkeypatch.setenv("LLM_TIMEOUT", "300")
     monkeypatch.setenv("LLM_STREAM_IDLE_TIMEOUT", "300")
 
@@ -436,6 +469,7 @@ def test_runtime_compatibility_survives_the_package_level_main_shadow(monkeypatc
     monkeypatch.setitem(sys.modules, "strix.interface.scan_setup", scan_setup_module)
     monkeypatch.setitem(sys.modules, "strix.interface.main", main_module)
     monkeypatch.setattr(launcher, "_require_supported_version", lambda: None)
+    _fake_sandbox_modules(monkeypatch)
     monkeypatch.setenv("LLM_TIMEOUT", "300")
     monkeypatch.setenv("LLM_STREAM_IDLE_TIMEOUT", "300")
 
