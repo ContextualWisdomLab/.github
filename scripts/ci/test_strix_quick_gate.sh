@@ -4741,6 +4741,18 @@ EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
 		exit 0
 		;;
+	report-optional-web-search-and-pty-warning-sanitized)
+		echo 'PTY process count reached warning threshold: 64 active sessions'
+		mkdir -p "$STRIX_REPORTS_DIR/fake-optional-web-search-warning"
+		cat >"$STRIX_REPORTS_DIR/fake-optional-web-search-warning/strix.log" <<'EOS'
+2026-09-28 04:00:15.128 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured
+2026-09-28 04:00:15.129 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without EXA_API_KEY configured
+2026-09-28 04:00:15.130 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without EXA_API_KEY or PERPLEXITY_API_KEY configured
+2026-09-28 04:54:41.472 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		echo 'scan completed despite optional web search and PTY notices'
+		exit 0
+		;;
 	report-unknown-warning-fails)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-unknown-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-unknown-warning/strix.log" <<'EOS'
@@ -11039,6 +11051,34 @@ run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"1200" \
 	"0" \
 	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "report-optional-web-search-and-pty-warning-sanitized" \
+	"vertex_ai/report-optional-web-search-and-pty-warning-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/report-optional-web-search-and-pty-warning-sanitized'" \
+	"1" \
+	"vertex_ai/report-optional-web-search-and-pty-warning-sanitized" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
 	"" \
 	"" \
 	"" \

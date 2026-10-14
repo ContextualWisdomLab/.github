@@ -197,9 +197,20 @@ known_internal_warning = re.compile(
     r"\(attempt \d+/\d+, backoff [0-9.]+s\): "
     r")"
 )
+optional_web_search_warning = re.compile(
+    # Strix 1.5.3 treats this missing optional tool credential as a local
+    # web-search failure and continues the scan; it is not an LLM outage.
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"[^ ]+ - strix\.tools\.web_search\.tool: "
+    r"web_search invoked without "
+    r"(?:EXA_API_KEY|PERPLEXITY_API_KEY|EXA_API_KEY or PERPLEXITY_API_KEY) "
+    r"configured\s*$"
+)
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
-    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.|"
+    # This threshold notice does not mean the PTY limit was reached.
+    r"PTY process count reached warning threshold: \d+ active sessions\s*$)"
 )
 
 
@@ -230,6 +241,7 @@ for log_path in iter_report_logs(root):
         line
         for line in lines
         if not known_internal_warning.match(line)
+        and not optional_web_search_warning.match(line)
         and not known_scanner_warning.match(line)
     ]
     if filtered != lines:
