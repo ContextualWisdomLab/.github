@@ -276,6 +276,8 @@ NEGATED_RUNTIME_ASSERTION_PATTERN = re.compile(
     r"hasn't|haven't)\b)",
     re.IGNORECASE,
 )
+CLAUSE_BOUNDARY_PATTERN = re.compile(r"[,;]|\bbut\b|\bhowever\b", flags=re.IGNORECASE)
+SENTENCE_BOUNDARY_PATTERN = re.compile(r"[.;\n]")
 EXECUTION_RECEIPT_PATTERN = re.compile(
     r"^OPENCODE_EXECUTION_RECEIPT\s+"
     r"tool=(react-devtools|chrome-devtools|browser-devtools|headless-chromium|"
@@ -498,7 +500,8 @@ def current_changed_files() -> frozenset[str]:
 
 def runtime_tool_slug(tool_name: str) -> str:
     """Return the canonical receipt slug for a browser execution tool."""
-    return re.sub(r"\s+", "-", tool_name.strip().casefold())
+    # Bolt: Native split/join is significantly faster than re.sub for whitespace normalization
+    return "-".join(tool_name.strip().casefold().split())
 
 
 @lru_cache(maxsize=1)
@@ -522,7 +525,8 @@ def runtime_assertion_is_negated(
 ) -> bool:
     """Return whether a nearby negation applies to this execution assertion."""
     prefix = text[max(0, assertion.start() - 40) : assertion.start()]
-    prefix = re.split(r"[,;]|\bbut\b|\bhowever\b", prefix, flags=re.IGNORECASE)[-1]
+    # Bolt: Use pre-compiled regex to avoid re-compilation overhead in loop
+    prefix = CLAUSE_BOUNDARY_PATTERN.split(prefix)[-1]
     return NEGATED_RUNTIME_ASSERTION_PATTERN.search(f"{prefix}{suffix}") is not None
 
 
@@ -532,8 +536,9 @@ def claimed_runtime_tools(text: str) -> tuple[str, ...]:
     for tool_match in RUNTIME_TOOL_PATTERN.finditer(text):
         before = text[max(0, tool_match.start() - 96) : tool_match.start()]
         after = text[tool_match.end() : tool_match.end() + 96]
-        before = re.split(r"[.;\n]", before)[-1]
-        after = re.split(r"[.;\n]", after)[0]
+        # Bolt: Pre-compiled regex
+        before = SENTENCE_BOUNDARY_PATTERN.split(before)[-1]
+        after = SENTENCE_BOUNDARY_PATTERN.split(after)[0]
         before_matches = list(RUNTIME_ASSERTION_PATTERN.finditer(before))
         if before_matches:
             before_match = before_matches[-1]
