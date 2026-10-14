@@ -6,8 +6,12 @@
   finish as `completed`/`skipped` (or later `success` when enabled) within
   seconds — not multi-hour `queued` — and state when the flag may safely be
   flipped back to `true`.
-- **Decision record:** none — live verification plus recommended re-enable
-  criteria. Flipping the repo variable remains an explicit operator action.
+- **Decision record:** [`docs/adr/0032-review-runner-occupancy-progress-bound.md`](../adr/0032-review-runner-occupancy-progress-bound.md)
+  (Proposed) — keeps dedicated concurrency group `opencode-review-coalesce-tick`
+  with `cancel-in-progress: false`; rejects runner reservation and step-scoped
+  inert gates; job-level skip-before-admission is the contract this verify proves.
+  Flipping the repo variable remains an explicit operator action under the
+  re-enable criteria below.
 - **PR:** this commit's pull request.
 
 ## Preconditions verified on `main`
