@@ -1696,6 +1696,10 @@ def call_llm(
             raise NoemaModelOutputError(
                 f"Noema LLM returned unsupported decision: {decision!r}"
             )
+        if truncated and decision == "approve":
+            raise NoemaModelOutputError(
+                "Noema approve requires a complete diff; truncated diff cannot be approved"
+            )
         summary = verdict.get("summary")
         if not isinstance(summary, str) or not summary.strip():
             raise NoemaModelOutputError(

@@ -1449,7 +1449,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
             return self.call_func(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    verdict = noema.call_llm("owner/repo", 1, pr, "diff", True, "head", "extra review context")
+    verdict = noema.call_llm("owner/repo", 1, pr, "diff", False, "head", "extra review context")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "https://llm.example.test/chat"
     assert seen["timeout"] is None
@@ -1470,7 +1470,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # Test case-insensitive valid URL
     monkeypatch.setenv("NOEMA_LLM_API_URL", "HTTPS://llm.example.test/chat")
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", False, "head")["decision"] == "approve"
 
     # Test invalid scheme (and no original URL in error)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
@@ -1511,7 +1511,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", False, "head")["decision"] == "approve"
 
     # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
@@ -1520,7 +1520,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", False, "head")["decision"] == "approve"
 
 
 def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
