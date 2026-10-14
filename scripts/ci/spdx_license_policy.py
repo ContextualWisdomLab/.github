@@ -617,6 +617,8 @@ def recognize_license_text(text: str) -> frozenset[str] | None:
     # whitespace is folded: no case folding, Unicode/control deletion, copyright
     # stripping, prefix/suffix removal, or arbitrary header allowance. An extra
     # condition anywhere therefore changes the digest and remains unverified.
+    # Performance Note: Do not change this exact regex to .split(), as .split()
+    # strips broader Unicode whitespace, which changes the cryptographic digest.
     normalized = re.sub(r"[ \t\r\n]+", " ", text).strip(" \t\r\n")
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     return _VERIFIED_LICENSE_TEXT_DIGESTS.get(digest)

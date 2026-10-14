@@ -1198,6 +1198,8 @@ def evaluate_dependency_license(
         # termcolor 1.4.1, winapi-util 0.1.11, typenum 1.20.1 and reviewed
         # COPYRIGHT bodies in Rand, unicode-width, rustix and linux-raw-sys.
         # A reference is never a grant; every named full grant must be present.
+        # Performance Note: Do not change this exact regex to .split(), as .split()
+        # strips broader Unicode whitespace, which changes the cryptographic digest.
         normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
         reference_digest = hashlib.sha256(normalized.encode()).hexdigest()
         references = {
