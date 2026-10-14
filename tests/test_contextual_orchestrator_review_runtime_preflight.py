@@ -1760,6 +1760,32 @@ def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> N
         assert sanitize_line(unsafe_event) is None
 
 
+def test_sidecar_stream_sanitizer_preserves_bounded_terminal_metrics() -> None:
+    """Accept the paired gateway log shape without admitting raw provider text."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+    event = (
+        "http_request method=POST path=/v1/chat/completions status=200 "
+        "latency_ms=125.2 session_id_hash=- request_id=" + "a" * 32
+        + " served_model=google/gemma-3-12b-it:free error_class=none build_sha="
+        + "b" * 40
+    )
+    assert sanitize_line(event) == event
+    assert sanitize_line("INFO:contextual_orchestrator.server:" + event) == event
+    assert sanitize_line(
+        event.replace("status=200", "status=502")
+        .replace("served_model=google/gemma-3-12b-it:free", "served_model=unknown")
+        .replace("error_class=none", "error_class=provider_error")
+        .replace("b" * 40, "unknown")
+    ) is not None
+    for unsafe in (
+        event.replace("google/gemma-3-12b-it:free", "sk-secret bearer"),
+        event.replace("error_class=none", "error_class=HTTPError"),
+        event.replace("b" * 40, "B" * 40),
+        event + " raw=sk-secret",
+    ):
+        assert sanitize_line(unsafe) is None
+
+
 def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
 
