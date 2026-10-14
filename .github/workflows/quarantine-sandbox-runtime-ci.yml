@@ -109,6 +109,11 @@ jobs:
     runs-on:
       group: CWL QSR hostile workload
       labels: [self-hosted, linux, x64, cwl-hostile-workload]
+    env:
+      QSR_RUN_ID: ${{ github.run_id }}
+      QSR_RUN_ATTEMPT: ${{ github.run_attempt }}
+      QSR_EVIDENCE_JOB: coverage
+      QSR_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Verify caller and event before checkout
         env:
@@ -149,21 +154,156 @@ jobs:
       - name: Install pinned coverage tool
         run: cargo +1.97.1 install cargo-llvm-cov --locked --version 0.8.6
       - name: Generate production coverage evidence
-        run: >-
-          cargo llvm-cov
-          --workspace
-          --lib
-          --tests
-          --json
-          --output-path coverage.json
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import subprocess
+
+          identity = {key: os.environ[key] for key in (
+              "QSR_RUN_ID", "QSR_RUN_ATTEMPT", "QSR_EVIDENCE_JOB", "QSR_EXPECTED_HEAD",
+          )}
+          for key in ("QSR_RUN_ID", "QSR_RUN_ATTEMPT"):
+              if not re.fullmatch(r"[1-9][0-9]*", identity[key]):
+                  raise SystemExit("SRC03-EVIDENCE-001: invalid run identity")
+          if not re.fullmatch(r"[0-9a-f]{40}", identity["QSR_EXPECTED_HEAD"]):
+              raise SystemExit("SRC03-EVIDENCE-001: invalid head identity")
+          lane = identity["QSR_EVIDENCE_JOB"]
+          if lane not in ("coverage", "branch-coverage"):
+              raise SystemExit("SRC03-EVIDENCE-001: invalid evidence lane")
+          parent = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          root = Path(os.environ["QSR_EVIDENCE_ROOT"])
+          leaf = "qsr-evidence-{QSR_RUN_ID}-{QSR_RUN_ATTEMPT}-{QSR_EVIDENCE_JOB}-{QSR_EXPECTED_HEAD}".format(**identity)
+          if not parent.is_dir() or root != parent / leaf:
+              raise SystemExit("SRC03-EVIDENCE-001: invalid evidence root")
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if head != identity["QSR_EXPECTED_HEAD"]:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          os.mkdir(root, 0o700)
+          root_stat = root.lstat()
+          artifact = root / ("branch-coverage.json" if lane == "branch-coverage" else "coverage.json")
+          command = ["cargo"]
+          if lane == "branch-coverage":
+              command += ["+nightly-2026-07-01"]
+          command += ["llvm-cov"]
+          if lane == "branch-coverage":
+              command += ["--branch"]
+          command += ["--workspace", "--lib", "--tests", "--json", "--output-path", str(artifact)]
+          completed = subprocess.run(command)
+          if completed.returncode:
+              raise SystemExit(completed.returncode)
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != head:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          with os.fdopen(os.open(artifact, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as handle:
+              metadata = os.fstat(handle.fileno())
+              if not stat.S_ISREG(metadata.st_mode) or metadata.st_size == 0 or metadata.st_nlink != 1:
+                  raise SystemExit("SRC03-EVIDENCE-001: nonregular or empty evidence")
+              hasher = hashlib.sha256()
+              counted = 0
+              while chunk := handle.read(min(65536, metadata.st_size - counted + 1)):
+                  counted += len(chunk)
+                  if counted > metadata.st_size:
+                      raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                  hasher.update(chunk)
+              after = os.fstat(handle.fileno())
+              stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+              if counted != metadata.st_size or any(getattr(after, key) != getattr(metadata, key) for key in stable):
+                  raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+              digest = hasher.hexdigest()
+          receipt = {**identity, "artifact": artifact.name, "bytes": counted,
+                     "sha256": digest, "producer_exit": completed.returncode,
+                     "root_device": root_stat.st_dev, "root_inode": root_stat.st_ino}
+          manifest = json.dumps(receipt, sort_keys=True).encode("utf-8")
+          if len(manifest) > 4096:
+              raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+          with (root / "binding.json").open("x", encoding="utf-8") as handle:
+              print(manifest.decode("utf-8"), end="", file=handle)
+          PY
+      - name: Admit fresh bound coverage evidence before upload
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import stat
+          import subprocess
+
+          root = Path(os.environ["QSR_EVIDENCE_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          identity = {key: os.environ[key] for key in (
+              "QSR_RUN_ID", "QSR_RUN_ATTEMPT", "QSR_EVIDENCE_JOB", "QSR_EXPECTED_HEAD",
+          )}
+          leaf = "qsr-evidence-{QSR_RUN_ID}-{QSR_RUN_ATTEMPT}-{QSR_EVIDENCE_JOB}-{QSR_EXPECTED_HEAD}".format(**identity)
+          metadata = root.lstat()
+          if root != parent / leaf or not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700 or metadata.st_uid != os.getuid():
+              raise SystemExit("SRC03-EVIDENCE-001: evidence root changed")
+          def regular_bytes(path):
+              with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as handle:
+                  info = os.fstat(handle.fileno())
+                  if not stat.S_ISREG(info.st_mode) or not info.st_size or info.st_nlink != 1:
+                      raise SystemExit("SRC03-EVIDENCE-001: nonregular or empty evidence")
+                  if path.name == "binding.json":
+                      if info.st_size > 4096:
+                          raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+                      data = handle.read(4097)
+                      if len(data) > 4096:
+                          raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+                      after = os.fstat(handle.fileno())
+                      stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+                      if len(data) != info.st_size or any(getattr(after, key) != getattr(info, key) for key in stable):
+                          raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                      return data
+                  hasher = hashlib.sha256()
+                  counted = 0
+                  while chunk := handle.read(min(65536, info.st_size - counted + 1)):
+                      counted += len(chunk)
+                      if counted > info.st_size:
+                          raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                      hasher.update(chunk)
+                  after = os.fstat(handle.fileno())
+                  stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+                  if counted != info.st_size or any(getattr(after, key) != getattr(info, key) for key in stable):
+                      raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                  return counted, hasher.hexdigest()
+          def unique_fields(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit("SRC03-EVIDENCE-001: duplicate binding field")
+                  result[key] = value
+              return result
+          receipt = json.loads(regular_bytes(root / "binding.json"), object_pairs_hook=unique_fields)
+          name = "branch-coverage.json" if identity["QSR_EVIDENCE_JOB"] == "branch-coverage" else "coverage.json"
+          counted, digest = regular_bytes(root / name)
+          expected = {**identity, "artifact": name, "bytes": counted,
+                      "sha256": digest, "producer_exit": 0,
+                      "root_device": metadata.st_dev, "root_inode": metadata.st_ino}
+          if type(receipt) is not dict or any(type(receipt.get(key)) is not type(value) for key, value in expected.items()) or receipt != expected:
+              raise SystemExit("SRC03-EVIDENCE-001: stale or mismatched evidence binding")
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != identity["QSR_EXPECTED_HEAD"]:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          PY
       - name: Upload production coverage evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-json-${{ github.event.pull_request.head.sha || github.sha }}
-          path: coverage.json
+          name: coverage-json-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-coverage-${{ github.event.pull_request.head.sha || github.sha }}/coverage.json
+            ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-coverage-${{ github.event.pull_request.head.sha || github.sha }}/binding.json
           if-no-files-found: error
       - name: Explain and enforce complete production coverage
-        run: python3 scripts/check_coverage.py coverage.json
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_coverage.py "$QSR_EVIDENCE_ROOT/coverage.json"
 
   branch-coverage:
     needs: admission
@@ -175,6 +315,11 @@ jobs:
     runs-on:
       group: CWL QSR hostile workload
       labels: [self-hosted, linux, x64, cwl-hostile-workload]
+    env:
+      QSR_RUN_ID: ${{ github.run_id }}
+      QSR_RUN_ATTEMPT: ${{ github.run_attempt }}
+      QSR_EVIDENCE_JOB: branch-coverage
+      QSR_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Verify caller and event before checkout
         env:
@@ -215,27 +360,161 @@ jobs:
       - name: Install pinned coverage tool
         run: cargo +nightly-2026-07-01 install cargo-llvm-cov --locked --version 0.8.6
       - name: Generate branch coverage evidence
-        run: >-
-          cargo +nightly-2026-07-01 llvm-cov
-          --branch
-          --workspace
-          --lib
-          --tests
-          --json
-          --output-path branch-coverage.json
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-branch-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import subprocess
+
+          identity = {key: os.environ[key] for key in (
+              "QSR_RUN_ID", "QSR_RUN_ATTEMPT", "QSR_EVIDENCE_JOB", "QSR_EXPECTED_HEAD",
+          )}
+          for key in ("QSR_RUN_ID", "QSR_RUN_ATTEMPT"):
+              if not re.fullmatch(r"[1-9][0-9]*", identity[key]):
+                  raise SystemExit("SRC03-EVIDENCE-001: invalid run identity")
+          if not re.fullmatch(r"[0-9a-f]{40}", identity["QSR_EXPECTED_HEAD"]):
+              raise SystemExit("SRC03-EVIDENCE-001: invalid head identity")
+          lane = identity["QSR_EVIDENCE_JOB"]
+          if lane not in ("coverage", "branch-coverage"):
+              raise SystemExit("SRC03-EVIDENCE-001: invalid evidence lane")
+          parent = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          root = Path(os.environ["QSR_EVIDENCE_ROOT"])
+          leaf = "qsr-evidence-{QSR_RUN_ID}-{QSR_RUN_ATTEMPT}-{QSR_EVIDENCE_JOB}-{QSR_EXPECTED_HEAD}".format(**identity)
+          if not parent.is_dir() or root != parent / leaf:
+              raise SystemExit("SRC03-EVIDENCE-001: invalid evidence root")
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if head != identity["QSR_EXPECTED_HEAD"]:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          os.mkdir(root, 0o700)
+          root_stat = root.lstat()
+          artifact = root / ("branch-coverage.json" if lane == "branch-coverage" else "coverage.json")
+          command = ["cargo"]
+          if lane == "branch-coverage":
+              command += ["+nightly-2026-07-01"]
+          command += ["llvm-cov"]
+          if lane == "branch-coverage":
+              command += ["--branch"]
+          command += ["--workspace", "--lib", "--tests", "--json", "--output-path", str(artifact)]
+          completed = subprocess.run(command)
+          if completed.returncode:
+              raise SystemExit(completed.returncode)
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != head:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          with os.fdopen(os.open(artifact, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as handle:
+              metadata = os.fstat(handle.fileno())
+              if not stat.S_ISREG(metadata.st_mode) or metadata.st_size == 0 or metadata.st_nlink != 1:
+                  raise SystemExit("SRC03-EVIDENCE-001: nonregular or empty evidence")
+              hasher = hashlib.sha256()
+              counted = 0
+              while chunk := handle.read(min(65536, metadata.st_size - counted + 1)):
+                  counted += len(chunk)
+                  if counted > metadata.st_size:
+                      raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                  hasher.update(chunk)
+              after = os.fstat(handle.fileno())
+              stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+              if counted != metadata.st_size or any(getattr(after, key) != getattr(metadata, key) for key in stable):
+                  raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+              digest = hasher.hexdigest()
+          receipt = {**identity, "artifact": artifact.name, "bytes": counted,
+                     "sha256": digest, "producer_exit": completed.returncode,
+                     "root_device": root_stat.st_dev, "root_inode": root_stat.st_ino}
+          manifest = json.dumps(receipt, sort_keys=True).encode("utf-8")
+          if len(manifest) > 4096:
+              raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+          with (root / "binding.json").open("x", encoding="utf-8") as handle:
+              print(manifest.decode("utf-8"), end="", file=handle)
+          PY
       - name: Print missing branch coverage lines
         run: >-
           cargo +nightly-2026-07-01 llvm-cov report
           --branch
           --show-missing-lines
+      - name: Admit fresh bound coverage evidence before upload
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-branch-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import stat
+          import subprocess
+
+          root = Path(os.environ["QSR_EVIDENCE_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          identity = {key: os.environ[key] for key in (
+              "QSR_RUN_ID", "QSR_RUN_ATTEMPT", "QSR_EVIDENCE_JOB", "QSR_EXPECTED_HEAD",
+          )}
+          leaf = "qsr-evidence-{QSR_RUN_ID}-{QSR_RUN_ATTEMPT}-{QSR_EVIDENCE_JOB}-{QSR_EXPECTED_HEAD}".format(**identity)
+          metadata = root.lstat()
+          if root != parent / leaf or not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700 or metadata.st_uid != os.getuid():
+              raise SystemExit("SRC03-EVIDENCE-001: evidence root changed")
+          def regular_bytes(path):
+              with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as handle:
+                  info = os.fstat(handle.fileno())
+                  if not stat.S_ISREG(info.st_mode) or not info.st_size or info.st_nlink != 1:
+                      raise SystemExit("SRC03-EVIDENCE-001: nonregular or empty evidence")
+                  if path.name == "binding.json":
+                      if info.st_size > 4096:
+                          raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+                      data = handle.read(4097)
+                      if len(data) > 4096:
+                          raise SystemExit("SRC03-EVIDENCE-001: manifest too large")
+                      after = os.fstat(handle.fileno())
+                      stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+                      if len(data) != info.st_size or any(getattr(after, key) != getattr(info, key) for key in stable):
+                          raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                      return data
+                  hasher = hashlib.sha256()
+                  counted = 0
+                  while chunk := handle.read(min(65536, info.st_size - counted + 1)):
+                      counted += len(chunk)
+                      if counted > info.st_size:
+                          raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                      hasher.update(chunk)
+                  after = os.fstat(handle.fileno())
+                  stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+                  if counted != info.st_size or any(getattr(after, key) != getattr(info, key) for key in stable):
+                      raise SystemExit("SRC03-EVIDENCE-001: evidence changed while reading")
+                  return counted, hasher.hexdigest()
+          def unique_fields(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit("SRC03-EVIDENCE-001: duplicate binding field")
+                  result[key] = value
+              return result
+          receipt = json.loads(regular_bytes(root / "binding.json"), object_pairs_hook=unique_fields)
+          name = "branch-coverage.json" if identity["QSR_EVIDENCE_JOB"] == "branch-coverage" else "coverage.json"
+          counted, digest = regular_bytes(root / name)
+          expected = {**identity, "artifact": name, "bytes": counted,
+                      "sha256": digest, "producer_exit": 0,
+                      "root_device": metadata.st_dev, "root_inode": metadata.st_ino}
+          if type(receipt) is not dict or any(type(receipt.get(key)) is not type(value) for key, value in expected.items()) or receipt != expected:
+              raise SystemExit("SRC03-EVIDENCE-001: stale or mismatched evidence binding")
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != identity["QSR_EXPECTED_HEAD"]:
+              raise SystemExit("SRC03-EVIDENCE-001: checkout drift")
+          PY
       - name: Upload branch coverage evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: branch-coverage-json-${{ github.event.pull_request.head.sha || github.sha }}
-          path: branch-coverage.json
+          name: branch-coverage-json-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-branch-coverage-${{ github.event.pull_request.head.sha || github.sha }}/branch-coverage.json
+            ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-branch-coverage-${{ github.event.pull_request.head.sha || github.sha }}/binding.json
           if-no-files-found: error
       - name: Enforce complete production branch coverage
-        run: python3 scripts/check_coverage.py --require-branches branch-coverage.json
+        env:
+          QSR_EVIDENCE_ROOT: ${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-branch-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_coverage.py --require-branches "$QSR_EVIDENCE_ROOT/branch-coverage.json"
 
   podman-e2e-positive-lsm:
     needs: admission

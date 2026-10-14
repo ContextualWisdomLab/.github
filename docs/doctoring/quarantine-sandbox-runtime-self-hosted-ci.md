@@ -58,7 +58,8 @@ candidate with the original SHA-pinned checkout action, `persist-credentials:
 false`, then compares `git rev-parse HEAD` against the event-derived SHA before
 installing tools or executing product code. The workflow grants only
 `contents: read`, contains no publication/write commands, credential inheritance
-or write permission, and uploads only the original coverage evidence artifacts.
+or write permission. Coverage uploads retain their JSON payloads and add a
+run/head/content binding manifest under the SRC03 evidence-only slice.
 Artifact upload is not a repository-write permission grant.
 
 Reusable concurrency is workflow-scoped and namespaced `qsr-central-`, then
@@ -83,9 +84,11 @@ There is no GitHub-hosted fallback or user-selected runner routing.
 
 The fixture remains
 `docker.io/library/python@sha256:94457973ea8a27a799f0b8ea1fe3e3147fcbebaed63497a8af63b28195a08108`.
-All action SHAs, product commands, environment values and coverage artifacts are
-retained from the actual product source, with one independently reproduced
-cleanup repair: enumerate networks first and fail on enumeration error before
+All action SHAs, compiler/tool pins, product acceptance commands and environment
+values are retained. SRC03 changes only the two coverage evidence destinations,
+adds binding manifests and names the artifacts by head/run/attempt. The earlier
+independently reproduced cleanup repair remains: enumerate networks first and
+fail on enumeration error before
 checking names. The old pipeline's `|| true` incorrectly accepted query failure
 as zero leaks. Container-query errors and visible container/network leaks remain
 nonpassing. Synthetic shell controls verify these exits, not real isolation. Production statement/function/region/branch
@@ -194,8 +197,85 @@ Python isolated mode prevents candidate-root module imports by this wrapper.
 Synthetic Cargo-output controls test admission, not Podman or kernel isolation.
 This check detects absent/renamed tests, not a malicious candidate that forges
 libtest output or weakens the test body. Code review and disposable host custody
-remain necessary. Fresh source/tool/evidence directories (SRC03) and actual
-positive-LSM execution are separate, unfinished activation work.
+remain necessary. Fresh source/tool/process directories and actual positive-LSM
+execution are separate, unfinished activation work. The SRC03 slice below
+addresses only coverage artifact-path hygiene, not hostile-writer isolation.
+
+## SRC03 evidence-path slice (2026-10-14)
+
+The initial source-bound RED replayed the parsed baseline generation commands
+with a reached synthetic Cargo producer returning zero and leaving a symlink to
+foreign bytes. Both lanes reached the pre-upload boundary without rejecting it;
+regular-file positive controls also passed. This is not an Actions upload claim.
+A failed generation already suppresses the default-success upload, so stale
+files after a nonzero generation are **not** described as an exploitable RED.
+
+Both coverage lanes now exclusively create a mode-0700 immediate-child directory
+under canonical `RUNNER_TEMP`, named with the admitted run ID, attempt, lane and
+candidate HEAD. Existing directories or symlinks fail without deletion or
+adoption. The trusted isolated inline producer verifies HEAD before/after Cargo,
+retains nonzero exits, and requires a nonempty single-link regular output through
+no-follow/nonblocking descriptor reads. It emits an exclusively created
+`binding.json` containing run/attempt/lane/head, root device/inode, payload name,
+byte count, SHA-256 and the zero producer exit. There is no candidate helper
+import, new checkout, token permission or failure masking.
+
+Immediately before the unchanged SHA-pinned upload action, isolated trusted code
+checks root type/owner/mode and recorded inode, rejects duplicate/unknown binding
+fields and Boolean-as-integer values, rehashes nonempty regular bytes and checks
+HEAD again. Upload includes the JSON and manifest, with head/run/attempt in its
+name. The strict product parser still follows upload, using the exact admitted
+path, and branch coverage still requires nonzero branch instrumentation and
+100% owned production coverage. Upload remains default-success only: failed
+production or admission cannot publish through `always()`.
+
+Synthetic source-bound controls cover legitimate output with spaces in the temp
+path; successful symlink/empty/missing/directory/FIFO/hardlink output; nonzero
+producer exit; prior root and root symlink; and post-production changes
+to run/attempt/head/lane/size/hash/producer exit, duplicate/unknown fields, payload
+and root nodes. Foreign sentinels are preserved. These are local wrapper controls,
+not actual Cargo coverage generation or `actions/upload-artifact` execution.
+
+SRC03 review repairs B01/B02/R03 retain literal, reviewed producer/guard script
+SHA-256 contracts and the exact immutable upload `uses` value. Mechanics compare
+actual step projections, complete env/step schemas and ordering; they do not
+replace observed runtime steps with baseline objects. Persistent mutations cover
+mutable/alternate-SHA uploads, substituted generators/guards and removed/bypassed
+admission. The existing behavioral source controls remain required.
+
+Both producers use portable `hashlib.sha256().update()` chunk loops, not
+`file_digest`; the missing-API child test is a synthetic stdlib-capability seam,
+not observed minimum-version or actual runner execution. The project Python
+minimum is unchanged. Payloads have no arbitrary size cap: both producer and
+reader hash chunks of at most 65536 bytes, count bytes against descriptor size,
+and compare device/inode/type/owner/link count/size/mtime/ctime before and after.
+Reads consume at most the initially observed size plus one detection byte,
+refusing growth rather than following an unbounded append. Access time is not a
+stability field because the read itself may update it.
+
+`binding.json` is limited to **4096 UTF-8 bytes** before exclusive publication and
+before decoding. Its closed schema contains four identity strings, a fixed
+payload name, a 64-character SHA-256 and four integers; ordinary bindings are
+well below this generous small bound. Pathological numeric identity lengths are
+refused, not silently truncated. The reader bounds the read call itself to 4097
+bytes, so a misleading size observation cannot permit an unsized allocation.
+Tests execute actual bodies on a 2162688-byte regular payload, verify repeated
+bounded reads and the independent digest/count, reject oversized serialization
+before publication and oversized input even through the synthetic metadata seam,
+and detect controlled grow/truncate during reads. These are bounded consistency
+controls, not hostile-writer isolation or complete product-parser memory bounds.
+
+**Incomplete:** checkout, Cargo/Rustup homes, installed tools, build target,
+positive-LSM `podman-info.json`, and child process settlement remain shared or
+unattested. No evidence-root deletion is added: failed/ambiguous roots remain for
+operator-owned reconciliation after settlement. A directory name, mode, hash or
+inode does not exclude a same-UID hostile process; product code can forge a
+manifest and mutate bytes after admission or during upload. The manifest is
+byte consistency, not a signed provenance attestation. Dedicated disposable
+host custody, trusted tooling and race-safe artifact consumption remain required
+before activation. The owner must independently review this slice and execute
+Linux/runtime/Actions gates; the private scratch patch is not published source,
+full-suite acceptance, App approval, runner provisioning or release evidence.
 
 Primary platform references: GitHub Docs, **Secure use reference** (self-hosted
 PR-code risk), **Reusing workflow configurations** (caller context/concurrency),
