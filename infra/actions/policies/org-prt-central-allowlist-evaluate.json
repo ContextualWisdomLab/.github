@@ -1,0 +1,35 @@
+{
+  "_comment": "DRAFT ONLY — do not POST until lead review. Apply with: gh api -X POST orgs/ContextualWisdomLab/actions/policies --input infra/actions/policies/org-prt-central-allowlist-evaluate.json",
+  "name": "CWL central pull_request_target allowlist (evaluate)",
+  "enforcement": "evaluate",
+  "conditions": {
+    "repository_name": {
+      "include": ["~ALL"],
+      "exclude": []
+    },
+    "workflow_path": {
+      "include": [
+        ".github/workflows/opencode-review.yml",
+        ".github/workflows/noema-review.yml",
+        ".github/workflows/strix.yml",
+        ".github/workflows/pr-review-merge-scheduler.yml"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "restrict_action_events",
+      "parameters": {
+        "allowed_events": [
+          "pull_request_target",
+          "pull_request_review",
+          "repository_dispatch",
+          "push",
+          "schedule",
+          "workflow_call"
+        ]
+      }
+    }
+  ]
+}
