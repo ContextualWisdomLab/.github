@@ -1,0 +1,77 @@
+name: Workflow Lifecycle Inventory
+
+on:
+  schedule:
+    - cron: "31 4 * * *"
+
+concurrency:
+  group: workflow-lifecycle-inventory
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inventory:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.13.2
+        with:
+          egress-policy: block
+          allowed-endpoints: >-
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+
+      - name: Checkout exact trusted inventory source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Collect read-only organization evidence
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PR_REVIEW_MERGE_TOKEN is required for complete organization visibility."
+            exit 1
+          fi
+          echo "::add-mask::$GH_TOKEN"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python scripts/ci/inventory_orphaned_workflows.py --live \
+            --output "$RUNNER_TEMP/workflow-lifecycle-ledger.json" \
+            --receipt-output "$RUNNER_TEMP/workflow-lifecycle-api-receipts.json" \
+            --failure-output "$RUNNER_TEMP/workflow-lifecycle-failure.json"
+          python -m json.tool "$RUNNER_TEMP/workflow-lifecycle-ledger.json" >/dev/null
+          python -m json.tool "$RUNNER_TEMP/workflow-lifecycle-api-receipts.json" >/dev/null
+
+      - name: Preserve immutable read-only evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workflow-lifecycle-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/workflow-lifecycle-ledger.json
+            ${{ runner.temp }}/workflow-lifecycle-api-receipts.json
+            ${{ runner.temp }}/workflow-lifecycle-failure.json
+          if-no-files-found: error
+          retention-days: 30
