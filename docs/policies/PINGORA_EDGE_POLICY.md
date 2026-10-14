@@ -8,7 +8,9 @@ Nginx ingress annotations/classes, and host-service units are prohibited.
 
 This is a runtime boundary, not a vocabulary ban. Documentation, license notices,
 dedicated source fixtures under `tests/fixtures/`, the scanner source itself, and
-migration histories may name Nginx. Executable integration and end-to-end test
+migration histories may name Nginx. The generated repository-root file
+`LICENSE-THIRD-PARTY` is one of those license notices. The same name in any
+other path is still a runtime candidate. Executable integration and end-to-end test
 helpers remain runtime candidates. Pull requests that modify a runtime candidate
 are evaluated against the final exact head file, so deleting a legacy artifact is
 allowed while preserving it or introducing a new one fails closed.
