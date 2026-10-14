@@ -339,9 +339,13 @@ DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
 # OPENCODE_REVIEW_COALESCE_ENABLED is set -- see
 # head_stable_for_seconds() and its use in dispatch_opencode_review().
 DEFAULT_COALESCE_WINDOW_SECONDS = 300
-# Two 5-minute coalesce-tick cron periods: if no tick completed within this
-# horizon, dispatch_opencode_review() fail-opens instead of deferring a head
-# that is still inside the settling window.
+# Two healthy 5-minute coalesce-tick cron periods (N=600s). If no tick
+# completed with conclusion=success within this horizon,
+# dispatch_opencode_review() fail-opens instead of deferring a head that is
+# still inside the settling window. N is deliberately NOT the measured
+# schedule-delivery lag (~40m/#2244, ~97m/#2247 under saturation): encoding
+# that lag would keep reviews waiting on cron. See
+# docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md.
 DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 600
 COALESCE_TICK_WORKFLOW_PATH = ".github/workflows/opencode-review-coalesce-tick.yml"
 COALESCE_TICK_WORKFLOW_NAME = "OpenCode Review Coalesce Tick"
