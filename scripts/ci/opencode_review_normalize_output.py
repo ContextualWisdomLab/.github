@@ -498,7 +498,13 @@ def current_changed_files() -> frozenset[str]:
 
 def runtime_tool_slug(tool_name: str) -> str:
     """Return the canonical receipt slug for a browser execution tool."""
-    return re.sub(r"\s+", "-", tool_name.strip().casefold())
+    # Performance Optimization (Bolt):
+    # Replaced `re.sub(r"\s+", "-", ...)` with `"-".join(...split())`.
+    # Using Python's native string methods avoids the overhead of compiling
+    # and executing regular expressions, and is significantly faster (O(N) with
+    # smaller constant factor) for simple whitespace normalization. This reduces
+    # latency in high-throughput log scanning paths.
+    return "-".join(tool_name.strip().casefold().split())
 
 
 @lru_cache(maxsize=1)
