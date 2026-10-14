@@ -258,6 +258,38 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
+      - name: Refuse private source on a public artifact destination
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
+
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
@@ -383,6 +415,39 @@ jobs:
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
+
+      - name: Recheck private artifact destination before upload
+        if: steps.validate.outputs.is_private == 'true'
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
 
       - name: Upload materialized pull request merge tree
         if: steps.validate.outputs.is_private == 'true'
@@ -1079,12 +1144,26 @@ jobs:
             fi
             sudo rm -rf "$coverage_build_dir"
 
+            # Use the daemon's capacity, not the runner host's CPU count.
+            # Keep four CPUs as an upper limit without rejecting smaller guests.
+            if ! coverage_daemon_cpus="$(docker info --format '{{.NCPU}}')"; then
+              echo '::error::Coverage Docker daemon CPU capacity is unavailable.'
+              exit 1
+            fi
+            if [[ ! "$coverage_daemon_cpus" =~ ^[1-9][0-9]*$ ]]; then
+              echo '::error::Coverage Docker daemon CPU capacity is invalid.'
+              exit 1
+            fi
+            case "$coverage_daemon_cpus" in
+              1|2|3) coverage_sandbox_cpus="$coverage_daemon_cpus" ;;
+              *) coverage_sandbox_cpus=4 ;;
+            esac
             sandbox_status=0
             docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --pids-limit 2048 \
               --memory 14g \
-              --cpus 4 \
+              --cpus "$coverage_sandbox_cpus" \
               --security-opt no-new-privileges:true \
               --cap-drop ALL \
               --cap-add CHOWN \

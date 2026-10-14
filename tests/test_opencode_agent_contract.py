@@ -3,10 +3,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 
@@ -14,6 +16,56 @@ from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 def load_opencode_jsonc() -> dict:
     """Load the repository's opencode.jsonc, tolerating its // comments."""
     return json.loads(strip_jsonc_comments(Path("opencode.jsonc").read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize("daemon_cpus, expected", [
+    ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("8", "4"),
+    ("999999999999999999999999999999999", "4"),
+    ("", None), ("0", None), ("-1", None), ("2.0", None), ("02", None),
+    ("true", None), ("2\n3", None), ("2\r", None), ("unavailable", None),
+])
+def test_coverage_cpu_limit_fits_daemon_capacity(tmp_path, daemon_cpus, expected):
+    """실제 sandbox argv는 daemon 용량과 기존 상한 4를 넘지 않는다."""
+    workflow = yaml.safe_load(Path(".github/workflows/opencode-review-dispatch.yml").read_text())
+    steps = workflow["jobs"]["coverage-evidence"]["steps"]
+    script = next(step["run"] for step in steps if step.get("name") == "Measure test and docstring evidence")
+    start = script.rindex('sudo rm -rf "$coverage_build_dir"\n') + len('sudo rm -rf "$coverage_build_dir"\n')
+    end = script.index('sandbox_output="${sandbox_result_dir}/github-output"', start)
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "python3").symlink_to(sys.executable)
+    docker = binary / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\nimport os,sys,json\nfrom pathlib import Path\n"
+        "if sys.argv[1]=='info':\n"
+        " assert sys.argv[2:]==['--format','{{.NCPU}}']\n"
+        " if os.environ['DAEMON_CPUS']=='unavailable':raise SystemExit(12)\n"
+        " print(os.environ['DAEMON_CPUS']);raise SystemExit(0)\n"
+        "Path(os.environ['ARGV_CAPTURE']).write_text(json.dumps(sys.argv[1:]))\n"
+    )
+    docker.chmod(0o755)
+    capture = tmp_path / "argv.json"
+    result = subprocess.run(
+        ["/bin/bash", "-c", "set -euo pipefail\n" + script[start:end]],
+        env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path), "DAEMON_CPUS": daemon_cpus,
+             "ARGV_CAPTURE": str(capture), "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1",
+             "GITHUB_WORKSPACE": str(tmp_path / "trusted"), "COVERAGE_SOURCE_WORKDIR": str(tmp_path / "source"),
+             "sandbox_result_dir": str(tmp_path / "out"), "measure_step_script": str(tmp_path / "measure.sh"),
+             "PR_BASE_SHA": "a" * 40, "PR_HEAD_SHA": "b" * 40,
+             "coverage_llvm_cov": "/llvm-cov", "coverage_llvm_profdata": "/llvm-profdata",
+             "coverage_tool_image": "synthetic:image"}, capture_output=True, text=True, check=False, timeout=15,
+    )
+    if expected is None:
+        assert result.returncode == 1
+        assert not capture.exists()
+        assert "CPU capacity is" in result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    argv = json.loads(capture.read_text())
+    assert argv[argv.index("--cpus") + 1] == expected
+    assert argv[argv.index("--memory") + 1] == "14g"
+    assert "--network=none" in argv
+    assert "no-new-privileges:true" in argv
 
 
 def test_code_reviewer_subagent_contract_is_configured():
