@@ -460,7 +460,7 @@ def test_fetch_artifact_fails_closed_and_closes_streams(monkeypatch: pytest.Monk
 
     processes: list[Process] = []
 
-    def popen(_args, stdout):
+    def popen(_args, stdout, **kwargs):
         assert stdout is subprocess.PIPE
         process = processes.pop(0)
         return process
@@ -539,7 +539,7 @@ def test_module_entrypoint_executes_the_same_verified_path(
         def poll() -> int:
             return 0
 
-    def popen(args, stdout):
+    def popen(args, stdout, **kwargs):
         assert stdout is subprocess.PIPE
         artifact_id = int(args[2].split("/")[-2])
         return Process(case["archives"][artifact_id])
