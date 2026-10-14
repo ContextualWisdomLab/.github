@@ -1,0 +1,154 @@
+name: Source Fix Comment Router
+
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  route-local-source-fix:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && contains(github.event.comment.body, '@cwl-source-fix')
+    concurrency:
+      group: source-fix-router-local-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY_TOKEN: ${{ github.token }}
+      AGENT_DISPATCH_TOKEN: ${{ github.token }}
+      SOURCE_FIX_REPOSITORY_TARGETS: ${{ vars.SOURCE_FIX_REPOSITORY_TARGETS || vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+      OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+    steps:
+      - name: Check out trusted default-branch router
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Resolve immutable pull-request head
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          SOURCE_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq --argjson pull_request "$pr_json" '. + {pull_request: $pull_request}' \
+            "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/source-fix-event.json"
+
+      - name: Route trusted local source-fix command
+        run: >-
+          python3 -u scripts/ci/agent_source_fix_router.py
+          --event-path "${RUNNER_TEMP}/source-fix-event.json"
+
+  sweep-organization-source-fixes:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'schedule'
+    concurrency:
+      group: source-fix-router-sweep-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SOURCE_FIX_REPOSITORY_TARGETS: ${{ vars.SOURCE_FIX_REPOSITORY_TARGETS || vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+      OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+      LOOKBACK_HOURS: ${{ vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
+      MAX_DISPATCHES: ${{ vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
+      TIME_BUDGET_SECONDS: ${{ vars.AGENT_MENTION_TIME_BUDGET_SECONDS || '480' }}
+    steps:
+      - name: Exchange OpenCode app token for sibling-repository access
+        id: source_fix_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          USER_TOKEN_CONFIGURED: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          mark_unavailable() { echo "available=false" >>"$GITHUB_OUTPUT"; }
+          if [ "$USER_TOKEN_CONFIGURED" = "true" ]; then
+            mark_unavailable
+            exit 0
+          fi
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            mark_unavailable
+            exit 0
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"; case "$request_url" in *\?*) ;; *) separator="?" ;; esac
+          if ! oidc_response="$(curl -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}")"; then
+            mark_unavailable
+            exit 0
+          fi
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then mark_unavailable; exit 0; fi
+          if ! token_response="$(curl -fsS --connect-timeout 10 --max-time 30 -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token")"; then
+            mark_unavailable
+            exit 0
+          fi
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then mark_unavailable; exit 0; fi
+          echo "::add-mask::$app_token"
+          echo "available=true" >>"$GITHUB_OUTPUT"
+          echo "SOURCE_FIX_APP_TOKEN=$app_token" >>"$GITHUB_ENV"
+
+      - name: Check out trusted source-fix router
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Sweep recent organization source-fix commands
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          AGENT_DISPATCH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"
+            repository_source="organization"
+          elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
+            repository_source="organization"
+          else
+            TARGET_REPOSITORY_TOKEN="${SOURCE_FIX_APP_TOKEN:-}"
+            repository_source="installation"
+          fi
+          if [ -z "$TARGET_REPOSITORY_TOKEN" ]; then
+            echo "::error::Source-fix sweep requires an organization token or OpenCode app token."
+            exit 1
+          fi
+          export TARGET_REPOSITORY_TOKEN
+          python3 -u scripts/ci/agent_source_fix_sweep.py \
+            --organization ContextualWisdomLab \
+            --repository-source "$repository_source" \
+            --lookback-hours "$LOOKBACK_HOURS" \
+            --max-dispatches "$MAX_DISPATCHES" \
+            --time-budget-seconds "$TIME_BUDGET_SECONDS"
