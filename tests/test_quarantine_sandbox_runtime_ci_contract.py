@@ -1,6 +1,7 @@
 """Static contracts for the future dedicated QSR reusable CI lane."""
 
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 import os
 import subprocess
@@ -436,7 +437,72 @@ def test_preserves_all_four_job_mechanics():
             and step.get("name")
             not in {"Verify exact checkout", "Verify caller and event before checkout"}
         ]
-        if name == "podman-e2e-positive-lsm":
+        if name in SRC03_LANES:
+            test_src03_upload_is_run_bound_and_preceded_by_admission()
+            # Literal reviewed script digests, never derived from workflow() at runtime.
+            # Behavioral producer/admission controls below remain mandatory supplements.
+            generator_hash = (
+                "091ae4e9cb783d06138a6e62be6ad8255b9c5b47637a23da2628b419e6dacbee"
+            )
+            guard_hash = (
+                "af57131f5083f77780dc66ed46d2c70679165bef149732c1309e9745132d7d82"
+            )
+            generator_name, filename = SRC03_LANES[name]
+            root_expression = (
+                "${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-"
+                "${{ github.run_attempt }}-" + name + "-" + CANDIDATE
+            )
+            expected_steps = deepcopy(expected["steps"])
+            for step in expected_steps:
+                if step.get("name") == generator_name:
+                    step["run"] = generator_hash
+                    step["env"] = {"QSR_EVIDENCE_ROOT": root_expression}
+                elif "uses" in step and step["uses"].startswith(
+                    "actions/upload-artifact@"
+                ):
+                    step["with"] = {
+                        "name": filename.removesuffix(".json")
+                        + "-json-"
+                        + CANDIDATE
+                        + "-${{ github.run_id }}-${{ github.run_attempt }}",
+                        "path": root_expression
+                        + "/"
+                        + filename
+                        + "\n"
+                        + root_expression
+                        + "/binding.json\n",
+                        "if-no-files-found": "error",
+                    }
+                elif "scripts/check_coverage.py" in step.get("run", ""):
+                    step["run"] = step["run"].replace(
+                        filename, '"$QSR_EVIDENCE_ROOT/' + filename + '"'
+                    )
+                    step["env"] = {"QSR_EVIDENCE_ROOT": root_expression}
+            upload_index = next(
+                i
+                for i, s in enumerate(expected_steps)
+                if s.get("uses", "").startswith("actions/upload-artifact@")
+            )
+            expected_steps.insert(
+                upload_index,
+                {
+                    "name": "Admit fresh bound coverage evidence before upload",
+                    "env": {"QSR_EVIDENCE_ROOT": root_expression},
+                    "run": guard_hash,
+                },
+            )
+            observed_steps = deepcopy(steps)
+            for step in observed_steps:
+                if step.get("name") in (
+                    generator_name,
+                    "Admit fresh bound coverage evidence before upload",
+                ):
+                    step["run"] = hashlib.sha256(
+                        step["run"].encode("utf-8")
+                    ).hexdigest()
+            # Compare actual projections, not original objects substituted for actual steps.
+            assert observed_steps == expected_steps, name
+        elif name == "podman-e2e-positive-lsm":
             # Only the exact-test witness and the known cleanup bug differ.
             assert len(steps) == len(expected["steps"])
             assert steps[0:3] == expected["steps"][0:3], name
@@ -449,7 +515,8 @@ def test_preserves_all_four_job_mechanics():
             )
         else:
             assert steps == expected["steps"], name
-        assert job.get("env", {}) == expected["env"], name
+        if name not in SRC03_LANES:
+            assert job.get("env", {}) == expected["env"], name
 
 
 CANDIDATE = "${{ github.event.pull_request.head.sha || github.sha }}"
@@ -827,3 +894,918 @@ def test_doctoring_exposes_capacity_loss_and_unresolved_activation_gates():
         "production_gated_command_execution_kills_and_reports_a_command_that_exceeds_its_timeout",
     ):
         assert required in text, required
+
+
+SRC03_LANES = {
+    "coverage": ("Generate production coverage evidence", "coverage.json"),
+    "branch-coverage": ("Generate branch coverage evidence", "branch-coverage.json"),
+}
+
+
+def src03_boundary(tmp_path, lane, mode, *, overrides=None):
+    """Replay the real YAML producer-to-upload boundary with a reached witness."""
+    source = tmp_path / "source"
+    tools = tmp_path / "tools"
+    runner = tmp_path / "runner temp"
+    for directory in (source, tools, runner):
+        directory.mkdir()
+    head = "a" * 40
+    root = runner / f"qsr-evidence-17-2-{lane}-{head}"
+    foreign = tmp_path / "foreign.json"
+    foreign.write_text('{"fixture":"foreign bytes"}\n', encoding="utf-8")
+    capture = tmp_path / "producer.json"
+    producer = tools / "cargo"
+    producer.write_text(
+        f"#!{sys.executable}\n"
+        "import json,os,pathlib,sys\n"
+        "args=sys.argv[1:]\n"
+        "if 'report' in args: raise SystemExit(0)\n"
+        f"expected={(['+nightly-2026-07-01'] if lane == 'branch-coverage' else []) + ['llvm-cov'] + (['--branch'] if lane == 'branch-coverage' else []) + ['--workspace', '--lib', '--tests', '--json', '--output-path']!r}\n"
+        "if args[:-1]!=expected: raise SystemExit(64)\n"
+        "out=pathlib.Path(args[args.index('--output-path')+1])\n"
+        "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps(args))\n"
+        "mode=os.environ['MODE']\n"
+        "if mode=='producer_failure': raise SystemExit(42)\n"
+        "if mode=='no_output': raise SystemExit(0)\n"
+        "if mode=='symlink':\n"
+        "    out.symlink_to(os.environ['FOREIGN'])\n"
+        "elif mode=='directory': out.mkdir()\n"
+        "elif mode=='fifo': os.mkfifo(out)\n"
+        "elif mode=='hardlink': os.link(os.environ['FOREIGN'],out)\n"
+        "else: out.write_text('' if mode=='empty' else '{\"fixture\":\"fresh bytes\"}\\n')\n",
+        encoding="utf-8",
+    )
+    producer.chmod(0o700)
+    (tools / "python3").symlink_to(sys.executable)
+    git = tools / "git"
+    git.write_text('#!/bin/sh\nprintf "%s\\n" "$ACTUAL_HEAD"\n', encoding="utf-8")
+    git.chmod(0o700)
+    context = {
+        "${{ runner.temp }}": str(runner),
+        "${{ github.run_id }}": "17",
+        "${{ github.run_attempt }}": "2",
+        "${{ github.event.pull_request.head.sha || github.sha }}": head,
+    }
+    job = workflow()["jobs"][lane]
+
+    def render(value):
+        """Render only the real fixture contexts present in the parsed YAML."""
+        for expression, replacement in context.items():
+            value = value.replace(expression, replacement)
+        assert "${{" not in value, "unrendered real YAML environment"
+        return value
+
+    env = {
+        "PATH": str(tools) + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(runner),
+        "ACTUAL_HEAD": head,
+        "FOREIGN": str(foreign),
+        "CAPTURE": str(capture),
+        "MODE": mode,
+    }
+    for key, value in job.get("env", {}).items():
+        env[key] = render(value)
+    name, _ = SRC03_LANES[lane]
+    steps = job["steps"]
+    if mode == "stale_root":
+        root.mkdir()
+        (root / SRC03_LANES[lane][1]).write_text("stale sentinel", encoding="utf-8")
+    elif mode == "root_symlink":
+        root.symlink_to(source, target_is_directory=True)
+    start = next(i for i, step in enumerate(steps) if step.get("name") == name)
+    boundary = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    results = []
+    for step in steps[start:boundary]:
+        # Product coverage policy is unchanged and has its own parser suite.
+        if "scripts/check_coverage.py" in step.get("run", ""):
+            continue
+        result = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            cwd=source,
+            env={
+                **env,
+                **{key: render(value) for key, value in step.get("env", {}).items()},
+                **(overrides or {}),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        results.append(result)
+        if result.returncode:
+            break
+    return results, capture, foreign, root
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_legitimate_current_producer_reaches_boundary(tmp_path, lane):
+    """A genuine nonempty regular output must reach the synthetic upload boundary."""
+    results, capture, _, _ = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file(), "producer injection did not reach Cargo"
+    assert all(result.returncode == 0 for result in results), results[-1].stderr
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_successful_producer_symlink_is_rejected_before_upload(tmp_path, lane):
+    """Zero-exit generation must not admit a symlink to foreign evidence bytes."""
+    results, capture, foreign, _ = src03_boundary(tmp_path, lane, "symlink")
+    assert capture.is_file(), "producer injection did not reach Cargo"
+    assert foreign.read_text(encoding="utf-8") == '{"fixture":"foreign bytes"}\n'
+    assert results[-1].returncode != 0, (
+        "SRC03-EVIDENCE-001: successful producer admitted a symlink at upload boundary"
+    )
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "empty",
+        "no_output",
+        "directory",
+        "fifo",
+        "hardlink",
+        "producer_failure",
+        "stale_root",
+        "root_symlink",
+    ),
+)
+def test_src03_rejects_invalid_outputs_and_preserves_foreign_nodes(
+    tmp_path, lane, mode
+):
+    """Fresh production cannot adopt old nodes, empty output or failed generation."""
+    results, capture, foreign, root = src03_boundary(tmp_path, lane, mode)
+    assert results[-1].returncode != 0, (lane, mode)
+    if mode in ("stale_root", "root_symlink"):
+        assert not capture.exists(), "stale root reached producer"
+        if mode == "stale_root":
+            assert (root / SRC03_LANES[lane][1]).read_text() == "stale sentinel"
+        else:
+            assert root.is_symlink()
+    else:
+        assert capture.is_file(), "injection did not reach producer"
+    if mode == "producer_failure":
+        assert results[-1].returncode == 42
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "run",
+        "attempt",
+        "head",
+        "job",
+        "hash",
+        "bytes",
+        "producer",
+        "extra",
+        "duplicate",
+        "empty",
+        "symlink",
+        "hardlink",
+        "root_symlink",
+        "boolean_exit",
+        "head_drift",
+    ),
+)
+def test_src03_consumer_revalidates_binding_and_bytes(tmp_path, lane, mutation):
+    """Execute the actual pre-upload guard against post-producer drift."""
+    import json
+
+    results, _, foreign, root = src03_boundary(tmp_path, lane, "regular")
+    assert all(result.returncode == 0 for result in results)
+    binding = root / "binding.json"
+    receipt = json.loads(binding.read_text())
+    artifact = root / SRC03_LANES[lane][1]
+    if mutation in ("run", "attempt", "head", "job"):
+        key = {
+            "run": "QSR_RUN_ID",
+            "attempt": "QSR_RUN_ATTEMPT",
+            "head": "QSR_EXPECTED_HEAD",
+            "job": "QSR_EVIDENCE_JOB",
+        }[mutation]
+        receipt[key] = "different"
+    elif mutation == "hash":
+        artifact.write_text("mutated evidence")
+    elif mutation == "bytes":
+        receipt["bytes"] += 1
+    elif mutation == "producer":
+        receipt["producer_exit"] = 42
+    elif mutation == "boolean_exit":
+        receipt["producer_exit"] = False
+    elif mutation == "extra":
+        receipt["unknown"] = "field"
+    elif mutation in ("empty", "symlink", "hardlink"):
+        artifact.unlink()
+        if mutation == "empty":
+            artifact.touch()
+        elif mutation == "symlink":
+            artifact.symlink_to(foreign)
+        else:
+            os.link(foreign, artifact)
+    elif mutation == "root_symlink":
+        saved = root.with_name("saved-root")
+        root.rename(saved)
+        root.symlink_to(saved, target_is_directory=True)
+        binding = saved / "binding.json"
+    if mutation == "duplicate":
+        binding.write_text(binding.read_text()[:-1] + ',"producer_exit":0}')
+    else:
+        binding.write_text(json.dumps(receipt))
+    script = next(
+        step["run"]
+        for step in workflow()["jobs"][lane]["steps"]
+        if step.get("name") == "Admit fresh bound coverage evidence before upload"
+    )
+    env = {
+        "PATH": str(tmp_path / "tools") + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(tmp_path / "runner temp"),
+        "QSR_EVIDENCE_ROOT": str(root),
+        "QSR_RUN_ID": "17",
+        "QSR_RUN_ATTEMPT": "2",
+        "QSR_EVIDENCE_JOB": lane,
+        "QSR_EXPECTED_HEAD": "a" * 40,
+        "ACTUAL_HEAD": "b" * 40 if mutation == "head_drift" else "a" * 40,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        cwd=tmp_path / "source",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode != 0, (lane, mutation)
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+def test_src03_upload_is_run_bound_and_preceded_by_admission():
+    """Preserve failure suppression and connect exact evidence paths to upload."""
+    for lane, (name, filename) in SRC03_LANES.items():
+        job = workflow()["jobs"][lane]
+        env = job["env"]
+        assert env["QSR_RUN_ID"] == "${{ github.run_id }}"
+        assert env["QSR_RUN_ATTEMPT"] == "${{ github.run_attempt }}"
+        assert env["QSR_EVIDENCE_JOB"] == lane
+        assert env["QSR_EXPECTED_HEAD"] == CANDIDATE
+        root_expression = (
+            "${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-${{ github.run_attempt }}-"
+            + lane
+            + "-"
+            + CANDIDATE
+        )
+        assert set(env) == {
+            "QSR_RUN_ID",
+            "QSR_RUN_ATTEMPT",
+            "QSR_EVIDENCE_JOB",
+            "QSR_EXPECTED_HEAD",
+        }
+        steps = job["steps"]
+        upload = next(
+            step
+            for step in steps
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        )
+        assert set(upload) == {"name", "uses", "with"}
+        assert upload["uses"] == (
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        )
+        assert upload["with"] == {
+            "name": filename.removesuffix(".json")
+            + "-json-"
+            + CANDIDATE
+            + "-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": root_expression
+            + "/"
+            + filename
+            + "\n"
+            + root_expression
+            + "/binding.json\n",
+            "if-no-files-found": "error",
+        }
+        assert (
+            steps[steps.index(upload) - 1]["name"]
+            == "Admit fresh bound coverage evidence before upload"
+        )
+        assert set(steps[steps.index(upload) - 1]) == {"name", "run", "env"}
+        for step in steps:
+            if (
+                step.get("name") == name
+                or step.get("name")
+                == "Admit fresh bound coverage evidence before upload"
+                or "scripts/check_coverage.py" in step.get("run", "")
+            ):
+                assert step["env"] == {"QSR_EVIDENCE_ROOT": root_expression}
+        parser = next(
+            step for step in steps if "scripts/check_coverage.py" in step.get("run", "")
+        )
+        flag = "--require-branches " if lane == "branch-coverage" else ""
+        assert (
+            parser["run"]
+            == "python3 scripts/check_coverage.py "
+            + flag
+            + '"$QSR_EVIDENCE_ROOT/'
+            + filename
+            + '"'
+        )
+        assert steps.index(parser) > steps.index(upload)
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "mutable_upload",
+        "alternate_upload",
+        "generator_echo",
+        "guard_echo",
+        "guard_removed",
+        "guard_if",
+        "generator_if",
+        "guard_env",
+        "step_order",
+    ),
+)
+def test_src03_review_b01_rejects_structural_substitution(monkeypatch, lane, mutation):
+    """Persistent independent desired rejection; actual YAML is the control."""
+    data = deepcopy(workflow())
+    steps = data["jobs"][lane]["steps"]
+    generator = next(s for s in steps if s.get("name") == SRC03_LANES[lane][0])
+    guard = next(
+        s
+        for s in steps
+        if s.get("name") == "Admit fresh bound coverage evidence before upload"
+    )
+    upload = next(
+        s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    if mutation == "mutable_upload":
+        upload["uses"] = "actions/upload-artifact@main"
+    elif mutation == "alternate_upload":
+        upload["uses"] = "actions/upload-artifact@" + "b" * 40
+    elif mutation == "generator_echo":
+        generator["run"] = "echo substituted-generator\n"
+    elif mutation == "guard_echo":
+        guard["run"] = "echo substituted-guard\n"
+    elif mutation == "guard_removed":
+        steps.remove(guard)
+    elif mutation == "guard_if":
+        guard["if"] = "false"
+    elif mutation == "generator_if":
+        generator["if"] = "false"
+    elif mutation == "guard_env":
+        guard["env"]["QSR_EVIDENCE_ROOT"] = "alternate"
+    else:
+        index = steps.index(generator)
+        steps[index - 1], steps[index] = steps[index], steps[index - 1]
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    with pytest.raises(AssertionError):
+        test_preserves_all_four_job_mechanics()
+
+
+def test_src03_review_b01_accepts_legitimate_literal_control():
+    """The complete retained mechanics must remain accepted."""
+    test_preserves_all_four_job_mechanics()
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_review_b02_producer_without_file_digest(tmp_path, monkeypatch, lane):
+    """Synthetic child capability seam, NOT actual runner/minimum-version evidence."""
+    import json
+
+    data = deepcopy(workflow())
+    producer = next(
+        s for s in data["jobs"][lane]["steps"] if s.get("name") == SRC03_LANES[lane][0]
+    )
+    prefix = "python3 -I - <<'PY'\n"
+    assert producer["run"].startswith(prefix)
+    producer["run"] = producer["run"].replace(
+        prefix,
+        prefix + "import hashlib\n"
+        "if hasattr(hashlib, 'file_digest'):\n    del hashlib.file_digest\n",
+        1,
+    )
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, foreign, root = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file(), "capability seam did not reach actual producer"
+    assert all(r.returncode == 0 for r in results), results[-1].stderr
+    payload = (root / SRC03_LANES[lane][1]).read_bytes()
+    receipt = json.loads((root / "binding.json").read_bytes())
+    assert receipt["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert receipt["bytes"] == len(payload)
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+def src03_review_inject(script, code):
+    """Add an explicit child-only stdlib seam to real embedded Python."""
+    prefix = "python3 -I - <<'PY'\n"
+    assert script.startswith(prefix)
+    return script.replace(prefix, prefix + code + "\n", 1)
+
+
+def src03_review_guard(tmp_path, lane, root, script=None):
+    """Execute actual guard with the closed legitimate fixture context."""
+    if script is None:
+        script = next(
+            s["run"]
+            for s in workflow()["jobs"][lane]["steps"]
+            if s.get("name") == "Admit fresh bound coverage evidence before upload"
+        )
+    return subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        cwd=tmp_path / "source",
+        env={
+            "PATH": str(tmp_path / "tools") + os.pathsep + os.defpath,
+            "RUNNER_TEMP": str(tmp_path / "runner temp"),
+            "QSR_EVIDENCE_ROOT": str(root),
+            "QSR_RUN_ID": "17",
+            "QSR_RUN_ATTEMPT": "2",
+            "QSR_EVIDENCE_JOB": lane,
+            "QSR_EXPECTED_HEAD": "a" * 40,
+            "ACTUAL_HEAD": "a" * 40,
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_review_r03_manifest_reader_refuses_oversize(tmp_path, lane):
+    """Valid closed binding plus whitespace cannot evade the byte bound."""
+    results, _, foreign, root = src03_boundary(tmp_path, lane, "regular")
+    assert all(r.returncode == 0 for r in results)
+    binding = root / "binding.json"
+    assert 0 < binding.stat().st_size < 4096
+    binding.write_bytes(binding.read_bytes() + b" " * 4096)
+    result = src03_review_guard(tmp_path, lane, root)
+    assert result.returncode != 0, "oversized manifest reached upload boundary"
+    assert "manifest too large" in result.stderr
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_review_r03_generator_refuses_oversized_serialization(
+    tmp_path, monkeypatch, lane
+):
+    """Synthetic child serialization seam; refuse before publication."""
+    data = deepcopy(workflow())
+    generator = next(
+        s for s in data["jobs"][lane]["steps"] if s.get("name") == SRC03_LANES[lane][0]
+    )
+    generator["run"] = src03_review_inject(
+        generator["run"],
+        "import json\n"
+        "original_dumps = json.dumps\n"
+        "def inflated_dumps(value, *args, **kwargs):\n"
+        "    return original_dumps(value, *args, **kwargs) + ' ' * 4096\n"
+        "def inflated_dump(value, handle, *args, **kwargs):\n"
+        "    handle.write(inflated_dumps(value, *args, **kwargs))\n"
+        "json.dumps = inflated_dumps\njson.dump = inflated_dump\n",
+    )
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, foreign, root = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file(), "serialization seam did not reach producer"
+    assert results[0].returncode != 0, "producer published oversized binding"
+    assert "manifest too large" in results[0].stderr
+    assert not (root / "binding.json").exists()
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("underreported", (False, True))
+def test_src03_review_r03_manifest_read_call_is_bounded(tmp_path, lane, underreported):
+    """Actual guard read-call seam, including a misleading size observation."""
+    results, _, _, root = src03_boundary(tmp_path, lane, "regular")
+    assert all(r.returncode == 0 for r in results)
+    if underreported:
+        binding = root / "binding.json"
+        binding.write_bytes(binding.read_bytes() + b" " * 4096)
+    code = """import os
+original_open, original_fdopen, original_fstat = os.open, os.fdopen, os.fstat
+manifest_fds = set()
+def probe_open(path, *args, **kwargs):
+    fd = original_open(path, *args, **kwargs)
+    if str(path).endswith('/binding.json'):
+        manifest_fds.add(fd)
+    return fd
+class Probe:
+    def __init__(self, handle): self.handle = handle
+    def __enter__(self): return self
+    def __exit__(self, *args):
+        manifest_fds.discard(self.fileno())
+        return self.handle.__exit__(*args)
+    def fileno(self): return self.handle.fileno()
+    def read(self, size=-1):
+        if self.fileno() in manifest_fds:
+            assert 0 < size <= 4097, 'unbounded manifest read'
+        return self.handle.read(size)
+def probe_fdopen(*args, **kwargs): return Probe(original_fdopen(*args, **kwargs))
+os.open, os.fdopen = probe_open, probe_fdopen
+"""
+    if underreported:
+        code += """def probe_fstat(fd):
+    info = original_fstat(fd)
+    if fd in manifest_fds:
+        fields = list(info)
+        fields[6] = 1
+        return os.stat_result(fields)
+    return info
+os.fstat = probe_fstat
+"""
+    script = next(
+        s["run"]
+        for s in workflow()["jobs"][lane]["steps"]
+        if s.get("name") == "Admit fresh bound coverage evidence before upload"
+    )
+    result = src03_review_guard(tmp_path, lane, root, src03_review_inject(script, code))
+    assert "unbounded manifest read" not in result.stderr, result.stderr
+    if underreported:
+        assert result.returncode != 0
+        assert "manifest too large" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+
+
+def src03_review_stream_seam(action="regular"):
+    """Large real file and observed bounded reads; controlled drift, not hostile race."""
+    return """import os, subprocess, sys
+original_run = subprocess.run
+original_open, original_fdopen = os.open, os.fdopen
+payload_fds = {}
+reads = 0
+changed = False
+def large_producer(command, *args, **kwargs):
+    result = original_run(command, *args, **kwargs)
+    if '--output-path' in command and result.returncode == 0:
+        path = command[command.index('--output-path') + 1]
+        with open(path, 'wb') as output:
+            for _ in range(33): output.write(b'x' * 65536)
+    return result
+subprocess.run = large_producer
+def probe_open(path, *args, **kwargs):
+    fd = original_open(path, *args, **kwargs)
+    if str(path).endswith('/coverage.json') or str(path).endswith('/branch-coverage.json'):
+        payload_fds[fd] = path
+    return fd
+class Probe:
+    def __init__(self, handle): self.handle = handle
+    def __enter__(self): return self
+    def __exit__(self, *args):
+        payload_fds.pop(self.fileno(), None)
+        return self.handle.__exit__(*args)
+    def fileno(self): return self.handle.fileno()
+    def read(self, size=-1):
+        global reads, changed
+        fd = self.fileno()
+        if fd in payload_fds:
+            assert 0 < size <= 65536, 'unbounded payload read'
+            reads += 1
+        data = self.handle.read(size)
+        if fd in payload_fds and not changed and ACTION != 'regular':
+            changed = True
+            writer = original_open(payload_fds[fd], os.O_WRONLY)
+            try:
+                if ACTION == 'grow':
+                    os.lseek(writer, 0, os.SEEK_END)
+                    os.write(writer, b'x')
+                else:
+                    os.ftruncate(writer, 1)
+            finally:
+                os.close(writer)
+        return data
+os.open, os.fdopen = probe_open, lambda *a, **k: Probe(original_fdopen(*a, **k))
+import atexit
+atexit.register(lambda: print('SRC03-STREAM-READS=' + str(reads), file=sys.stderr))
+""".replace("ACTION", repr(action))
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_review_r03_streams_large_regular_payload(tmp_path, monkeypatch, lane):
+    """Both actual bodies hash a 2MiB+ regular file with bounded multiple reads."""
+    import json
+    import re
+
+    data = deepcopy(workflow())
+    for step in data["jobs"][lane]["steps"]:
+        if step.get("name") in (
+            SRC03_LANES[lane][0],
+            "Admit fresh bound coverage evidence before upload",
+        ):
+            step["run"] = src03_review_inject(step["run"], src03_review_stream_seam())
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, foreign, root = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file()
+    assert all(r.returncode == 0 for r in results), results[-1].stderr
+    observed = [
+        int(re.search(r"SRC03-STREAM-READS=(\d+)", r.stderr)[1])
+        for r in results
+        if "SRC03-STREAM-READS=" in r.stderr
+    ]
+    assert len(observed) == 2 and all(n > 32 for n in observed), observed
+    receipt = json.loads((root / "binding.json").read_bytes())
+    assert receipt["bytes"] == 33 * 65536
+    assert receipt["sha256"] == hashlib.sha256(b"x" * (33 * 65536)).hexdigest()
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("role", ("producer", "guard"))
+@pytest.mark.parametrize("action", ("grow", "truncate"))
+def test_src03_review_r03_rejects_counted_payload_drift(
+    tmp_path, monkeypatch, lane, role, action
+):
+    """Actual descriptor reads detect controlled size changes before/after hashing."""
+    data = deepcopy(workflow())
+    name = (
+        SRC03_LANES[lane][0]
+        if role == "producer"
+        else ("Admit fresh bound coverage evidence before upload")
+    )
+    step = next(s for s in data["jobs"][lane]["steps"] if s.get("name") == name)
+    step["run"] = src03_review_inject(step["run"], src03_review_stream_seam(action))
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, foreign, _ = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file()
+    result = results[0] if role == "producer" else results[-1]
+    assert result.returncode != 0, "size drift accepted"
+    assert "evidence changed while reading" in result.stderr, result.stderr
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize(
+    ("key", "value", "diagnostic"),
+    (
+        ("QSR_RUN_ID", "0", "invalid run identity"),
+        ("QSR_RUN_ATTEMPT", "02", "invalid run identity"),
+        ("QSR_EXPECTED_HEAD", "A" * 40, "invalid head identity"),
+        ("QSR_EVIDENCE_JOB", "foreign-lane", "invalid evidence lane"),
+        ("QSR_EVIDENCE_ROOT", "foreign-root", "invalid evidence root"),
+        ("RUNNER_TEMP", "source-file", "invalid evidence root"),
+    ),
+)
+def test_src03_coverage_controls_invalid_producer_identity(
+    tmp_path, lane, key, value, diagnostic
+):
+    """Reject each malformed identity at its own diagnostic before generation."""
+    if key == "QSR_EVIDENCE_ROOT":
+        value = str(tmp_path / value)
+    if key == "RUNNER_TEMP":
+        parent = tmp_path / value
+        parent.write_text("synthetic non-directory parent", encoding="utf-8")
+        value = str(parent)
+    results, capture, foreign, _ = src03_boundary(
+        tmp_path, lane, "regular", overrides={key: value}
+    )
+    assert results[0].returncode == 1
+    assert "SRC03-EVIDENCE-001: " + diagnostic in results[0].stderr
+    assert not capture.exists(), "invalid identity reached Cargo"
+    assert foreign.read_text() == '{"fixture":"foreign bytes"}\n'
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("phase", ("before", "after"))
+def test_src03_coverage_controls_producer_checkout_drift(
+    tmp_path, monkeypatch, lane, phase
+):
+    """Both checkout observations must reject drift, not just the upload guard."""
+    data = deepcopy(workflow())
+    generator = next(
+        step
+        for step in data["jobs"][lane]["steps"]
+        if step.get("name") == SRC03_LANES[lane][0]
+    )
+    code = """import subprocess
+original_check_output = subprocess.check_output
+head_reads = 0
+def changed_head(command, *args, **kwargs):
+    global head_reads
+    actual = original_check_output(command, *args, **kwargs)
+    if command == ['git', 'rev-parse', 'HEAD']:
+        head_reads += 1
+        if head_reads == DRIFT_READ:
+            return 'b' * 40 + '\\n'
+    return actual
+subprocess.check_output = changed_head
+""".replace("DRIFT_READ", "1" if phase == "before" else "2")
+    generator["run"] = src03_review_inject(generator["run"], code)
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, _, root = src03_boundary(tmp_path, lane, "regular")
+    assert results[0].returncode == 1
+    assert "SRC03-EVIDENCE-001: checkout drift" in results[0].stderr
+    assert capture.exists() == (phase == "after")
+    assert not (root / "binding.json").exists()
+
+
+def src03_coverage_controls_stat_seam(target, observation):
+    """Change only an observed stat field, preserving real descriptor reads."""
+    return """import os
+original_open, original_fstat = os.open, os.fstat
+observed_fds = set()
+stat_reads = 0
+def observed_open(path, *args, **kwargs):
+    fd = original_open(path, *args, **kwargs)
+    if str(path).endswith(TARGET):
+        observed_fds.add(fd)
+    return fd
+class StatView:
+    def __init__(self, info): self.info = info
+    def __getattr__(self, key):
+        if key == 'st_size': return self.info.st_size + 1
+        return getattr(self.info, key)
+def observed_stat(fd):
+    global stat_reads
+    info = original_fstat(fd)
+    if fd in observed_fds:
+        stat_reads += 1
+        if stat_reads == OBSERVATION:
+            return StatView(info)
+    return info
+os.open, os.fstat = observed_open, observed_stat
+""".replace("TARGET", repr("/" + target)).replace("OBSERVATION", str(observation))
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("role", ("producer", "guard"))
+@pytest.mark.parametrize("observation", (1, 2))
+def test_src03_coverage_controls_payload_stat_count_mismatch(
+    tmp_path, monkeypatch, lane, role, observation
+):
+    """Reject both short counted reads and changed post-read metadata."""
+    data = deepcopy(workflow())
+    name = (
+        SRC03_LANES[lane][0]
+        if role == "producer"
+        else ("Admit fresh bound coverage evidence before upload")
+    )
+    step = next(s for s in data["jobs"][lane]["steps"] if s.get("name") == name)
+    step["run"] = src03_review_inject(
+        step["run"],
+        src03_coverage_controls_stat_seam(SRC03_LANES[lane][1], observation),
+    )
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, _, root = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file(), "stat seam did not reach producer"
+    result = results[0] if role == "producer" else results[-1]
+    assert result.returncode == 1
+    assert "SRC03-EVIDENCE-001: evidence changed while reading" in result.stderr
+    if role == "producer":
+        assert not (root / "binding.json").exists()
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("observation", (1, 2))
+def test_src03_coverage_controls_manifest_stat_count_mismatch(
+    tmp_path, lane, observation
+):
+    """A bounded valid manifest still needs counted-byte and stable-stat checks."""
+    results, _, _, root = src03_boundary(tmp_path, lane, "regular")
+    assert all(result.returncode == 0 for result in results)
+    script = next(
+        step["run"]
+        for step in workflow()["jobs"][lane]["steps"]
+        if step.get("name") == "Admit fresh bound coverage evidence before upload"
+    )
+    result = src03_review_guard(
+        tmp_path,
+        lane,
+        root,
+        src03_review_inject(
+            script, src03_coverage_controls_stat_seam("binding.json", observation)
+        ),
+    )
+    assert result.returncode == 1
+    assert "SRC03-EVIDENCE-001: evidence changed while reading" in result.stderr
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("actual_lane", SRC03_LANES)
+def test_src03_coverage_controls_producer_command_branches(
+    tmp_path, monkeypatch, lane, actual_lane
+):
+    """Each byte-identical body supports both lanes and exact command argv."""
+    import json
+
+    data = deepcopy(workflow())
+    source_script = next(
+        s["run"]
+        for s in data["jobs"][lane]["steps"]
+        if s.get("name") == SRC03_LANES[lane][0]
+    )
+    step = next(
+        s
+        for s in data["jobs"][actual_lane]["steps"]
+        if s.get("name") == SRC03_LANES[actual_lane][0]
+    )
+    step["run"] = source_script
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, _, root = src03_boundary(tmp_path, actual_lane, "regular")
+    assert all(r.returncode == 0 for r in results), results[-1].stderr
+    argv = json.loads(capture.read_text())
+    expected = ["+nightly-2026-07-01"] if actual_lane == "branch-coverage" else []
+    expected += ["llvm-cov"]
+    expected += ["--branch"] if actual_lane == "branch-coverage" else []
+    expected += ["--workspace", "--lib", "--tests", "--json", "--output-path"]
+    expected += [str(root / SRC03_LANES[actual_lane][1])]
+    assert argv == expected
+    assert (root / "binding.json").is_file()
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+@pytest.mark.parametrize("role", ("producer", "guard"))
+def test_src03_coverage_controls_growth_stops_before_second_stat(
+    tmp_path, monkeypatch, lane, role
+):
+    """Count overflow must reject immediately, not fall through to stat checking."""
+    data = deepcopy(workflow())
+    name = (
+        SRC03_LANES[lane][0]
+        if role == "producer"
+        else ("Admit fresh bound coverage evidence before upload")
+    )
+    step = next(s for s in data["jobs"][lane]["steps"] if s.get("name") == name)
+    code = (
+        src03_review_stream_seam("grow")
+        + """
+original_fstat = os.fstat
+payload_stats = 0
+def counted_stat(fd):
+    global payload_stats
+    if fd in payload_fds: payload_stats += 1
+    return original_fstat(fd)
+os.fstat = counted_stat
+atexit.register(lambda: print('SRC03-PAYLOAD-STATS=' + str(payload_stats), file=sys.stderr))
+"""
+    )
+    step["run"] = src03_review_inject(step["run"], code)
+    monkeypatch.setitem(globals(), "workflow", lambda: data)
+    results, capture, _, _ = src03_boundary(tmp_path, lane, "regular")
+    assert capture.is_file()
+    result = results[0] if role == "producer" else results[-1]
+    assert result.returncode == 1
+    assert "SRC03-EVIDENCE-001: evidence changed while reading" in result.stderr
+    assert "SRC03-PAYLOAD-STATS=1\n" in result.stderr
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_coverage_controls_oversized_binding_not_published(
+    tmp_path, monkeypatch, lane
+):
+    """Retain the existing serialization fault and its no-publication oracle."""
+    test_src03_review_r03_generator_refuses_oversized_serialization(
+        tmp_path, monkeypatch, lane
+    )
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_coverage_controls_manifest_bytes_exceed_observed_stat(tmp_path, lane):
+    """Actual oversized bytes must fail even when descriptor size is misleading."""
+    test_src03_review_r03_manifest_read_call_is_bounded(tmp_path, lane, True)
+
+
+@pytest.mark.parametrize("lane", SRC03_LANES)
+def test_src03_coverage_controls_manifest_changes_during_read(tmp_path, lane):
+    """Real metadata change on the open manifest must reject before binding use."""
+    results, _, _, root = src03_boundary(tmp_path, lane, "regular")
+    assert all(result.returncode == 0 for result in results)
+    code = """import os
+original_open, original_fdopen = os.open, os.fdopen
+manifest_fds = set()
+def observed_open(path, *args, **kwargs):
+    fd = original_open(path, *args, **kwargs)
+    if str(path).endswith('/binding.json'): manifest_fds.add(fd)
+    return fd
+class ChangedManifest:
+    def __init__(self, handle): self.handle = handle
+    def __enter__(self): return self
+    def __exit__(self, *args):
+        manifest_fds.discard(self.fileno())
+        return self.handle.__exit__(*args)
+    def fileno(self): return self.handle.fileno()
+    def read(self, size=-1):
+        data = self.handle.read(size)
+        if self.fileno() in manifest_fds:
+            info = os.fstat(self.fileno())
+            os.utime(self.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns + 1000000000))
+        return data
+os.open = observed_open
+os.fdopen = lambda *a, **k: ChangedManifest(original_fdopen(*a, **k))
+"""
+    script = next(
+        step["run"]
+        for step in workflow()["jobs"][lane]["steps"]
+        if step.get("name") == "Admit fresh bound coverage evidence before upload"
+    )
+    result = src03_review_guard(tmp_path, lane, root, src03_review_inject(script, code))
+    assert result.returncode == 1
+    assert "SRC03-EVIDENCE-001: evidence changed while reading" in result.stderr
