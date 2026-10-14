@@ -261,16 +261,29 @@ jobs:
       - name: Refuse private source on a public artifact destination
         env:
           SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
-          ARTIFACT_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Artifact readers follow the receiving repository's ACL, not the
-          # private target's ACL. A one-day expiry is not access control.
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
           case "$SOURCE_REPOSITORY_PRIVATE" in
             false) ;;
             true)
-              if [ "$ARTIFACT_REPOSITORY_PRIVATE" != true ]; then
-                echo '::error::Private coverage source requires a private artifact destination; public or unknown destinations are refused before source transport.'
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
                 exit 1
               fi
               ;;
@@ -402,6 +415,39 @@ jobs:
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
+
+      - name: Recheck private artifact destination before upload
+        if: steps.validate.outputs.is_private == 'true'
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
 
       - name: Upload materialized pull request merge tree
         if: steps.validate.outputs.is_private == 'true'

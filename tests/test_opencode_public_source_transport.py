@@ -1,5 +1,6 @@
 """공개 exact-head 전달은 quota에 의존하지 않고 private 경로는 보존한다."""
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -30,7 +31,7 @@ def test_public_transfer_does_not_require_an_artifact_upload() -> None:
     assert download["with"]["name"] == upload["with"]["name"]
 
 
-def test_private_source_refuses_public_artifact_destination_before_transport() -> None:
+def test_private_source_refuses_public_artifact_destination_before_transport(tmp_path) -> None:
     """비공개 PR 원문이 공개 리뷰 저장소의 artifact 저장소에 전달되지 않음을 검증한다."""
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     steps = jobs["validate-pr-metadata"]["steps"]
@@ -42,19 +43,17 @@ def test_private_source_refuses_public_artifact_destination_before_transport() -
     assert "if" not in guard
     assert guard.get("continue-on-error", False) is False
     assert guard["env"]["SOURCE_REPOSITORY_PRIVATE"] == "${{ steps.validate.outputs.is_private }}"
-    assert guard["env"]["ARTIFACT_REPOSITORY_PRIVATE"] == "${{ github.event.repository.private }}"
-    for source, destination, allowed in (
+    assert guard["env"]["ARTIFACT_REPOSITORY"] == "${{ github.repository }}"
+    assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "ARTIFACT_REPOSITORY_PRIVATE" not in guard["env"]
+    for index, (source, destination, allowed) in enumerate((
         ("true", "false", False), ("true", "", False), ("true", "unknown", False),
         ("true", "true", True), ("false", "false", True), ("false", "true", True),
-        ("true", "True", False), ("true", "true\n", False),
+        ("true", '"true"', False), ("true", "null", False),
         ("", "true", False), ("unknown", "true", False), ("True", "true", False),
-    ):
-        result = subprocess.run(
-            ["/bin/bash", "-c", guard["run"]], capture_output=True, text=True,
-            check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/dev/null",
-                              "SOURCE_REPOSITORY_PRIVATE": source,
-                              "ARTIFACT_REPOSITORY_PRIVATE": destination},
-        )
+    )):
+        response = '{"full_name":"Fixture/review","private":' + (destination or "null") + '}'
+        result, _ = _run_receiving_guard(guard, tmp_path / str(index), source, response)
         assert (result.returncode == 0) is allowed, (source, destination, result.stderr)
 
 
@@ -74,13 +73,20 @@ def test_private_destination_guard_stops_actual_materialization(destination, rea
         "raise SystemExit(37)\n"
     )
     git.chmod(0o755)
+    gh = binary / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\nimport os\n"
+        "print(os.environ['API_RESPONSE'])\n"
+    )
+    gh.chmod(0o755)
     runner = tmp_path / "runner"
     runner.mkdir()
     result = subprocess.run(
         ["/bin/bash", "-c", guard + "\n" + materialize],
         capture_output=True, text=True, check=False, timeout=15,
         env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path),
-             "SOURCE_REPOSITORY_PRIVATE": "true", "ARTIFACT_REPOSITORY_PRIVATE": destination,
+             "SOURCE_REPOSITORY_PRIVATE": "true", "ARTIFACT_REPOSITORY": "Fixture/review",
+             "API_RESPONSE": '{"full_name":"Fixture/review","private":' + (destination or "null") + '}',
              "RUNNER_TEMP": str(runner), "COVERAGE_SOURCE_WORKDIR": str(runner / "source"),
              "COVERAGE_SOURCE_ARCHIVE": str(runner / "source.tar"), "GH_TOKEN": "synthetic-only",
              "TARGET_REPOSITORY": "Fixture/private", "PR_NUMBER": "1",
@@ -90,6 +96,116 @@ def test_private_destination_guard_stops_actual_materialization(destination, rea
     assert marker.exists() is reaches_git
     assert result.returncode == (37 if reaches_git else 1)
     assert not list(runner.iterdir())
+
+
+def _run_receiving_guard(guard, tmp_path, source, response, status=0, event_private="true"):
+    """실제 guard를 합성 GitHub metadata 경계와 실행하고 API argv를 보존한다."""
+    binary = tmp_path / "bin"
+    binary.mkdir(parents=True)
+    calls = tmp_path / "api-calls"
+    gh = binary / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+        "Path(os.environ['API_CALLS']).write_text(json.dumps(sys.argv[1:]))\n"
+        "print(os.environ['API_RESPONSE'])\n"
+        "raise SystemExit(int(os.environ['API_STATUS']))\n"
+    )
+    gh.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", "-c", guard["run"]], capture_output=True, text=True,
+        check=False, timeout=15,
+        env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path),
+             "SOURCE_REPOSITORY_PRIVATE": source, "ARTIFACT_REPOSITORY_PRIVATE": event_private,
+             "ARTIFACT_REPOSITORY": "Fixture/review", "GH_TOKEN": "synthetic-only",
+             "API_CALLS": str(calls), "API_RESPONSE": response, "API_STATUS": str(status)},
+    )
+    return result, json.loads(calls.read_text()) if calls.exists() else None
+
+
+def test_live_receiving_visibility_rejects_stale_private_event(tmp_path):
+    """이벤트가 private였어도 현재 수신 저장소가 public이면 전송 전에 거부한다."""
+    metadata = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["validate-pr-metadata"]
+    guard = _step(metadata, "Refuse private source on a public artifact destination")
+    result, calls = _run_receiving_guard(
+        guard, tmp_path, "true", '{"full_name":"Fixture/review","private":false}'
+    )
+    assert result.returncode != 0
+    assert calls == ["api", "repos/Fixture/review"]
+
+
+@pytest.mark.parametrize("source,response,status,allowed,query", [
+    ("true", '{"full_name":"Fixture/review","private":true}', 0, True, True),
+    ("true", '{"full_name":"Fixture/review","private":false}', 0, False, True),
+    ("true", '{"full_name":"Fixture/review","private":"true"}', 0, False, True),
+    ("true", '{"full_name":"Fixture/review","private":null}', 0, False, True),
+    ("true", '{"full_name":"Fixture/review"}', 0, False, True),
+    ("true", '{"full_name":"Other/review","private":true}', 0, False, True),
+    ("true", '{"full_name":"Fixture/review","private":true}', 1, False, True),
+    ("true", 'invalid-json', 0, False, True),
+    ("true", '', 0, False, True),
+    ("true", '{"full_name":"Fixture/review","private":false}\n'
+     '{"full_name":"Fixture/review","private":true}', 0, False, True),
+    ("false", 'invalid-json', 1, True, False),
+    ("unknown", '{"full_name":"Fixture/review","private":true}', 0, False, False),
+])
+def test_receiving_guard_uses_typed_live_metadata(source, response, status, allowed, query, tmp_path):
+    """현재 API의 저장소 identity와 Boolean을 확인하며 public 경로는 조회하지 않는다."""
+    metadata = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["validate-pr-metadata"]
+    guard = _step(metadata, "Refuse private source on a public artifact destination")
+    result, calls = _run_receiving_guard(guard, tmp_path, source, response, status)
+    assert (result.returncode == 0) is allowed
+    assert calls == (["api", "repos/Fixture/review"] if query else None)
+
+
+def test_private_upload_rechecks_live_receiving_visibility(tmp_path):
+    """archive 생성 뒤 업로드 직전에 동일한 fail-closed 조회를 다시 실행한다."""
+    metadata = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["validate-pr-metadata"]
+    names = [step.get("name") for step in metadata["steps"]]
+    name = "Recheck private artifact destination before upload"
+    assert name in names
+    recheck = _step(metadata, name)
+    early = _step(metadata, "Refuse private source on a public artifact destination")
+    assert recheck["if"] == "steps.validate.outputs.is_private == 'true'"
+    assert recheck.get("continue-on-error", False) is False
+    assert names.index(name) + 1 == names.index("Upload materialized pull request merge tree")
+    assert recheck["env"] == early["env"]
+    assert recheck["run"] == early["run"]
+    result, calls = _run_receiving_guard(
+        recheck, tmp_path, "true", '{"full_name":"Fixture/review","private":false}'
+    )
+    assert result.returncode != 0
+    assert calls == ["api", "repos/Fixture/review"]
+
+
+def test_private_to_public_transition_stops_upload_witness(tmp_path):
+    """전송 전 private 양성 뒤 public 전환을 재조회하여 upload witness 전에 거부한다."""
+    metadata = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["validate-pr-metadata"]
+    early = _step(metadata, "Refuse private source on a public artifact destination")
+    late = _step(metadata, "Recheck private artifact destination before upload")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    upload = tmp_path / "upload-called"
+    gh = binary / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+        "assert sys.argv[1:] == ['api', 'repos/Fixture/review']\n"
+        "calls = Path(os.environ['API_CALLS'])\n"
+        "n = int(calls.read_text()) if calls.exists() else 0\n"
+        "calls.write_text(str(n + 1))\n"
+        "print(json.dumps({'full_name': 'Fixture/review', 'private': n == 0}))\n"
+    )
+    gh.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", "-c", early["run"] + "\n" + late["run"] + '\ntouch "$UPLOAD_MARKER"'],
+        capture_output=True, text=True, check=False, timeout=15,
+        env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path),
+             "SOURCE_REPOSITORY_PRIVATE": "true", "ARTIFACT_REPOSITORY": "Fixture/review",
+             "GH_TOKEN": "synthetic-only", "API_CALLS": str(calls), "UPLOAD_MARKER": str(upload)},
+    )
+    assert result.returncode == 1
+    assert calls.read_text() == "2"
+    assert not upload.exists()
 
 
 def test_public_source_is_reconstructed_in_the_credential_free_coverage_job() -> None:
