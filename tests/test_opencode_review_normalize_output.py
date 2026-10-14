@@ -2878,3 +2878,19 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     """Malformed, unsafe, or unverifiable model evidence remains unchanged."""
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected"),
+    [
+        ("  foo  bar  ", "foo-bar"),
+        ("foo\tbar\n", "foo-bar"),
+        ("  Foo\u00a0Bar  ", "foo-bar"),
+        ("Straße TOOL", "strasse-tool"),
+    ],
+)
+def test_runtime_tool_slug_preserves_whitespace_and_casefold_semantics(
+    tool_name: str,
+    expected: str,
+) -> None:
+    """Native slug normalization preserves Unicode whitespace and casefolding."""
+    assert norm.runtime_tool_slug(tool_name) == expected
