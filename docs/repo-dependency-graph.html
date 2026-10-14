@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CWL Dependency Graph</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg:#F5F7F9; --surface:#FFFFFF; --surface-alt:#EDF0F3; --border:#D9DFE5;
+    --ink:#171B22; --ink-dim:#5B6472; --ink-faint:#8B93A0;
+    --accent:#0D7A78; --accent-soft:#E3F3F1;
+    --warn:#9C6208; --warn-soft:#FBF0DC;
+    --ok:#2E7D4F; --ok-soft:#E7F3EB;
+    --closed:#6A4FA0; --closed-soft:#EFE9F8;
+    --flag:#B23A3A; --flag-soft:#FBE7E7;
+    --shadow:0 1px 2px rgba(20,30,40,.07), 0 1px 1px rgba(20,30,40,.04);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#12151A; --surface:#1A1E25; --surface-alt:#222731; --border:#2C323C;
+      --ink:#E8EBF0; --ink-dim:#A6AEBA; --ink-faint:#727A87;
+      --accent:#3FC2BE; --accent-soft:#16302E;
+      --warn:#E3A94C; --warn-soft:#382B14;
+      --ok:#63C48B; --ok-soft:#163524;
+      --closed:#B39EE0; --closed-soft:#291F3E;
+      --flag:#E28282; --flag-soft:#3A1F1F;
+      --shadow:0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12151A; --surface:#1A1E25; --surface-alt:#222731; --border:#2C323C;
+    --ink:#E8EBF0; --ink-dim:#A6AEBA; --ink-faint:#727A87;
+    --accent:#3FC2BE; --accent-soft:#16302E;
+    --warn:#E3A94C; --warn-soft:#382B14;
+    --ok:#63C48B; --ok-soft:#163524;
+    --closed:#B39EE0; --closed-soft:#291F3E;
+    --flag:#E28282; --flag-soft:#3A1F1F;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--ink); font-family:'IBM Plex Sans',system-ui,sans-serif; line-height:1.5}
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 20px 80px}
+
+  .page-head{display:flex; flex-direction:column; gap:6px; padding-bottom:18px; border-bottom:1px solid var(--border); margin-bottom:22px}
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent)}
+  h1{margin:0; font-size:1.5rem; font-weight:600; text-wrap:balance}
+  .lede{color:var(--ink-dim); font-size:.92rem; max-width:70ch}
+
+  .grid{display:grid; grid-template-columns:1.6fr 1fr; gap:18px}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+
+  .panel{background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; box-shadow:var(--shadow)}
+  .panel h2{margin:0 0 4px; font-size:.95rem; font-weight:600}
+  .panel .sub{color:var(--ink-faint); font-size:.78rem; margin-bottom:10px}
+
+  .legend{display:flex; gap:16px; flex-wrap:wrap; font-size:.76rem; color:var(--ink-dim); margin:10px 0 4px}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .swatch{width:22px; height:0; border-top:2px solid var(--ink-dim)}
+  .swatch.dashed{border-top-style:dashed}
+
+  pre.mermaid{background:transparent; margin:0}
+
+  .pr-list{display:flex; flex-direction:column; gap:10px}
+  .pr-card{border:1px solid var(--border); border-radius:10px; padding:12px}
+  .pr-card .row1{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .pr-num{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:.85rem}
+  .pr-num a{color:var(--ink); text-decoration:none; border-bottom:1px solid var(--border)}
+  .pr-num a:hover{color:var(--accent); border-color:var(--accent)}
+  .pill{font-family:'IBM Plex Mono',monospace; font-size:.68rem; padding:2px 8px; border-radius:999px; margin-left:auto}
+  .pill.open{background:var(--warn-soft); color:var(--warn)}
+  .pill.closed{background:var(--closed-soft); color:var(--closed)}
+  .pill.clean{background:var(--ok-soft); color:var(--ok)}
+  .pr-title{font-size:.86rem; margin-top:6px}
+  .pr-note{font-size:.8rem; color:var(--ink-dim); margin-top:6px}
+
+  .flagbox{margin-top:16px; display:flex; gap:10px; align-items:flex-start; background:var(--flag-soft); border:1px solid var(--flag); border-radius:10px; padding:12px; font-size:.83rem}
+  .flagbox b{color:var(--flag)}
+
+  .field-label{font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); margin:14px 0 4px}
+  .std-list{font-size:.8rem; color:var(--ink-dim); line-height:1.6}
+  .std-list code{background:var(--surface-alt); padding:1px 5px; border-radius:4px; font-size:.78rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="page-head">
+    <span class="eyebrow">ContextualWisdomLab · .github</span>
+    <h1>Repository Dependency Graph &amp; Open PR Status</h1>
+    <p class="lede">Cross-repo dependencies from this session's Topics/Description audit, alongside the current state of the four PRs this session left open on this repo.</p>
+    <p class="lede" style="font-family:'IBM Plex Mono',monospace; font-size:.74rem; color:var(--ink-faint)">Snapshot generated 2026-09-02 (KST). The PR-status panel is a point-in-time record, not live data — check the linked PRs for current state.</p>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Dependency graph</h2>
+      <div class="sub">Full write-up with an evidence table for every edge: <code>docs/repo-dependency-graph.md</code> (PR #1689)</div>
+      <div class="legend">
+        <span><span class="swatch"></span> confirmed this session (README/manifest)</span>
+        <span><span class="swatch dashed"></span> documented in CWL-MASTER-CONTEXT.md, not independently re-verified</span>
+      </div>
+      <pre class="mermaid">
+flowchart TB
+  subgraph EDGE["Edge & security"]
+    WARD["wardnet"]
+  end
+  subgraph IDENT["Identity"]
+    KEY["keyverse"]
+    ADFS[("feelanet-adfs (private)")]
+  end
+  subgraph PLATFORM["naruon platform"]
+    NAR["naruon"]
+  end
+  subgraph LLMPLANE["LLM plane"]
+    ORCH["contextual-orchestrator"]
+    BATCH["pg-llm-batch"]
+    XLB[("xtrmLLMBatchPython (private)")]
+    FM["fast-mlsirm"]
+  end
+  subgraph DATA["Knowledge / data"]
+    SDP["semantic-data-portal"]
+    NEWS["newsdom-api"]
+  end
+  subgraph VERT["naruon verticals & plugins"]
+    INK["inkspan"]
+    CLR["clearfolio"]
+    ERD["pg-erd-cloud"]
+    SCOPE["scopeweave"]
+    CODEC["codec-carver"]
+    NOEMA["noema"]
+    CAL["CalendarWeave"]
+  end
+  subgraph ENT["Enterprise platforms"]
+    ORG["Orgmetra"]
+  end
+  subgraph RESEARCH["Psychometrics & research"]
+    AFIPC["aFIPC"]
+    KAEFA["kaefa"]
+    LIN["LineageWeave"]
+    TW["ThreadWeave"]
+    RW["RankWeave"]
+    TEPP["TEPP"]
+  end
+  subgraph CONSUMER["Personal / consumer apps"]
+    SAJU["saju-caldav"]
+    FP["four-pillars"]
+    DW["DiagramWeave"]
+  end
+
+  SAJU -->|"OIDC auth"| KEY
+  ORCH -->|"optional Keyverse-token verifier"| KEY
+  ORG -->|"keyverse-adapter"| KEY
+  ORG -->|"naruon-adapter"| NAR
+  LIN -->|"PyPI version pin >=0.1.0"| TW
+  LIN -->|"git-commit-pinned dependency"| RW
+  LIN -->|"wire contract (tepp_client.py)"| TEPP
+  LIN -->|"optional LLM adjudication"| ORCH
+  LIN -->|"IRT calibration, optional backend, git-pinned"| FM
+  DW -->|"AI-edit adapter"| ORCH
+  FP -->|"optional interpretation route"| ORCH
+  BATCH -->|"extracted from"| XLB
+  RW -->|"originated inside, now independent"| NAR
+
+  WARD -.->|"routes traffic to"| NAR
+  KEY -.->|"federates in"| ADFS
+  NEWS -.->|"PDF to DOM feed"| NAR
+  NAR -.->|"ontology plane, unconfirmed"| SDP
+  NAR -.->|"LLM extract/embed/reason"| ORCH
+  NOEMA -.->|"LLM reasoning"| ORCH
+  WARD -.->|"SOC LLM reasoning"| ORCH
+  WARD -.->|"quarantine detonation"| NOEMA
+  ORCH -.->|"batch routing"| BATCH
+  FM -.->|"calibrates judge outputs"| ORCH
+  FM -.->|"incorporates methodology"| AFIPC
+  FM -.->|"incorporates methodology"| KAEFA
+  NAR -.->|"a la carte plugin"| INK
+  NAR -.->|"a la carte plugin"| CLR
+  NAR -.->|"a la carte plugin"| ERD
+  NAR -.->|"extracted issues to manage"| SCOPE
+  CODEC -.->|"diarize + minutes"| NAR
+  NAR -.->|"agent runtime"| NOEMA
+  NAR -.->|"reference threading (ThreadWeave's claim only)"| TW
+  NAR -.->|"consumes fail-closed (CalendarWeave's claim only)"| CAL
+  LIN -.->|"consumes fail-closed (planned, not wired yet)"| CAL
+  NAR -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  ERD -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  SDP -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  CLR -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  NEWS -.->|"OIDC relying party (keyverse's claim only)"| KEY
+      </pre>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Related open PRs</h2>
+        <div class="sub">From this session's work on the .github repo; state as of the last check</div>
+        <div class="pr-list">
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1687" target="_blank" rel="noopener">#1687</a></span>
+              <span class="pill open">open · behind main</span>
+            </div>
+            <div class="pr-title">docs: retire removed repository from governance records</div>
+            <div class="pr-note">Narrow fix: <code>vooster-v2-mvp</code> retirement in CWL-MASTER-CONTEXT.md and PR_GOVERNANCE_AUDIT.md. The earlier, larger profile-catalog reconciliation this branch also carried was superseded by #1692 and dropped.</div>
+          </div>
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1689" target="_blank" rel="noopener">#1689</a></span>
+              <span class="pill open">open · behind main</span>
+            </div>
+            <div class="pr-title">docs: add cross-repo dependency graph from the repo audit</div>
+            <div class="pr-note">This page's source, plus <code>docs/repo-dependency-graph.md</code>. Revised after review to re-verify the OIDC edges against each dependent repo's own README and correct the ThreadWeave/RankWeave pin description.</div>
+          </div>
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1692" target="_blank" rel="noopener">#1692</a></span>
+              <span class="pill open">draft · behind main</span>
+            </div>
+            <div class="pr-title">docs: record the 2026-09-02 product-goal-directive revisions (2nd + 3rd)</div>
+            <div class="pr-note">The canonical, single-writer PR for <code>docs/product-goal-directive.md</code> — more thorough than a since-closed duplicate this session opened independently before finding it.</div>
+          </div>
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1729" target="_blank" rel="noopener">#1729</a></span>
+              <span class="pill open">open · blocked on checks</span>
+            </div>
+            <div class="pr-title">docs(gap-baseline): record org-queue-sweep rate-limit investigation, no change needed</div>
+            <div class="pr-note">Unrelated backlog item finished in parallel with this diagram's revisions.</div>
+          </div>
+        </div>
+
+        <div class="flagbox">
+          <div><b>Multiple writers on this repo.</b> Several PRs this session (profile catalog, product-goal-directive) got rewritten mid-flight by a process pushing under the repo owner's own git identity — no Claude Code co-author trailer, and no matching GitHub Actions run on the affected branches. <code>gh api orgs/ContextualWisdomLab/installations</code> confirms the actual cause: eight different AI coding-agent GitHub Apps (<code>chatgpt-codex-connector</code>, <code>devin-ai-integration</code>, <code>cursor</code>, <code>grok-by-xai</code>, <code>claude</code>, <code>coderabbitai</code>, <code>opencode-agent</code>, <code>google-labs-jules</code>) all hold <code>contents: write</code> across every org repo — any of them can push independently. This isn't a bug in this diagram; it's a live governance fact worth knowing before trusting any one PR's current head as final.</div>
+        </div>
+
+        <div class="field-label">Repos with no known dependency</div>
+        <div class="std-list">~46 repos audited this session have no confirmed or documented cross-repo dependency — standalone products, forks, private employer-scoped assets, or bare scaffolds. Full grouped list in <code>docs/repo-dependency-graph.md</code>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"
+        integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+</script>
+</body>
+</html>
