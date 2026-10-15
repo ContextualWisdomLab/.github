@@ -38,7 +38,7 @@ mutable-branch supplier ref.
 
 ## Preserved workloads and thresholds
 
-- **Backend:** Python 3.14, existing pip cache/dependency path, core hash-locked
+- **Backend:** Python 3.14, private uncached installs, core hash-locked
   dependency install, second combined core+optional agent hash-locked install,
   `python -m ruff check .`, and `python -m pytest -q` through `tee` with pipefail.
   `PYTHONWARNINGS=error`, `DISABLE_BACKGROUND_WORKERS=1`, and the case-insensitive
@@ -65,8 +65,8 @@ and terminal failures rather than installing into shared Python.
 1. **Private Python:** backend and Bandit allocate unique mode-private RUNNER_TEMP
    roots, venvs, HOME and TMP/TMPDIR/TEMP, unset inherited Python path overrides,
    disable pip configuration/cache reuse for installs, and clean their root on
-   EXIT, including nonzero tool exits. The existing setup-python pip cache
-   declaration remains, but candidate dependency installs never use shared Python.
+   EXIT, including nonzero tool exits. The unused setup-python pip cache
+   declaration is removed; dependency installs never use shared Python.
 2. **Owned HOME and browser output:** frontend exports a unique HOME, temporary,
    npm cache, Corepack prefix and Playwright browser directory. It selects
    `NARUON_FULL_PRODUCT_SCREENSHOT_PROFILE=/tmp/naruon-full-product-smoke`, a
@@ -205,3 +205,41 @@ three supplier workflows. The complete supplier cohort reports 88 passed and
 pnpm tests require the unavailable exact pnpm 11.5.3 installation layout. This
 is not a full-suite pass; the existing pnpm provisioning and pip-cache review
 findings remain open.
+
+## 2026-10-15 native toolchain and cache repair
+
+The native Node/pnpm integration cases previously ran implicitly inside every
+Python suite despite requiring pnpm 11.5.3's exact package layout and distribution
+hash. They now live in `integration/naruon/test_native_toolchain.py`. Every
+original case and assertion is retained: 82 tool-independent supplier cases plus
+11 native cases still total 93. Four additional workflow/cache contracts make
+the focused gate 97 cases. No test is skipped or replaced with a stub.
+
+`.github/workflows/naruon-supplier-quality-ci.yml` supplies Node 24, installs the
+lockfile-pinned MIT pnpm package with npm integrity verification and lifecycle
+hooks disabled, then runs all 97 cases. PR and protected-main path triggers cover
+the suppliers, tests, integration lock, and Python lock. Native binary/package
+files stay untracked. The gate uses the isolated Linux/x64 pool, read-only
+permissions, no supplied secrets, same-repository PR admission, and private
+Python/npm runtime directories. Product callers remain unchanged.
+
+The backend also stops restoring/saving a pip cache that its deliberate private
+HOME and `PIP_NO_CACHE_DIR=1` policy never consumed. Dependency hash checks and
+workload failure thresholds are unchanged. This removes useless cache traffic
+without sharing dependency caches between trust boundaries.
+
+Local validation: all 97 cases pass with `GITHUB_ACTIONS=true` and warnings fatal
+using the real lock-installed pnpm 11.5.3 and Node 24. The ordinary 86-case
+Python-only cohort also runs without Node or pnpm on PATH. Actionlint passes
+all four Naruon workflows. These receipts do not establish runner canary,
+current-head remote gate success, approval, or protected integration.
+
+All seven moved native functions, including decorators and parametrizations,
+were byte-compared against predecessor `e32ae0ac`; a source-hash contract retains
+that comparison. The native case count is 11. The new native job excludes fork
+PRs to preserve self-hosted admission; generic Python tests no longer imply
+native integration evidence on any event. Effective required-check registration
+and a successful execution of this new job remain unverified, so this change
+is source preparation rather than completed runtime remediation. Its temporary
+directory cleanup is not a security boundary against code executing in the same
+guest: disposable isolated runners and verified reclamation remain prerequisites.

@@ -1,0 +1,85 @@
+name: Naruon supplier quality
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/naruon-*-ci.yml'
+      - 'tests/test_naruon*.py'
+      - 'integration/naruon/**'
+      - 'requirements-opencode-review-ci-hashes.txt'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/naruon-*-ci.yml'
+      - 'tests/test_naruon*.py'
+      - 'integration/naruon/**'
+      - 'requirements-opencode-review-ci-hashes.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: naruon-supplier-quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  supplier-contracts:
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Prepare private quality environment
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$(mktemp -d "${RUNNER_TEMP:?}/naruon-quality.XXXXXXXX")"
+          printf 'root=%s\n' "$root" >> "$GITHUB_OUTPUT"
+          python -m venv "$root/venv"
+          printf '%s/venv/bin\n' "$root" >> "$GITHUB_PATH"
+          printf 'npm_config_cache=%s/npm-cache\n' "$root" >> "$GITHUB_ENV"
+      - name: Install hash-locked Python tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+      - name: Install locked pnpm without lifecycle hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund --prefix integration/naruon/toolchain
+          printf '%s/integration/naruon/toolchain/node_modules/.bin\n' "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+      - name: Run complete supplier contracts and native integration
+        env:
+          PYTHONWARNINGS: error
+        run: |
+          python -m pytest -q \
+            tests/test_naruon_reusable_ci_contract.py \
+            tests/test_naruon_supplier_quality_workflow.py \
+            integration/naruon/test_native_toolchain.py
+      - name: Clean private quality environment
+        if: always()
+        env:
+          JOB_ROOT: ${{ steps.runtime.outputs.root }}
+        shell: bash
+        run: |
+          if [ -n "$JOB_ROOT" ]; then
+            case "$JOB_ROOT" in
+              "${RUNNER_TEMP:?}"/naruon-quality.????????) rm -rf -- "$JOB_ROOT" ;;
+              *) echo 'Refuse nonowned quality cleanup' >&2; exit 1 ;;
+            esac
+          fi
