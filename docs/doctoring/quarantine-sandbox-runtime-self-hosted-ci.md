@@ -281,6 +281,16 @@ before activation. The owner must independently review this slice and execute
 Linux/runtime/Actions gates; the private scratch patch is not published source,
 full-suite acceptance, App approval, runner provisioning or release evidence.
 
+The one-time job-private root is that same cleanup directory. `python -m
+scripts.ci.qsr_job_private` claims it once, writes `run-witness.json`, and
+removes only that root. The witness stores the job, run id, run attempt, source
+head, and the SHA-256 of those four fields. A later run with the same head has
+a different hash. Use and cleanup refuse a witness from another run, head, or
+hash. Evidence roots are not deleted. This command is the executable consumer.
+The reusable workflow does not call it: the called checkout is the product
+repository, which does not contain this module, and the workflow step list is
+left unchanged so the existing path expressions stay the path contract.
+
 Primary platform references: GitHub Docs, **Secure use reference** (self-hosted
 PR-code risk), **Reusing workflow configurations** (caller context/concurrency),
 and **Reuse workflows** (immutable reusable references and permission boundaries).
