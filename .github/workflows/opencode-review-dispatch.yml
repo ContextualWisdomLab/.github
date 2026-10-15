@@ -953,7 +953,8 @@ jobs:
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
-          RUN apt-get update \
+          RUN printf '%s\n' 'APT::Sandbox::User "";' 'APT::Keep-Downloaded-Packages "false";' > /etc/apt/apt.conf.d/99-opencode-coverage-apt-disk \
+            && apt-get update \
             && apt-get install --no-install-recommends -y \
               ca-certificates \
               cargo \
@@ -974,7 +975,8 @@ jobs:
               util-linux \
               vulkan-tools \
               xz-utils \
-            && rm -rf /var/lib/apt/lists/*
+            && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+            && rm -f /etc/apt/apt.conf.d/99-opencode-coverage-apt-disk
           COPY coverage-cargo-fixtures /tmp/coverage-cargo-fixtures
           RUN CARGO_HOME=/opt/coverage-cargo-home cargo fetch --locked \
                 --manifest-path /tmp/coverage-cargo-fixtures/Cargo.toml \
