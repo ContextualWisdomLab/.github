@@ -10,6 +10,11 @@ import sys
 import pytest
 import yaml
 
+from scripts.ci.qsr_source_run_paths import (
+    WORKFLOW_CHECKOUT_PATH,
+    WORKFLOW_OUTPUT_PATH,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/quarantine-sandbox-runtime-ci.yml"
 DOCTORING = ROOT / "docs/doctoring/quarantine-sandbox-runtime-self-hosted-ci.md"
@@ -26,6 +31,15 @@ CALLER_CONTRACT_STEP = {
 def workflow():
     """Read YAML without coercing GitHub's on key to a boolean."""
     return yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+
+def bound_cwd(step):
+    """Bind a run step's cwd to this job's source checkout without altering uses steps."""
+    if "run" not in step:
+        return step
+    bound = dict(step)
+    bound["working-directory"] = WORKFLOW_CHECKOUT_PATH
+    return bound
 
 
 def test_reusable_workflow_exists_and_is_call_only():
@@ -222,7 +236,7 @@ def test_verify_runs_product_owned_caller_contract_oracles():
     assert len(matches) == 1, (
         "CALLER-CONTRACT-001: verify does not execute the exact QSR caller oracles once"
     )
-    assert matches[0] == CALLER_CONTRACT_STEP, (
+    assert matches[0] == bound_cwd(CALLER_CONTRACT_STEP), (
         "CALLER-CONTRACT-001: caller tests must be unconditional and fail closed"
     )
     checkout_index = next(
@@ -243,7 +257,7 @@ def caller_contract_control():
     index = next(
         i for i, step in enumerate(steps) if step.get("name") == "Check formatting"
     )
-    steps.insert(index, dict(CALLER_CONTRACT_STEP))
+    steps.insert(index, bound_cwd(dict(CALLER_CONTRACT_STEP)))
     return data
 
 
@@ -413,7 +427,7 @@ def test_positive_lsm_exact_filter_requires_one_passing_test_witness():
         if step.get("name")
         == "Execute real positive LSM isolation and cleanup acceptance"
     )
-    assert set(step) == {"name", "run"}
+    assert set(step) == {"name", "run", "working-directory"}
     script = step["run"]
     assert script.startswith("RUST_TEST_NOCAPTURE=0 python3 -I - <<'PY'\n")
     assert "LSM-TEST-001" in script
@@ -452,7 +466,7 @@ def test_preserves_all_four_job_mechanics():
                 "${{ runner.temp }}/qsr-evidence-${{ github.run_id }}-"
                 "${{ github.run_attempt }}-" + name + "-" + CANDIDATE
             )
-            expected_steps = deepcopy(expected["steps"])
+            expected_steps = [bound_cwd(step) for step in deepcopy(expected["steps"])]
             for step in expected_steps:
                 if step.get("name") == generator_name:
                     step["run"] = generator_hash
@@ -485,11 +499,13 @@ def test_preserves_all_four_job_mechanics():
             )
             expected_steps.insert(
                 upload_index,
-                {
-                    "name": "Admit fresh bound coverage evidence before upload",
-                    "env": {"QSR_EVIDENCE_ROOT": root_expression},
-                    "run": guard_hash,
-                },
+                bound_cwd(
+                    {
+                        "name": "Admit fresh bound coverage evidence before upload",
+                        "env": {"QSR_EVIDENCE_ROOT": root_expression},
+                        "run": guard_hash,
+                    }
+                ),
             )
             observed_steps = deepcopy(steps)
             for step in observed_steps:
@@ -504,17 +520,31 @@ def test_preserves_all_four_job_mechanics():
             assert observed_steps == expected_steps, name
         elif name == "podman-e2e-positive-lsm":
             # Only the exact-test witness and the known cleanup bug differ.
-            assert len(steps) == len(expected["steps"])
-            assert steps[0:3] == expected["steps"][0:3], name
+            expected_bound = [bound_cwd(step) for step in expected["steps"]]
+            assert len(steps) == len(expected_bound)
+            assert steps[0] == expected_bound[0], name
+            assert steps[1]["name"] == expected["steps"][1]["name"]
+            assert steps[1]["working-directory"] == WORKFLOW_CHECKOUT_PATH
+            assert steps[1]["env"]["QSR_OUTPUT_PATH"] == (
+                "${{ github.workspace }}/" + WORKFLOW_OUTPUT_PATH
+            )
+            assert "$QSR_OUTPUT_PATH/podman-info.json" in steps[1]["run"]
+            assert 'open("podman-info.json"' not in steps[1]["run"]
+            assert 'test -n "$RUNNER_NAME"' in steps[1]["run"]
+            assert 'assert security["rootless"] is True' in steps[1]["run"]
+            assert 'assert security["selinuxEnabled"] is True' in steps[1]["run"]
+            assert steps[2] == expected_bound[2], name
             assert steps[3]["name"] == expected["steps"][3]["name"]
+            assert steps[3]["working-directory"] == WORKFLOW_CHECKOUT_PATH
             test_positive_lsm_exact_filter_requires_one_passing_test_witness()
             assert steps[4]["name"] == expected["steps"][-1]["name"]
+            assert steps[4]["working-directory"] == WORKFLOW_CHECKOUT_PATH
             assert steps[4]["if"] == "always()"
             assert steps[4]["run"].startswith(
                 expected["steps"][-1]["run"].split("leaked_networks=", 1)[0]
             )
         else:
-            assert steps == expected["steps"], name
+            assert steps == [bound_cwd(step) for step in expected["steps"]], name
         if name not in SRC03_LANES:
             assert job.get("env", {}) == expected["env"], name
 
@@ -547,7 +577,11 @@ def test_caller_and_event_are_checked_before_any_source_checkout():
         assert 'test "$EXPECTED_HEAD_SHA" = "$PUSH_SHA"' in script, name
         assert job["steps"][1] == {
             "uses": CHECKOUT,
-            "with": {"ref": CANDIDATE, "persist-credentials": "false"},
+            "with": {
+                "ref": CANDIDATE,
+                "persist-credentials": "false",
+                "path": WORKFLOW_CHECKOUT_PATH,
+            },
         }, f"{name} needs exact checkout after admission"
         assert job["steps"][2]["name"] == "Verify exact checkout", name
 
@@ -558,6 +592,7 @@ def test_exact_event_candidate_is_checked_before_any_source_execution():
         job = workflow()["jobs"][name]
         assert job["steps"][2] == {
             "name": "Verify exact checkout",
+            "working-directory": WORKFLOW_CHECKOUT_PATH,
             "env": {"EXPECTED_HEAD_SHA": CANDIDATE},
             "run": 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"',
         }, f"{name} needs fail-closed HEAD verification"
@@ -685,7 +720,15 @@ def test_token_is_contents_read_only_without_secret_or_write_surfaces():
     for job in data["jobs"].values():
         assert set(job) <= {"if", "runs-on", "steps", "env", "needs", "permissions"}
         for step in job["steps"]:
-            assert set(step) <= {"name", "uses", "with", "run", "env", "if"}
+            assert set(step) <= {
+                "name",
+                "uses",
+                "with",
+                "run",
+                "env",
+                "if",
+                "working-directory",
+            }
     text = WORKFLOW.read_text(encoding="utf-8")
     for forbidden in (
         "secrets:",
@@ -1195,7 +1238,12 @@ def test_src03_upload_is_run_bound_and_preceded_by_admission():
             steps[steps.index(upload) - 1]["name"]
             == "Admit fresh bound coverage evidence before upload"
         )
-        assert set(steps[steps.index(upload) - 1]) == {"name", "run", "env"}
+        assert set(steps[steps.index(upload) - 1]) == {
+            "name",
+            "run",
+            "env",
+            "working-directory",
+        }
         for step in steps:
             if (
                 step.get("name") == name

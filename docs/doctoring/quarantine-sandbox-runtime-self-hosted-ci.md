@@ -265,10 +265,14 @@ before publication and oversized input even through the synthetic metadata seam,
 and detect controlled grow/truncate during reads. These are bounded consistency
 controls, not hostile-writer isolation or complete product-parser memory bounds.
 
-**Incomplete:** checkout, Cargo/Rustup homes, installed tools, build target,
-positive-LSM `podman-info.json`, and child process settlement remain shared or
-unattested. No evidence-root deletion is added: failed/ambiguous roots remain for
-operator-owned reconciliation after settlement. A directory name, mode, hash or
+**Incomplete:** Cargo/Rustup homes, installed tools, build target, and child
+process settlement remain shared or unattested. Checkout, cwd, output, and
+cleanup are bound to one job, admitted source HEAD, run id, and run attempt
+under `qsr-job`. cwd is that checkout. output is its sibling, not the
+evidence root. cleanup is only that job root. `podman-info.json` is placed
+under output. This binding is not hostile-writer isolation, signed provenance,
+or runtime acceptance. No evidence-root deletion is added: failed/ambiguous
+roots remain for operator-owned reconciliation after settlement. A directory name, mode, hash or
 inode does not exclude a same-UID hostile process; product code can forge a
 manifest and mutate bytes after admission or during upload. The manifest is
 byte consistency, not a signed provenance attestation. Dedicated disposable
