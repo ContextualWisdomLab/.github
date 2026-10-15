@@ -6,3 +6,4 @@ self-hosted-runner:
     - cwl-hostile-workload
     - selinux
     - k-csap-isolated
+    - bandscope-ci

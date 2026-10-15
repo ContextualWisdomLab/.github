@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_canonical_config_registers_only_reviewed_custom_labels():
-    """K-CSAP과 QSR의 검토된 라벨 합집합만 허용하며 wildcard는 거부한다."""
+    """K-CSAP, QSR, BandScope의 검토된 라벨 합집합만 허용하며 wildcard는 거부한다."""
     config = ROOT / ".github/actionlint.yaml"
     assert config.is_file(), "canonical actionlint config missing"
     assert yaml.safe_load(config.read_text(encoding="utf-8")) == {
@@ -19,6 +19,7 @@ def test_canonical_config_registers_only_reviewed_custom_labels():
                 "cwl-hostile-workload",
                 "selinux",
                 "k-csap-isolated",
+                "bandscope-ci",
             ]
         }
     }
