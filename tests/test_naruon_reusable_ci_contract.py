@@ -66,7 +66,9 @@ def test_fixed_isolated_runner_and_no_executable_inputs(name: str) -> None:
         checkout = next(step for step in job["steps"] if step.get("name") == "Checkout repository")
         assert CHECKOUT_RE.fullmatch(checkout["uses"])
         assert checkout["with"]["persist-credentials"] == "false"
-        assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+        # Product workflows use checkout's event revision: the merge commit for PRs.
+        # Head-only checkout misses regressions introduced by the target branch.
+        assert checkout["with"]["ref"] == "${{ github.sha }}"
 
 
 def _admission_script(name: str) -> str:

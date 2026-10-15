@@ -16,8 +16,8 @@ with `[self-hosted, linux, x64, cwlab-ci-isolated]`; no privileged control pool 
 GitHub-hosted fallback is present. The first step follows
 `pg-erd-cloud-quality.yml`'s inline pre-checkout fixed-caller pattern. It rejects
 foreign repositories, forks, foreign PR bases and `pull_request_target` before
-any action or checkout. Checkout remains full-SHA pinned, selects the caller's PR
-head or event SHA and sets `persist-credentials: false`. All action pins retain
+any action or checkout. Checkout remains full-SHA pinned, selects the caller's event SHA (the synthetic PR
+merge commit for pull-request validation) and sets `persist-credentials: false`. All action pins retain
 the consumer's exact revisions and trailing version comments.
 
 ### Admission and concurrency
@@ -182,3 +182,26 @@ operational gates.
   `src/cache-utils.ts`, `src/cache-save.ts` and `action.yml` provide the cache
   discovery/post lifecycle and Node24 action-runtime contract. Exact copies are
   retained in the implementation packet.
+
+## 2026-10-15 checkout parity repair
+
+The original supplier explicitly selected the PR head while the product's
+`app-ci.yml` and `bandit.yml` retained checkout's event default. That silently
+changed integration validation to head-only validation. All three suppliers now
+select `github.sha`, preserving the PR merge commit, push commits, and Bandit-only manual event commits.
+The parsed-workflow regression failed for all three predecessors before repair.
+No caller activation, runner admission, credential or required-check change is
+included. Runtime parity and exact-head checks remain independent acceptance
+requirements.
+
+Source: GitHub, [Events that trigger workflows: pull_request](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request).
+
+Validation: the changed checkout/admission cohort passes 36 cases with
+`GITHUB_ACTIONS=true PYTHONWARNINGS=error python -m pytest
+tests/test_naruon_reusable_ci_contract.py -q -k
+'fixed_isolated_runner or actual_precheckout_admission'`. actionlint passes all
+three supplier workflows. The complete supplier cohort reports 88 passed and
+5 failed both before and after this repair in the same environment: five native
+pnpm tests require the unavailable exact pnpm 11.5.3 installation layout. This
+is not a full-suite pass; the existing pnpm provisioning and pip-cache review
+findings remain open.
