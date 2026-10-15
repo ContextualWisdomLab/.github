@@ -82,11 +82,15 @@ def test_backend_environment_is_job_private():
 @pytest.mark.parametrize('failed_tool, expected', [('', 0), ('mypy', 17), ('pytest', 17)])
 def test_backend_shell_cleanup_and_failure_propagation(tmp_path, failed_tool, expected):
     """Execute the actual lane with synthetic tools; never install dependencies."""
-    checkout = tmp_path / 'checkout'; checkout.mkdir()
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
     (checkout / 'backend').mkdir()
-    runner_temp = tmp_path / 'runner-temp'; runner_temp.mkdir()
-    sentinel = runner_temp / 'unrelated'; sentinel.write_text('keep')
-    tools = tmp_path / 'tools'; tools.mkdir()
+    runner_temp = tmp_path / 'runner-temp'
+    runner_temp.mkdir()
+    sentinel = runner_temp / 'unrelated'
+    sentinel.write_text('keep')
+    tools = tmp_path / 'tools'
+    tools.mkdir()
     trace = tmp_path / 'trace'
     python_stub = tools / 'python'
     python_stub.write_text('''#!/bin/bash
@@ -124,7 +128,8 @@ if [ "$FAILED_TOOL" = '{tool}' ]; then exit 17; fi
 def test_preserved_product_commands():
     """Centralization keeps every existing backend/frontend validation command."""
     data = workflow()
-    backend = data['jobs']['backend']; frontend = data['jobs']['frontend']
+    backend = data['jobs']['backend']
+    frontend = data['jobs']['frontend']
     commands = '\n'.join(s.get('run', '') for s in backend['steps'])
     for command in ['python -m pip install --require-hashes -r requirements-dev.lock',
                     'python -m pip install --require-hashes -r ../.github/requirements.lock',

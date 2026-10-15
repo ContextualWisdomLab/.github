@@ -258,12 +258,45 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
+      - name: Refuse private source on a public artifact destination
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
+
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
           github.event_name == 'repository_dispatch'
           && steps.validate.outputs.target_repository != ''
           && steps.validate.outputs.target_repository != github.repository
+          && steps.validate.outputs.is_private == 'true'
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -329,6 +362,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Materialize pull request merge tree for coverage measurement
+        if: steps.validate.outputs.is_private == 'true'
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
@@ -382,7 +416,41 @@ jobs:
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
 
+      - name: Recheck private artifact destination before upload
+        if: steps.validate.outputs.is_private == 'true'
+        env:
+          SOURCE_REPOSITORY_PRIVATE: ${{ steps.validate.outputs.is_private }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Artifact readers follow the receiving repository's current ACL.
+          # Do not use the dispatch event's potentially stale visibility.
+          case "$SOURCE_REPOSITORY_PRIVATE" in
+            false) ;;
+            true)
+              if ! [[ "$ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo '::error::Receiving artifact repository identity is invalid.'
+                exit 1
+              fi
+              if ! artifact_metadata="$(gh api "repos/${ARTIFACT_REPOSITORY}" 2>/dev/null)"; then
+                echo '::error::Receiving artifact repository visibility could not be read.'
+                exit 1
+              fi
+              if ! jq -se --arg repository "$ARTIFACT_REPOSITORY" '
+                length == 1 and (.[0] |
+                  type == "object" and .full_name == $repository and
+                  (.private | type == "boolean") and .private == true)
+                ' >/dev/null 2>&1 <<<"$artifact_metadata"; then
+                echo '::error::Private coverage source requires a currently private artifact destination; public or unknown destinations are refused.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
+
       - name: Upload materialized pull request merge tree
+        if: steps.validate.outputs.is_private == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: opencode-coverage-source
@@ -403,51 +471,39 @@ jobs:
       labels: [self-hosted, linux, x64, cwlab-ci-isolated]
     timeout-minutes: 300
     permissions:
-      # The PR tree arrives through a same-run artifact. No repository-content,
-      # identity, secret, or write token is available to untrusted tests.
+      # Private source uses a same-run artifact; public source uses tokenless Git.
+      # No repository-content, identity, secret or write grant is added to tests.
       actions: read
     outputs:
       coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Require explicit coverage source visibility
+        env:
+          IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          case "$IS_PRIVATE" in
+            true|false) ;;
+            *) echo '::error::Coverage source visibility is unknown.'; exit 1 ;;
+          esac
+
       - name: Resolve trusted OpenCode source ref
         id: trusted_source
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
-          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          TRUSTED_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          python3 <<'PY' >>"$GITHUB_OUTPUT"
-          import json
+          python3 -I - <<'PY' >>"$GITHUB_OUTPUT"
           import os
           import re
-          import sys
-
-          try:
-              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
-              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
-          except json.JSONDecodeError as exc:
-              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          trusted_ref = str(
-              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
-          ).strip()
-          workflow_ref = str(
-              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
-          ).strip()
-
-          if not trusted_ref:
-              trusted_ref = "main"
-              prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@"
-              if workflow_ref.startswith(prefix):
-                  trusted_ref = workflow_ref.split("@", 1)[1]
-
-          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
-              print("::error::Trusted OpenCode workflow ref resolved to an invalid value.", file=sys.stderr)
-              raise SystemExit(1)
-
+          trusted_ref = os.environ.get("TRUSTED_WORKFLOW_SHA", "")
+          workflow_ref = os.environ.get("TRUSTED_WORKFLOW_REF", "")
+          prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@"
+          if not re.fullmatch(r"[0-9a-f]{40}", trusted_ref) or not workflow_ref.startswith(prefix):
+              raise SystemExit("Trusted OpenCode workflow requires an immutable central SHA.")
           print(f"ref={trusted_ref}")
           PY
 
@@ -456,7 +512,7 @@ jobs:
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
-          # Persistent runners retain old files and Git configuration between jobs.
+          # This directory is exclusively owned by the isolated job.
           if [ -z "${GITHUB_WORKSPACE:-}" ] || [ -z "${RUNNER_WORKSPACE:-}" ] ||
             [ -L "$GITHUB_WORKSPACE" ] || [ "$RUNNER_WORKSPACE" = / ] ||
             [ "$(realpath "$GITHUB_WORKSPACE")" != "$(pwd -P)" ] ||
@@ -465,20 +521,95 @@ jobs:
             exit 1
           fi
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
-          git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
-          git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
-          printf 'Materialized trusted coverage contract at %s from validated ref %s.\n' \
-            "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" "$TRUSTED_SOURCE_REF"
+          python3 -I - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          import subprocess
+          import tempfile
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          source = os.environ["TRUSTED_SOURCE_REF"]
+          if not re.fullmatch(r"[0-9a-f]{40}", source):
+              raise SystemExit("Trusted source SHA is invalid.")
+          root = Path(os.environ["RUNNER_TEMP"])
+          for node in (root, *root.parents):
+              if not stat.S_ISDIR(node.lstat().st_mode):
+                  raise SystemExit("Trusted bootstrap temporary root is unsafe.")
+          with tempfile.TemporaryDirectory(prefix="coverage-bootstrap-", dir=root) as home:
+              environment = {
+                  "PATH": "/usr/bin:/bin", "HOME": home, "XDG_CONFIG_HOME": home,
+                  "TMPDIR": home, "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+                  "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+                  "GIT_ATTR_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+                  "GIT_NO_REPLACE_OBJECTS": "1",
+              }
+              def git(*args):
+                  options = (
+                      "credential.helper=", "http.extraHeader=", "http.proxy=",
+                      "http.followRedirects=false", "http.sslVerify=true",
+                      "core.hooksPath=/dev/null", "core.attributesFile=/dev/null",
+                      "core.fsmonitor=false", "protocol.allow=never",
+                      "protocol.https.allow=always", "core.autocrlf=false",
+                      "submodule.recurse=false", "gc.auto=0",
+                  )
+                  argv = ["/usr/bin/git"]
+                  for value in options:
+                      argv.extend(("-c", value))
+                  result = subprocess.run(
+                      [*argv, *args], cwd=workspace, env=environment,
+                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE, check=False, shell=False, timeout=180,
+                  )
+                  if result.returncode:
+                      raise SystemExit("Trusted coverage bootstrap Git failed.")
+                  return result.stdout
+              git("init", "-q", "--template=", ".")
+              git("fetch", "--depth=1", "--no-tags", "--no-recurse-submodules",
+                  "https://github.com/ContextualWisdomLab/.github.git", source)
+              if git("cat-file", "-t", source).strip() != b"commit":
+                  raise SystemExit("Trusted source is not a commit.")
+              git("checkout", "--detach", source)
+              if git("rev-parse", "HEAD").strip().decode() != source:
+                  raise SystemExit("Trusted source checkout differs from workflow SHA.")
+              relative = "scripts/ci/materialize_public_review_source.py"
+              helper = workspace / relative
+              for node in (workspace / "scripts", workspace / "scripts/ci"):
+                  if not stat.S_ISDIR(node.lstat().st_mode):
+                      raise SystemExit("Trusted helper parent is unsafe.")
+              if not stat.S_ISREG(helper.lstat().st_mode):
+                  raise SystemExit("Trusted helper is not a regular file.")
+              if hashlib.sha256(helper.read_bytes()).digest() != hashlib.sha256(git("show", source + ":" + relative)).digest():
+                  raise SystemExit("Trusted helper differs from pinned source.")
+          print("Materialized immutable trusted coverage contract without Git credentials.")
+          PY
+
+      - name: Materialize public pull request merge tree without artifacts
+        if: needs.validate-pr-metadata.outputs.is_private == 'false'
+        env:
+          TARGET_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_public_review_source.py" \
+            --repository "$TARGET_REPOSITORY" --base-sha "$PR_BASE_SHA" \
+            --head-sha "$PR_HEAD_SHA" --is-private "$IS_PRIVATE"
+          test -d "$COVERAGE_SOURCE_WORKDIR/.git"
 
       - name: Download materialized pull request merge tree
+        if: needs.validate-pr-metadata.outputs.is_private == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: opencode-coverage-source
           path: ${{ runner.temp }}/opencode-coverage-artifact
 
       - name: Prepare pull request merge tree for coverage measurement
+        if: needs.validate-pr-metadata.outputs.is_private == 'true'
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1013,12 +1144,26 @@ jobs:
             fi
             sudo rm -rf "$coverage_build_dir"
 
+            # Use the daemon's capacity, not the runner host's CPU count.
+            # Keep four CPUs as an upper limit without rejecting smaller guests.
+            if ! coverage_daemon_cpus="$(docker info --format '{{.NCPU}}')"; then
+              echo '::error::Coverage Docker daemon CPU capacity is unavailable.'
+              exit 1
+            fi
+            if [[ ! "$coverage_daemon_cpus" =~ ^[1-9][0-9]*$ ]]; then
+              echo '::error::Coverage Docker daemon CPU capacity is invalid.'
+              exit 1
+            fi
+            case "$coverage_daemon_cpus" in
+              1|2|3) coverage_sandbox_cpus="$coverage_daemon_cpus" ;;
+              *) coverage_sandbox_cpus=4 ;;
+            esac
             sandbox_status=0
             docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --pids-limit 2048 \
               --memory 14g \
-              --cpus 4 \
+              --cpus "$coverage_sandbox_cpus" \
               --security-opt no-new-privileges:true \
               --cap-drop ALL \
               --cap-add CHOWN \

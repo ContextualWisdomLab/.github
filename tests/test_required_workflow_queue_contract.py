@@ -1437,9 +1437,14 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
     publish = workflow_step(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
     for permission in ("permission-contents: read", "permission-metadata: read"):
         assert permission in prepare and permission in publish
+    metadata = workflow_step(workflow, "Refresh read-only Noema GitHub App metadata token after model")
     assert "permission-pull-requests: read" in prepare
-    assert "permission-pull-requests: read" in publish
-    assert "permission-pull-requests: write" not in publish
+    assert "permission-pull-requests: write" not in prepare
+    assert "permission-pull-requests: read" in metadata
+    assert "permission-pull-requests: write" not in metadata
+    assert "permission-pull-requests: write" in publish
+    assert workflow.index(metadata) < workflow.index(publish)
+    assert "steps.noema_prepare.outputs.prepared == 'true'" in publish
     for permission in ("permission-actions:", "permission-checks:",
                        "permission-security-events:", "permission-statuses:",
                        "permission-vulnerability-alerts:"):
