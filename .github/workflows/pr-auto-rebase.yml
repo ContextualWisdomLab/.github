@@ -46,9 +46,9 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        description: Deprecated compatibility input; accepted and ignored because privileged source is bound to the called workflow SHA
         required: false
-        default: "main"
+        default: ""
         type: string
   repository_dispatch:
     types: [pr-auto-rebase]
@@ -84,7 +84,6 @@ jobs:
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       AUTO_REBASE_MAX_PER_RUN: ${{ github.event.client_payload.max_per_run || inputs.max_per_run || vars.AUTO_REBASE_MAX_PER_RUN || '10' }}
       AUTO_REBASE_HUMAN_WINDOW_MINUTES: ${{ github.event.client_payload.human_window_minutes || inputs.human_window_minutes || vars.AUTO_REBASE_HUMAN_WINDOW_MINUTES || '30' }}
-      CANONICAL_REF: main
     steps:
       - name: Exchange OpenCode app token for cross-repo git writes
         id: scheduler_app_token
@@ -152,13 +151,66 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Checkout canonical scheduler
+      - name: Resolve immutable called-workflow source
+        id: trusted_source
+        env:
+          # github.workflow_sha is the commit GitHub loaded for this workflow.
+          # Same-repository callers share that commit. A caller-supplied ref
+          # must not select it.
+          CALLER_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          expected_repository="ContextualWisdomLab/.github"
+          expected_file=".github/workflows/pr-auto-rebase.yml"
+
+          if [ "$CALLER_REPOSITORY" != "$expected_repository" ]; then
+            printf '::error::Called workflow was invoked from an untrusted repository: %s (expected %s).\n' \
+              "${CALLER_REPOSITORY:-<empty>}" "$expected_repository"
+            exit 1
+          fi
+
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Called workflow SHA is missing or malformed: %s.\n' \
+              "${WORKFLOW_SHA:-<empty>}"
+            exit 1
+          fi
+
+          {
+            printf 'repository=%s\n' "$expected_repository"
+            printf 'sha=%s\n' "$WORKFLOW_SHA"
+            printf 'workflow_file_path=%s\n' "$expected_file"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s.\n' \
+            "$expected_repository" "$expected_file" "$WORKFLOW_SHA"
+
+      - name: Checkout immutable called-workflow source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ env.CANONICAL_REF }}
+          repository: ${{ steps.trusted_source.outputs.repository }}
+          ref: ${{ steps.trusted_source.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify immutable called-workflow checkout
+        env:
+          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
+          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            printf '::error::Checked-out scheduler SHA %s does not match called-workflow SHA %s.\n' \
+              "$actual_sha" "$EXPECTED_SHA"
+            exit 1
+          fi
+          if [ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]; then
+            printf '::error::Called workflow source file is missing or symlinked: %s.\n' \
+              "$EXPECTED_FILE"
+            exit 1
+          fi
+          printf 'Verified immutable scheduler checkout at %s (%s).\n' \
+            "$actual_sha" "$EXPECTED_FILE"
 
       - name: Self-test auto-rebase scheduler contract
         run: python3 scripts/ci/pr_auto_rebase.py --self-test
