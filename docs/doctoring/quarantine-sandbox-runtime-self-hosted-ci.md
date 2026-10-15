@@ -270,7 +270,13 @@ process settlement remain shared or unattested. Checkout, cwd, output, and
 cleanup are bound to one job, admitted source HEAD, run id, and run attempt
 under `qsr-job`. cwd is that checkout. output is its sibling, not the
 evidence root. cleanup is only that job root. `podman-info.json` is placed
-under output. This binding is not hostile-writer isolation, signed provenance,
+under output. `scripts.ci.qsr_source_artifacts` admits an output artifact only
+when it is a nonempty single-link regular file inside that output and its
+`.source.json` sidecar names the same source.
+A stale sidecar or foreign output path, a symlink artifact, and an empty
+artifact are refused separately as `SRC03-ART-STALE`, `SRC03-ART-SYMLINK`,
+and `SRC03-ART-EMPTY`. The entrypoint records each fixture path against the
+target source. Symlink fixtures are not followed. This binding is not hostile-writer isolation, signed provenance,
 or runtime acceptance. No evidence-root deletion is added: failed/ambiguous
 roots remain for operator-owned reconciliation after settlement. A directory name, mode, hash or
 inode does not exclude a same-UID hostile process; product code can forge a
