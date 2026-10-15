@@ -284,6 +284,25 @@ def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
     runner_id = job.get("runner_id")
     if isinstance(runner_id, bool) or not isinstance(runner_id, int):
         runner_id = 0
+    # REST labels are routing selectors, not evidence of isolation or capacity.
+    # In particular, a null assigned group does not prove a requested group
+    # is absent. Preserve null separately from an explicitly empty value.
+    labels = job.get("labels")
+    if labels is not None and (
+        not isinstance(labels, list)
+        or any(not isinstance(label, str) or not label for label in labels)
+    ):
+        raise QueueHealthError("runner labels must be an array of non-empty strings or null")
+    runner_group_id = job.get("runner_group_id")
+    if runner_group_id is not None and (
+        isinstance(runner_group_id, bool)
+        or not isinstance(runner_group_id, int)
+        or runner_group_id < 0
+    ):
+        raise QueueHealthError("runner group id must be a non-negative integer or null")
+    runner_group_name = job.get("runner_group_name")
+    if runner_group_name is not None and not isinstance(runner_group_name, str):
+        raise QueueHealthError("runner group name must be a string or null")
     if "steps" in job:
         workflow_steps = job["steps"]
         if workflow_steps is not None and not isinstance(workflow_steps, list):
@@ -306,6 +325,9 @@ def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
         "conclusion": str(job.get("conclusion") or "").upper(),
         "runner_id": runner_id,
         "runner_name": str(job.get("runner_name") or ""),
+        "labels": list(labels) if labels is not None else None,
+        "runner_group_id": runner_group_id,
+        "runner_group_name": runner_group_name,
         "created_at": str(job.get("created_at") or ""),
         "steps_count": steps_count,
     }
@@ -543,6 +565,9 @@ def build_report(
                         "execution_state": state,
                         "is_pending": pending,
                         "runner_assigned": assigned,
+                        "runner_labels": job.get("labels"),
+                        "runner_group_id": job.get("runner_group_id"),
+                        "runner_group_name": job.get("runner_group_name"),
                         "created_at": run.get("created_at", ""),
                         "updated_at": run.get("updated_at", ""),
                         "queue_age_seconds": age_seconds,
@@ -577,7 +602,7 @@ def build_report(
     ]
     external_actions = sorted(
         {
-            "Inspect GitHub-hosted runner assignment, Actions billing/usage, runner-group policy, environment approval, and concurrency saturation; queued evidence remains incomplete."
+            "Inspect runner assignment, Actions billing/usage, runner-group policy, environment approval, and concurrency saturation; queued evidence remains incomplete."
             for row in rows
             if row["blocker"] == "external_runner_assignment_or_capacity"
         }
@@ -611,6 +636,7 @@ def build_report(
         "runs": rows,
         "limitations": [
             "The Actions REST API does not expose the evaluated concurrency group for every run; unavailable values are reported explicitly.",
+            "Runner labels and assigned group metadata do not attest isolation, requested group existence, repository access, or available capacity.",
             "This read-only slice never cancels runs or changes branch/check state.",
         ],
     }
