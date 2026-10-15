@@ -35,12 +35,13 @@ def test_facade_signature_matches_the_live_opencode_followup_caller() -> None:
 
     assert workflow_source.startswith("name: OpenCode Review Dispatch\n")
     for required_argument in (
+        '--dry-run',
         '--max-prs 1',
         '--review-dispatch-limit 0',
-        '--merge-mode direct_or_auto',
+        '--merge-mode disabled',
         '--pr-number "$PR_NUMBER"',
         '--no-trigger-reviews',
-        '--enable-auto-merge',
+        '--no-enable-auto-merge',
         '--no-update-branches',
     ):
         assert required_argument in scheduler_step
@@ -51,7 +52,10 @@ def test_facade_signature_matches_the_live_opencode_followup_caller() -> None:
         '_argument_value(argument_values, "--review-dispatch-limit") == "0"'
         in facade_source
     )
-    assert '== "direct_or_auto"' in facade_source
+    assert '== "disabled"' in facade_source
+    assert '"--dry-run" in argument_set' in facade_source
+    assert '--enable-auto-merge' not in scheduler_step
+    assert '--merge-mode direct_or_auto' not in scheduler_step
 
 
 def test_followup_documents_the_authoritative_retry_owner() -> None:

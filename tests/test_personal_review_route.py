@@ -108,3 +108,28 @@ def test_actual_noema_payload_uses_literal_auto_without_sampling_override(monkey
     assert url == 'https://litellm.poinnetworks.net/v1/chat/completions'
     assert body['model'] == 'auto' and 'temperature' not in body
     assert body['response_format']['type'] == 'json_schema'
+
+
+def test_authorized_public_route_does_not_assert_supplier_cost():
+    module().require_admission(zero_cost=False, zero_retention=False,
+                               private_target=False, public_auto_authorized=True)
+    for private in (True, None):
+        with pytest.raises(RuntimeError, match='zero-cost supplier'):
+            module().require_admission(zero_cost=False, zero_retention=True,
+                                       private_target=private, public_auto_authorized=True)
+    for authorization in (False, None, 'true', 1):
+        with pytest.raises(RuntimeError, match='zero-cost supplier'):
+            module().require_admission(zero_cost=False, zero_retention=True,
+                                       private_target=False, public_auto_authorized=authorization)
+
+
+def test_public_authorization_cli_cannot_release_private_configuration(tmp_path):
+    path = tmp_path / 'config.json'
+    original = '{"permission":{"edit":"deny"}}'
+    path.write_text(original)
+    base = ['--zero-cost', 'false', '--zero-retention', 'false',
+            '--public-auto-authorized', 'true']
+    assert module().main(base + ['--private-target', 'false']) == 0
+    with pytest.raises(RuntimeError, match='zero-cost supplier'):
+        module().main(base + ['--private-target', 'true', '--opencode-config', str(path)])
+    assert path.read_text() == original

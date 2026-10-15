@@ -223,6 +223,16 @@ mints a short-lived installation token restricted to the target repository; the
 App has read-only Actions/checks/contents/status/code-scanning/Dependabot access
 and write access only to pull-request reviews.
 
+The scheduler's independent-review gate recognizes this canonical App only
+when GitHub authenticates its bot actor, the attached review commit is the
+exact head, and the publisher's head/result/actor/App-source receipt agrees.
+The PR author cannot satisfy this condition, including alternate REST and
+GraphQL spellings of the same bot. Latest malformed formal approvals or
+revocations block older receipts; comments do not replace formal policy state.
+Other automation remains excluded. This reviewer eligibility does not replace
+GitHub approval policy, required checks, security evidence, resolved threads,
+or fresh head/base validation before a head-guarded merge.
+
 The PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
 (`reviewer/noema_reviewer`, `ContextualWisdomLab/noema#9`) is the target standalone judgement plane,
 while the central Python gate remains the deployed fail-closed reviewer. The

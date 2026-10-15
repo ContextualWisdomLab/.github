@@ -53,7 +53,7 @@ jobs:
     # Skip before runner admission when coalescing is off. Do not move this
     # gate back to step scope: that reintroduces multi-hour queue wait for
     # an inert echo under the org concurrent-job ceiling.
-    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
+    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true' && github.repository == 'ContextualWisdomLab/.github' && github.event_name == 'schedule' && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review-coalesce-tick.yml@refs/heads/main'
     runs-on:
       group: CWL CI isolated
       labels: [self-hosted, linux, x64, cwlab-ci-isolated]
@@ -87,18 +87,18 @@ jobs:
           repos_file="${RUNNER_TEMP}/coalesce-repos.txt"
           : >"$repos_file"
           cursor=""
-          for page in 1 2 3 4 5 6 7 8 9 10; do
+          for _page in 1 2 3 4 5 6 7 8 9 10; do
             cursor_arg=()
             if [ -n "$cursor" ]; then
               cursor_arg=(-f "cursor=$cursor")
             fi
-            response="$(gh api graphql -f query='
-              query($cursor: String) {
-                search(query: "org:ContextualWisdomLab is:pr is:open draft:false", type: ISSUE, first: 100, after: $cursor) {
+            response="$(gh api graphql -f query="
+              query(\$cursor: String) {
+                search(query: \"org:ContextualWisdomLab is:pr is:open draft:false\", type: ISSUE, first: 100, after: \$cursor) {
                   nodes { ... on PullRequest { repository { nameWithOwner } } }
                   pageInfo { hasNextPage endCursor }
                 }
-              }' "${cursor_arg[@]}" 2>/dev/null || echo '{}')"
+              }" "${cursor_arg[@]}" 2>/dev/null || echo '{}')"
             printf '%s' "$response" | jq -r '.data.search.nodes[]?.repository.nameWithOwner // empty' >>"$repos_file"
             has_next="$(printf '%s' "$response" | jq -r '.data.search.pageInfo.hasNextPage // false')"
             [ "$has_next" = "true" ] || break
@@ -130,6 +130,7 @@ jobs:
               --review-dispatch-limit -1 \
               --branch-update-limit 0 \
               --no-enable-auto-merge \
+              --merge-mode disabled \
               --no-update-branches \
               --trigger-reviews \
               || echo "::warning::Coalesce tick pass failed for ${repo}; continuing with remaining repositories."

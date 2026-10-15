@@ -3,10 +3,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 
@@ -14,6 +16,56 @@ from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 def load_opencode_jsonc() -> dict:
     """Load the repository's opencode.jsonc, tolerating its // comments."""
     return json.loads(strip_jsonc_comments(Path("opencode.jsonc").read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize("daemon_cpus, expected", [
+    ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("8", "4"),
+    ("999999999999999999999999999999999", "4"),
+    ("", None), ("0", None), ("-1", None), ("2.0", None), ("02", None),
+    ("true", None), ("2\n3", None), ("2\r", None), ("unavailable", None),
+])
+def test_coverage_cpu_limit_fits_daemon_capacity(tmp_path, daemon_cpus, expected):
+    """실제 sandbox argv는 daemon 용량과 기존 상한 4를 넘지 않는다."""
+    workflow = yaml.safe_load(Path(".github/workflows/opencode-review-dispatch.yml").read_text())
+    steps = workflow["jobs"]["coverage-evidence"]["steps"]
+    script = next(step["run"] for step in steps if step.get("name") == "Measure test and docstring evidence")
+    start = script.rindex('sudo rm -rf "$coverage_build_dir"\n') + len('sudo rm -rf "$coverage_build_dir"\n')
+    end = script.index('sandbox_output="${sandbox_result_dir}/github-output"', start)
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "python3").symlink_to(sys.executable)
+    docker = binary / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\nimport os,sys,json\nfrom pathlib import Path\n"
+        "if sys.argv[1]=='info':\n"
+        " assert sys.argv[2:]==['--format','{{.NCPU}}']\n"
+        " if os.environ['DAEMON_CPUS']=='unavailable':raise SystemExit(12)\n"
+        " print(os.environ['DAEMON_CPUS']);raise SystemExit(0)\n"
+        "Path(os.environ['ARGV_CAPTURE']).write_text(json.dumps(sys.argv[1:]))\n"
+    )
+    docker.chmod(0o755)
+    capture = tmp_path / "argv.json"
+    result = subprocess.run(
+        ["/bin/bash", "-c", "set -euo pipefail\n" + script[start:end]],
+        env={"PATH": f"{binary}:/usr/bin:/bin", "HOME": str(tmp_path), "DAEMON_CPUS": daemon_cpus,
+             "ARGV_CAPTURE": str(capture), "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1",
+             "GITHUB_WORKSPACE": str(tmp_path / "trusted"), "COVERAGE_SOURCE_WORKDIR": str(tmp_path / "source"),
+             "sandbox_result_dir": str(tmp_path / "out"), "measure_step_script": str(tmp_path / "measure.sh"),
+             "PR_BASE_SHA": "a" * 40, "PR_HEAD_SHA": "b" * 40,
+             "coverage_llvm_cov": "/llvm-cov", "coverage_llvm_profdata": "/llvm-profdata",
+             "coverage_tool_image": "synthetic:image"}, capture_output=True, text=True, check=False, timeout=15,
+    )
+    if expected is None:
+        assert result.returncode == 1
+        assert not capture.exists()
+        assert "CPU capacity is" in result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    argv = json.loads(capture.read_text())
+    assert argv[argv.index("--cpus") + 1] == expected
+    assert argv[argv.index("--memory") + 1] == "14g"
+    assert "--network=none" in argv
+    assert "no-new-privileges:true" in argv
 
 
 def test_code_reviewer_subagent_contract_is_configured():
@@ -392,19 +444,23 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
-    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 2
-    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 2
-    assert (
-        workflow.count(
-            'job_context.get("workflow_sha") or github_context.get("workflow_sha")'
-        )
-        == 2
-    )
-    assert workflow.count('workflow_ref.split("@", 1)[1]') == 2
-    assert (
-        workflow.count("Trusted OpenCode workflow ref resolved to an invalid value.")
-        == 2
-    )
+    # The privileged review job retains its existing resolver. Coverage uses
+    # only the workflow identity and must not inherit the token-bearing context.
+    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 1
+    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 1
+    assert workflow.count(
+        'job_context.get("workflow_sha") or github_context.get("workflow_sha")'
+    ) == 1
+    assert workflow.count('workflow_ref.split("@", 1)[1]') == 1
+    assert workflow.count("Trusted OpenCode workflow ref resolved to an invalid value.") == 1
+    coverage = workflow.split("  coverage-evidence:", 1)[1].split(
+        "      - name: Materialize trusted OpenCode coverage contract without a repository token", 1
+    )[0]
+    assert "TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}" in coverage
+    assert "TRUSTED_WORKFLOW_REF: ${{ github.workflow_ref }}" in coverage
+    assert 're.fullmatch(r"[0-9a-f]{40}", trusted_ref)' in coverage
+    assert "github.event.client_payload" not in coverage
+    assert 'trusted_ref = "main"' not in coverage
 
 
 def test_required_workflow_validates_archive_members_before_extraction():
@@ -795,6 +851,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
+    # Cargo crate archives keep modes such as 0640 through COPY, so the
+    # coverage image must normalize the base-rust dependency tree before
+    # unprivileged sandbox execution.
+    assert measure_step.index(
+        "COPY base-rust-dependencies /opt/base-rust-dependencies"
+    ) < measure_step.index("RUN chmod -R a+rX /opt/base-rust-dependencies")
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
@@ -1285,7 +1347,7 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "[ -d src ] && printf src:. || printf ." in measure
     assert "PYTHONPATH=. python3 -m pytest tests/test_docstrings.py" not in measure
     assert (
-        'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" '
+        'PYTHONPATH=\\"\\$([ -d src ] && printf src:. || printf .)\\" '
         "python3 -m pytest tests/test_docstrings.py"
     ) in measure
 
@@ -2201,7 +2263,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
     assert (
         workflow.count(
-            '["opencode-review","coverage-evidence","metadata-only gate evaluation"]'
+            '[\\"opencode-review\\",\\"coverage-evidence\\",\\"metadata-only gate evaluation\\"]'
         )
         >= 2
     )
@@ -2217,9 +2279,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         not in failed_check_collector
     )
     assert (
-        '["opencode-review", "coverage-evidence", "coverage-source-tree", '
-        '"required-workflow-bootstrap", "metadata-only gate evaluation", '
-        '"scan-pr-queue"]' in workflow
+        '[\\"opencode-review\\", \\"coverage-evidence\\", \\"coverage-source-tree\\", '
+        '\\"required-workflow-bootstrap\\", \\"metadata-only gate evaluation\\", '
+        '\\"scan-pr-queue\\"]' in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 
@@ -2306,7 +2368,8 @@ def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
 
     # Both failed-check collectors and both pending-check collectors exclude the
     # scheduler check by name, independently of its current state or conclusion.
-    assert workflow.count(unconditional_filter) >= 5
+    escaped_filter = 'select((.name // \\"\\") != \\"scan-pr-queue\\")'
+    assert workflow.count(unconditional_filter) + workflow.count(escaped_filter) >= 5
     assert cancelled_only_filter not in workflow
     failed_check_collector = Path(
         "scripts/ci/collect_failed_check_evidence.sh"
@@ -2531,7 +2594,9 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "'opencode-app' || 'github-token' }}"
     ) in workflow
     assert "--no-trigger-reviews" in workflow
-    assert "--enable-auto-merge" in workflow
+    assert "--no-enable-auto-merge" in workflow
+    assert "--merge-mode disabled" in workflow
+    assert "--enable-auto-merge" not in workflow
     assert "--no-update-branches" in workflow
     assert "--require-opencode-app" in workflow
     assert "approval_attempt in 1 2 3 4 5 6" in workflow
@@ -2909,7 +2974,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
     )[1].split("      - name: Publish OpenCode review outcome", 1)[0]
     assert "continue-on-error: true" in fast_approval
     assert "def latest_peer_checks:" in fast_approval
-    assert 'group_by([.app.slug // "", .name // ""])' in fast_approval
+    assert 'group_by([.app.slug // \\"\\", .name // \\"\\"])' in fast_approval
     assert fast_approval.count("latest_peer_checks") == 3
     assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
     assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
@@ -3012,7 +3077,7 @@ def test_opencode_review_language_signal_is_throttle_proof():
         workflow,
     )
     # The preferred-language marker and its Korean/English detection remain.
-    assert "- Preferred review language: `%s`" in workflow
+    assert "- Preferred review language: \\`%s\\`" in workflow
     assert "grep -Eq '[가-힣]'" in workflow
 
 

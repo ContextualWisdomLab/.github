@@ -49,7 +49,7 @@ def test_publication_step_uses_fresh_app_token_without_authority_fallback() -> N
     assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in refresh
     assert "permission-pull-requests: write" in refresh
     assert "permission-contents: read" in refresh
-    assert "permission-actions: read" in refresh
+    assert "permission-actions:" not in refresh
     assert "steps.noema_github_app_publication_token.outputs.token" in publish
     assert "steps.noema_github_app_token.outputs.token" not in publish
     assert "secrets.NOEMA_REVIEW_TOKEN" in publish

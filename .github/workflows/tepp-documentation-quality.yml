@@ -1,0 +1,38 @@
+name: TEPP Documentation Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+
+jobs:
+  validate:
+    name: Validate planning and governance contracts
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Validate documentation
+        run: python3 scripts/validate_documentation.py
+      - name: Reject whitespace errors
+        run: git diff --check HEAD^ HEAD

@@ -201,3 +201,34 @@ GitHub. (n.d.). *Secure use reference*. GitHub Docs. Retrieved October 8, 2026.[
 [1] https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 [2] https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access
 [3] https://docs.github.com/en/actions/reference/security/secure-use
+
+## 2026-10-15 ordinary main reconciliation
+
+The existing owner head `44a140e0` was merged forward with protected main
+`6a03ae990eb4769869f4f77970cc21ed35141e09`. Both histories are preserved.
+Actionlint vocabulary is the union of main's reviewed labels plus the existing
+`bandscope-ci` label; its exact-list regression now names that union. The CodeQL
+clock fixture comes wholly from main, including both deterministic clock probes.
+The staged BandScope supplier and its 46-case contract are unchanged.
+
+The first complete local run reported 6571 passed, 2 failed, 10 skipped and
+92 subtests passed. One failure exposed the second exact actionlint-label oracle
+and is repaired; the other attempted a test fixture's cache in an unavailable
+HOME. A private writable verification HOME is required for that fixture.
+These failed receipts are not passing evidence. No runner ACL, caller, native
+platform gate, credential, review approval or protected merge is activated here.
+
+Final verification used a short, private writable HOME with
+`GITHUB_ACTIONS=true PYTHONWARNINGS=error python -m pytest tests -q`:
+6573 passed, 10 skipped, 92 subtests passed (225.05 seconds). Skips remain skips.
+The unchanged main fixture also passed all 74 law-CI tests with the same HOME;
+its original full run failed only at the unavailable HOME cache location.
+Canonical actionlint and the 77-case BandScope/CodeQL/label cohort passed.
+
+Read-only GitHub settings verification on October 15 found neither `naruon`
+nor `bandscope` among the isolated group's seven selected repositories, and
+no `bandscope-ci` label on its two Linux/x64 runners. Group availability is
+not disposable-guest or network-isolation evidence. The existing operational
+issues still distinguish limited historical diagnostics from complete
+pre-lease, per-job-reset, image, access and actual caller canary acceptance.
+No selection, label, credential or other setting was changed by this repair.

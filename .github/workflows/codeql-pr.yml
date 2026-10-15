@@ -181,6 +181,121 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
+      - name: Set up Python for pinned GitHub CLI provisioning
+        if: needs.detect-languages.outputs.code == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Provision pinned job-local GitHub CLI
+        if: needs.detect-languages.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import shutil
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          import urllib.request
+
+          version = "2.102.0"
+          archive_sha256 = "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
+          binary_sha256 = "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b"
+          url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
+          if sys.platform != "linux" or platform.machine() not in ("x86_64", "amd64"):
+              raise RuntimeError("pinned GitHub CLI requires Linux x64")
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if not parent.is_absolute():
+              raise RuntimeError("RUNNER_TEMP must be absolute")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("runner temporary ancestry must be real directories")
+          root = Path(tempfile.mkdtemp(prefix="cwl-gh-", dir=parent))
+          os.chmod(root, 0o700)
+          try:
+              archive = root / "gh.tar.gz"
+              with urllib.request.urlopen(url, timeout=30) as response, archive.open("xb") as output:
+                  total = 0
+                  digest = hashlib.sha256()
+                  while True:
+                      chunk = response.read(1024 * 1024)
+                      if not chunk:
+                          break
+                      total += len(chunk)
+                      if total > 20 * 1024 * 1024:
+                          raise RuntimeError("GitHub CLI archive exceeds bound")
+                      digest.update(chunk)
+                      output.write(chunk)
+              if digest.hexdigest() != archive_sha256:
+                  raise RuntimeError("GitHub CLI archive checksum mismatch")
+              expected_member = f"gh_{version}_linux_amd64/bin/gh"
+              with tarfile.open(archive, "r:gz") as source:
+                  members = source.getmembers()
+                  selected = [member for member in members if member.name == expected_member]
+                  if len(selected) != 1 or not selected[0].isfile():
+                      raise RuntimeError("GitHub CLI archive must contain one regular binary")
+                  member = selected[0]
+                  if not 0 < member.size <= 64 * 1024 * 1024:
+                      raise RuntimeError("GitHub CLI binary size exceeds bound")
+                  stream = source.extractfile(member)
+                  if stream is None:
+                      raise RuntimeError("GitHub CLI binary could not be read")
+                  with stream:
+                      content = stream.read(member.size + 1)
+                  if len(content) != member.size or hashlib.sha256(content).hexdigest() != binary_sha256:
+                      raise RuntimeError("GitHub CLI binary checksum mismatch")
+              # Copy this single pinned regular member; never extract archive paths or links.
+              bindir = root / "bin"
+              bindir.mkdir(mode=0o700)
+              executable = bindir / "gh"
+              with executable.open("xb") as output:
+                  output.write(content)
+              executable.chmod(0o700)
+              result = subprocess.run([str(executable), "--version"], check=True,
+                                      capture_output=True, text=True, timeout=10)
+              if not result.stdout.splitlines() or not result.stdout.splitlines()[0].startswith(f"gh version {version} "):
+                  raise RuntimeError("GitHub CLI version mismatch")
+              archive.unlink()
+              with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+                  output.write(str(bindir) + "\n")
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+                  output.write("CWL_GH_BIN=" + str(executable) + "\n")
+                  info = root.stat()
+                  output.write("CWL_GH_ROOT=" + str(root) + "\n")
+                  output.write("CWL_GH_ROOT_DEVICE=" + str(info.st_dev) + "\n")
+                  output.write("CWL_GH_ROOT_INODE=" + str(info.st_ino) + "\n")
+              print("Installed checksum-verified job-local GitHub CLI " + version)
+          except BaseException:
+              shutil.rmtree(root)
+              raise
+          PY
+
+      - name: Verify pinned job-local GitHub CLI selection
+        if: needs.detect-languages.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$CWL_GH_BIN" ] || [ -L "$CWL_GH_BIN" ] || [ ! -x "$CWL_GH_BIN" ]; then
+            echo "::error::Job-local GitHub CLI executable is missing or linked."
+            exit 1
+          fi
+          if [ "$(command -v gh)" != "$CWL_GH_BIN" ]; then
+            echo "::error::GitHub CLI PATH selection differs from the pinned job-local binary."
+            exit 1
+          fi
+          printf '%s  %s\n' '7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b' "$CWL_GH_BIN" | sha256sum --check --status
+          version_output="$(gh --version)"
+          case "$version_output" in
+            'gh version 2.102.0 '*) printf '%s\n' "GitHub CLI 2.102.0 path and checksum verified." ;;
+            *) echo "::error::GitHub CLI selected an unsupported version."; exit 1 ;;
+          esac
+
       - name: Read current-head CodeQL dispatch verdict
         # Shards never dispatch. They re-check the live head, consume an
         # authenticated base/run/source-bound CodeQL verdict when one exists,
@@ -362,6 +477,41 @@ jobs:
               ;;
           esac
 
+      - name: Clean up this job's pinned GitHub CLI
+        if: always() && env.CWL_GH_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+
+          root = Path(os.environ["CWL_GH_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if (not root.is_absolute() or root.parent != parent
+                  or not re.fullmatch(r"cwl-gh-[A-Za-z0-9_-]+", root.name)
+                  or any(ord(c) < 32 for c in str(root))):
+              raise RuntimeError("refusing unrelated GitHub CLI cleanup path")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed GitHub CLI temporary ancestry")
+          try:
+              info = root.lstat()
+          except FileNotFoundError:
+              print("Owned GitHub CLI directory is already absent.")
+          else:
+              if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                      or info.st_dev != int(os.environ["CWL_GH_ROOT_DEVICE"])
+                      or info.st_ino != int(os.environ["CWL_GH_ROOT_INODE"])):
+                  raise RuntimeError("refusing changed GitHub CLI directory identity")
+              # No glob or shared-temp sweep: delete only this job's original directory.
+              shutil.rmtree(root)
+              print("Removed this job's checksum-verified GitHub CLI directory.")
+          PY
+
   dispatch-current-head:
     name: Dispatch current-head CodeQL scan
     needs: [detect-languages, analyze-head]
@@ -382,6 +532,118 @@ jobs:
       pull-requests: read
       statuses: read
     steps:
+      - name: Set up Python for pinned GitHub CLI provisioning
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Provision pinned job-local GitHub CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import shutil
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          import urllib.request
+
+          version = "2.102.0"
+          archive_sha256 = "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
+          binary_sha256 = "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b"
+          url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
+          if sys.platform != "linux" or platform.machine() not in ("x86_64", "amd64"):
+              raise RuntimeError("pinned GitHub CLI requires Linux x64")
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if not parent.is_absolute():
+              raise RuntimeError("RUNNER_TEMP must be absolute")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("runner temporary ancestry must be real directories")
+          root = Path(tempfile.mkdtemp(prefix="cwl-gh-", dir=parent))
+          os.chmod(root, 0o700)
+          try:
+              archive = root / "gh.tar.gz"
+              with urllib.request.urlopen(url, timeout=30) as response, archive.open("xb") as output:
+                  total = 0
+                  digest = hashlib.sha256()
+                  while True:
+                      chunk = response.read(1024 * 1024)
+                      if not chunk:
+                          break
+                      total += len(chunk)
+                      if total > 20 * 1024 * 1024:
+                          raise RuntimeError("GitHub CLI archive exceeds bound")
+                      digest.update(chunk)
+                      output.write(chunk)
+              if digest.hexdigest() != archive_sha256:
+                  raise RuntimeError("GitHub CLI archive checksum mismatch")
+              expected_member = f"gh_{version}_linux_amd64/bin/gh"
+              with tarfile.open(archive, "r:gz") as source:
+                  members = source.getmembers()
+                  selected = [member for member in members if member.name == expected_member]
+                  if len(selected) != 1 or not selected[0].isfile():
+                      raise RuntimeError("GitHub CLI archive must contain one regular binary")
+                  member = selected[0]
+                  if not 0 < member.size <= 64 * 1024 * 1024:
+                      raise RuntimeError("GitHub CLI binary size exceeds bound")
+                  stream = source.extractfile(member)
+                  if stream is None:
+                      raise RuntimeError("GitHub CLI binary could not be read")
+                  with stream:
+                      content = stream.read(member.size + 1)
+                  if len(content) != member.size or hashlib.sha256(content).hexdigest() != binary_sha256:
+                      raise RuntimeError("GitHub CLI binary checksum mismatch")
+              # Copy this single pinned regular member; never extract archive paths or links.
+              bindir = root / "bin"
+              bindir.mkdir(mode=0o700)
+              executable = bindir / "gh"
+              with executable.open("xb") as output:
+                  output.write(content)
+              executable.chmod(0o700)
+              result = subprocess.run([str(executable), "--version"], check=True,
+                                      capture_output=True, text=True, timeout=10)
+              if not result.stdout.splitlines() or not result.stdout.splitlines()[0].startswith(f"gh version {version} "):
+                  raise RuntimeError("GitHub CLI version mismatch")
+              archive.unlink()
+              with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+                  output.write(str(bindir) + "\n")
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+                  output.write("CWL_GH_BIN=" + str(executable) + "\n")
+                  info = root.stat()
+                  output.write("CWL_GH_ROOT=" + str(root) + "\n")
+                  output.write("CWL_GH_ROOT_DEVICE=" + str(info.st_dev) + "\n")
+                  output.write("CWL_GH_ROOT_INODE=" + str(info.st_ino) + "\n")
+              print("Installed checksum-verified job-local GitHub CLI " + version)
+          except BaseException:
+              shutil.rmtree(root)
+              raise
+          PY
+
+      - name: Verify pinned job-local GitHub CLI selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$CWL_GH_BIN" ] || [ -L "$CWL_GH_BIN" ] || [ ! -x "$CWL_GH_BIN" ]; then
+            echo "::error::Job-local GitHub CLI executable is missing or linked."
+            exit 1
+          fi
+          if [ "$(command -v gh)" != "$CWL_GH_BIN" ]; then
+            echo "::error::GitHub CLI PATH selection differs from the pinned job-local binary."
+            exit 1
+          fi
+          printf '%s  %s\n' '7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b' "$CWL_GH_BIN" | sha256sum --check --status
+          version_output="$(gh --version)"
+          case "$version_output" in
+            'gh version 2.102.0 '*) printf '%s\n' "GitHub CLI 2.102.0 path and checksum verified." ;;
+            *) echo "::error::GitHub CLI selected an unsupported version."; exit 1 ;;
+          esac
+
       - name: Dispatch current-head CodeQL scan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -531,3 +793,37 @@ jobs:
             --arg producer_source_sha "$live_merge" \
             '{event_type:"codeql-scan-v2",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head:{schema:"1",ref:$pr_head_ref,sha:$pr_head_sha},producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+      - name: Clean up this job's pinned GitHub CLI
+        if: always() && env.CWL_GH_ROOT != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+
+          root = Path(os.environ["CWL_GH_ROOT"])
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if (not root.is_absolute() or root.parent != parent
+                  or not re.fullmatch(r"cwl-gh-[A-Za-z0-9_-]+", root.name)
+                  or any(ord(c) < 32 for c in str(root))):
+              raise RuntimeError("refusing unrelated GitHub CLI cleanup path")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed GitHub CLI temporary ancestry")
+          try:
+              info = root.lstat()
+          except FileNotFoundError:
+              print("Owned GitHub CLI directory is already absent.")
+          else:
+              if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                      or info.st_dev != int(os.environ["CWL_GH_ROOT_DEVICE"])
+                      or info.st_ino != int(os.environ["CWL_GH_ROOT_INODE"])):
+                  raise RuntimeError("refusing changed GitHub CLI directory identity")
+              # No glob or shared-temp sweep: delete only this job's original directory.
+              shutil.rmtree(root)
+              print("Removed this job's checksum-verified GitHub CLI directory.")
+          PY

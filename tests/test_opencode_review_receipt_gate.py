@@ -49,6 +49,91 @@ def test_afipc_230_stale_changes_requested_are_not_current() -> None:
     assert "formal review" in reason
 
 
+@pytest.mark.parametrize("login", sorted(receipt.FORMAL_AUTHORS))
+def test_newer_same_publisher_dismissal_retires_older_approval(login: str) -> None:
+    """A current-head dismissal must not resurrect its publisher's older approval."""
+    approved = review(
+        commit=receipt.AFIPC_230_HEAD, state="APPROVED", login=login, review_id=1
+    )
+    dismissed = review(
+        commit=receipt.AFIPC_230_HEAD, state="DISMISSED", login=login, review_id=2
+    )
+    dismissed["body"] = ""
+    found, reason = receipt.evaluate_receipts(
+        [approved, dismissed], receipt.AFIPC_230_HEAD
+    )
+    assert found is None
+    assert "dismissed" in reason.lower()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["dismissed-only", "other-publisher", "newer-approved", "newer-changes-requested"],
+)
+def test_dismissal_preserves_independent_and_newer_receipts(case: str) -> None:
+    """Dismissal retires older same-publisher evidence, not independent or fresh verdicts."""
+    approved = review(commit=receipt.AFIPC_230_HEAD, state="APPROVED", review_id=1)
+    dismissed = review(commit=receipt.AFIPC_230_HEAD, state="DISMISSED", review_id=2)
+    if case == "dismissed-only":
+        found, reason = receipt.evaluate_receipts([dismissed], receipt.AFIPC_230_HEAD)
+        assert found is None
+        assert "dismissed" in reason
+    elif case == "other-publisher":
+        dismissed["user"] = {"login": "github-actions[bot]"}
+        found, _ = receipt.evaluate_receipts([approved, dismissed], receipt.AFIPC_230_HEAD)
+        assert found is approved
+    else:
+        latest = review(
+            commit=receipt.AFIPC_230_HEAD,
+            state="APPROVED" if case == "newer-approved" else "CHANGES_REQUESTED",
+            review_id=3,
+        )
+        found, _ = receipt.evaluate_receipts(
+            [approved, dismissed, latest], receipt.AFIPC_230_HEAD
+        )
+        assert found is latest
+
+
+@pytest.mark.parametrize("invalid_field", ["author", "commit", "body-head", "id"])
+def test_unbound_dismissal_does_not_retire_valid_receipt(invalid_field: str) -> None:
+    """Only a recognized publisher's identified exact-head dismissal retires evidence."""
+    approved = review(commit=receipt.AFIPC_230_HEAD, state="APPROVED", review_id=1)
+    dismissed = review(commit=receipt.AFIPC_230_HEAD, state="DISMISSED", review_id=2)
+    if invalid_field == "author":
+        dismissed["user"] = {"login": "seonghobae"}
+    elif invalid_field == "commit":
+        dismissed["commit_id"] = "b" * 40
+    elif invalid_field == "body-head":
+        dismissed["body"] = f"## Pull request overview\nHead SHA: `{'b' * 40}`"
+    else:
+        dismissed.pop("id")
+    found, _ = receipt.evaluate_receipts([approved, dismissed], receipt.AFIPC_230_HEAD)
+    assert found is approved
+
+
+def test_graphql_dismissal_fails_closed_through_receipt_cli(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """REST approval plus newer GraphQL dismissal produces a failing required-gate exit."""
+    approved = review(commit=receipt.AFIPC_230_HEAD, state="APPROVED", review_id=1)
+    dismissed = {
+        "id": 2,
+        "state": "DISMISSED",
+        "author": {"login": "opencode-agent[bot]"},
+        "commit": {"oid": receipt.AFIPC_230_HEAD},
+        "body": "",
+    }
+    path = tmp_path / "reviews.json"
+    path.write_text(json.dumps([approved, dismissed]), encoding="utf-8")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    assert receipt.main(
+        ["--head-sha", receipt.AFIPC_230_HEAD, "--reviews-file", str(path)]
+    ) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "dismissed" in captured.err
+
+
 def test_kaefa_79_stub_has_no_current_head_formal_receipt() -> None:
     """A 3-second green stub without a product-file review stays fail-closed."""
     found, reason = receipt.evaluate_receipts([], receipt.KAEFA_79_HEAD)
