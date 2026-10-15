@@ -199,9 +199,9 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
     job run (~20s), succeed, and publish the correctly expanded names. Since
     the dispatch+exact-job-wake rewrite
     (docs/adr/0025-codeql-required-workflow-dispatch-architecture.md),
-    `analyze-head` has two steps: the verdict-read step and the runner-release
-    step. Both still gate at step level on `code == 'true'`, never at job
-    level. The one-shot coordinator that POSTs the remaining language matrix
+    `analyze-head` gates the verdict-read and runner-release steps, together
+    with their three pinned-CLI prerequisites, at step level on `code == 'true'`,
+    never at job level. Docs-only shards do not provision an unused CLI. The one-shot coordinator that POSTs the remaining language matrix
     is a separate job. `analyze-merge` no longer exists: it was required
     nowhere (PR #1766) and was dropped, not migrated.
     """
@@ -212,7 +212,13 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
 
     analyze_head = _top_level_job_block(workflow, "analyze-head")
     assert not re.search(r"(?m)^    if:", analyze_head)
-    assert analyze_head.count("needs.detect-languages.outputs.code == 'true'") == 2
+    # Keep both substantive consumer guards and every new prerequisite guard.
+    guard = "needs.detect-languages.outputs.code == 'true'"
+    guarded = re.findall(r"(?m)^        if: (.+)$", analyze_head)
+    assert len(guarded) == 6
+    assert guarded.count(guard) == 4
+    assert guarded.count("always() && " + guard) == 1
+    assert guarded.count("always() && env.CWL_GH_ROOT != ''") == 1
     assert "analyze-merge:" not in workflow
 
 

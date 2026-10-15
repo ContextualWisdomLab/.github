@@ -1,0 +1,348 @@
+name: TEPP Rust Foundation CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+  CARGO_NEXTEST_VERSION: "0.9.140"
+  CARGO_DENY_VERSION: "0.19.7"
+  CARGO_LLVM_COV_VERSION: "0.8.6"
+
+
+jobs:
+  repository-contracts:
+    name: Repository contracts and Python branch coverage
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Install pinned Python quality dependency
+        run: python3 -m pip install --disable-pip-version-check --no-deps --require-hashes -r requirements-quality.txt
+      - name: Exercise repository tooling with branch coverage
+        run: python3 -m coverage run --branch -m unittest discover -s tests/quality -p 'test_*.py'
+      - name: Enforce repository tooling coverage
+        run: python3 -m coverage report --fail-under=100 --show-missing
+      - name: Validate workspace contract
+        run: python3 scripts/check_workspace_contract.py
+      - name: Validate Rust documentation contract
+        run: python3 scripts/check_docstrings.py
+      - name: Generate and validate release SBOM/provenance evidence
+        run: |
+          python3 scripts/release_evidence.py generate \
+            --repository-root . \
+            --output-directory "${RUNNER_TEMP}/tepp-release-evidence" \
+            --git-commit "${GITHUB_SHA}"
+          python3 scripts/release_evidence.py validate \
+            --evidence-directory "${RUNNER_TEMP}/tepp-release-evidence" \
+            --repository-root . \
+            --expected-git-commit "${GITHUB_SHA}"
+
+  rust-quality:
+    name: Format, lint, test, rustdoc, and dependency policy
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
+      - name: Install pinned Rust quality tools
+        run: |
+          cargo install cargo-nextest --root "$CARGO_HOME" --locked --version "$CARGO_NEXTEST_VERSION"
+          cargo install cargo-deny --root "$CARGO_HOME" --locked --version "$CARGO_DENY_VERSION"
+      - name: Verify pinned Rust quality tool versions
+        run: |
+          test -x "${CARGO_HOME:?}/bin/cargo-nextest"
+          test -x "$CARGO_HOME/bin/cargo-deny"
+          version="$("$CARGO_HOME/bin/cargo-nextest" --version)"
+          case "$version" in
+            "cargo-nextest $CARGO_NEXTEST_VERSION"|"cargo-nextest $CARGO_NEXTEST_VERSION "*) ;;
+            *) echo "Unexpected cargo-nextest version: $version" >&2; exit 1 ;;
+          esac
+          version="$("$CARGO_HOME/bin/cargo-deny" --version)"
+          case "$version" in
+            "cargo-deny $CARGO_DENY_VERSION"|"cargo-deny $CARGO_DENY_VERSION "*) ;;
+            *) echo "Unexpected cargo-deny version: $version" >&2; exit 1 ;;
+          esac
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run test suite without retries
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests separately
+        run: cargo test --doc --workspace --all-features
+      - name: Build warning-free documentation
+        run: cargo doc --workspace --all-features --no-deps
+      - name: Enforce dependency, license, advisory, and source policy
+        run: cargo deny check
+
+  production-coverage:
+    name: Production line and branch coverage
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
+      - name: Install pinned Rust toolchain with LLVM tools
+        run: rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
+      - name: Install pinned nightly with LLVM tools
+        run: rustup toolchain install nightly-2026-08-21 --profile minimal --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --root "$CARGO_HOME" --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Verify pinned cargo-llvm-cov version
+        run: |
+          test -x "${CARGO_HOME:?}/bin/cargo-llvm-cov"
+          version="$("$CARGO_HOME/bin/cargo-llvm-cov" llvm-cov --version)"
+          case "$version" in
+            "cargo-llvm-cov $CARGO_LLVM_COV_VERSION"|"cargo-llvm-cov $CARGO_LLVM_COV_VERSION "*) ;;
+            *) echo "Unexpected cargo-llvm-cov version: $version" >&2; exit 1 ;;
+          esac
+      - name: Generate exact line coverage with region diagnostics
+        id: line-report
+        # mlx_native_receipt is excluded exactly like sqlx_live.rs: it is a
+        # macOS/MLX-only device receipt probe whose success path cannot
+        # execute on the Linux coverage runner (see ADR 0025). Its macOS
+        # behaviour is covered by the crate's cfg(macos) tests.
+        run: cargo llvm-cov --workspace --all-features --json --output-path coverage.json --ignore-filename-regex 'sqlx_live\.rs|mlx_native_receipt'
+      - name: Export exact authored line coverage
+        run: cargo llvm-cov report --lcov --output-path coverage.lcov --ignore-filename-regex 'sqlx_live\.rs|mlx_native_receipt'
+      - name: Enforce complete authored line coverage
+        run: python3 scripts/check_coverage.py coverage.lcov --kind lines --format lcov
+      - name: Show exact missing line diagnostics
+        if: ${{ failure() && steps.line-report.outcome == 'success' }}
+        run: |
+          LLVM_COV_FLAGS="--show-line-counts-or-regions" cargo llvm-cov report --text --show-missing-lines --show-instantiations
+          test -f coverage.lcov || cargo llvm-cov report --lcov --output-path coverage.lcov --ignore-filename-regex 'sqlx_live\.rs|mlx_native_receipt'
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("coverage.json").read_text(encoding="utf-8"))
+          for data in report.get("data", []):
+              for file_record in data.get("files", []):
+                  filename = file_record.get("filename", "<unknown>")
+                  lines = file_record.get("summary", {}).get("lines", {})
+                  covered = int(lines.get("covered", 0))
+                  count = int(lines.get("count", 0))
+                  if covered < count:
+                      print(f"INCOMPLETE_FILE {filename} {covered}/{count}")
+                  for segment in file_record.get("segments", []):
+                      if len(segment) < 6:
+                          continue
+                      line_number, column_number, execution_count = segment[:3]
+                      has_count, is_region_entry, is_gap_region = segment[3:6]
+                      if (
+                          has_count
+                          and is_region_entry
+                          and not is_gap_region
+                          and int(execution_count) == 0
+                      ):
+                          print(
+                              "UNCOVERED_REGION "
+                              f"{filename}:{line_number}:{column_number}"
+                          )
+              for function_record in data.get("functions", []):
+                  if int(function_record.get("count", 0)) != 0:
+                      continue
+                  filenames = function_record.get("filenames", [])
+                  filename = filenames[0] if filenames else "<unknown>"
+                  print(
+                      "UNCOVERED_FUNCTION "
+                      f"{filename} {function_record.get('name', '<unknown>')}"
+                  )
+
+          current_source = None
+          for raw_line in Path("coverage.lcov").read_text(encoding="utf-8").splitlines():
+              if raw_line.startswith("SF:"):
+                  current_source = raw_line[3:]
+              elif raw_line.startswith("DA:") and current_source is not None:
+                  line_number, count, *_ = raw_line[3:].split(",")
+                  if int(count) == 0:
+                      print(f"UNCOVERED_LINE {current_source}:{line_number}")
+          PY
+      - name: Upload exact line coverage diagnostics
+        if: ${{ failure() && steps.line-report.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: line-coverage-diagnostics
+          path: |
+            coverage.json
+            coverage.lcov
+          if-no-files-found: error
+          retention-days: 1
+      - name: Generate exact branch coverage
+        id: branch-report
+        if: ${{ !cancelled() }}
+        run: cargo +nightly-2026-08-21 llvm-cov --branch --workspace --all-features --json --output-path coverage-branches.json --ignore-filename-regex 'sqlx_live\.rs|mlx_native_receipt'
+      - name: Enforce complete branch coverage
+        if: ${{ !cancelled() && steps.branch-report.outcome == 'success' }}
+        run: python3 scripts/check_coverage.py coverage-branches.json --kind branches
+      - name: Show exact missing branch diagnostics
+        if: ${{ failure() && steps.branch-report.outcome == 'success' }}
+        run: cargo +nightly-2026-08-21 llvm-cov report --branch --text --show-missing-lines
+      - name: Upload exact branch coverage diagnostics
+        if: ${{ failure() && steps.branch-report.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: branch-coverage-diagnostics
+          path: coverage-branches.json
+          if-no-files-found: error
+          retention-days: 1
+
+  live-postgres:
+    name: Live PostgreSQL integration
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.9-alpine
+        env:
+          POSTGRES_USER: tepp
+          POSTGRES_PASSWORD: tepp_ci
+          POSTGRES_DB: tepp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tepp -d tepp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEPP_LIVE_POSTGRES: "1"
+      DATABASE_URL: postgres://tepp:tepp_ci@localhost:5432/tepp
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@631c942040754b6e095e929c1677c07e10ed4f87
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Create private Python environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m venv "${RUNNER_TEMP:?}/tepp-python-venv"
+          printf 'VIRTUAL_ENV=%s\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "${RUNNER_TEMP}/tepp-python-venv" >>"${GITHUB_PATH:?}"
+          export PATH="${RUNNER_TEMP}/tepp-python-venv/bin:${PATH}"
+          python3 -m pip --version
+      - name: Bootstrap hash-verified Rustup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # Fresh namespaces prevent reuse of persistent HOME state, not whole-VM isolation.
+          rust_root="$(mktemp -d "${RUNNER_TEMP:?}/tepp-rust-XXXXXXXXXX")"
+          export CARGO_HOME="$rust_root/.cargo" RUSTUP_HOME="$rust_root/.rustup"
+          rustup_init="$rust_root/rustup-init-1.29.1"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$rustup_init" \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          printf '%s  %s\n' \
+            dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 \
+            "$rustup_init" | sha256sum --check --strict
+          chmod 0755 "$rustup_init"
+          "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+          rm -f -- "$rustup_init"
+          "$CARGO_HOME/bin/rustup" --version
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\n' "$RUSTUP_HOME" "$CARGO_HOME" >>"${GITHUB_ENV:?}"
+          printf '%s/bin\n' "$CARGO_HOME" >>"${GITHUB_PATH:?}"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Run live-sqlx PostgreSQL integration
+        run: cargo test -p persistence_postgres --features live-sqlx --test live_postgres -- --nocapture
