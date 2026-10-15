@@ -1,0 +1,251 @@
+name: Noema reviewer quality
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  reviewer:
+    name: reviewer
+    if: >-
+      github.repository == 'ContextualWisdomLab/noema' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.base.repo.full_name == github.repository) ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 30
+    env:
+      NOEMA_CODEGRAPH_SANDBOX_SOURCE_IMAGE: gcr.io/distroless/java-base-debian13:nonroot
+      PYTHONPATH: ${{ github.workspace }}/reviewer:${{ github.workspace }}/packages/noema-core/src
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+    defaults:
+      run:
+        working-directory: reviewer
+    steps:
+      - name: Validate fixed caller and required guest capabilities
+        id: guest_preflight
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+        run: |
+          set -euo pipefail
+          test "$CALLER_REPOSITORY" = ContextualWisdomLab/noema
+          case "$CALLER_EVENT" in
+            pull_request)
+              test "$PR_HEAD_REPOSITORY" = "$CALLER_REPOSITORY"
+              test "$PR_BASE_REPOSITORY" = "$CALLER_REPOSITORY" ;;
+            push) test "$CALLER_REF" = refs/heads/main ;;
+            *) exit 1 ;;
+          esac
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          command -v git
+          command -v docker
+          docker info >/dev/null
+          NOEMA_JOB_TEMP="$RUNNER_TEMP/noema-reviewer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-reviewer"
+          umask 077
+          mkdir -- "$NOEMA_JOB_TEMP"
+          printf 'NOEMA_JOB_TEMP=%s\n' "$NOEMA_JOB_TEMP" >> "$GITHUB_ENV"
+          printf 'created=true\n' >> "$GITHUB_OUTPUT"
+          printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$NOEMA_JOB_TEMP" >> "$GITHUB_ENV"
+          printf 'PIP_CACHE_DIR=%s/pip-cache\n' "$NOEMA_JOB_TEMP" >> "$GITHUB_ENV"
+
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: verify exact checkout
+        shell: bash
+        env:
+          NOEMA_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$NOEMA_EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Invalid expected head SHA.\n'
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$NOEMA_EXPECTED_HEAD_SHA"
+
+      - name: setup node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.19.0"
+
+      - name: setup python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: install (hash-pinned dependencies)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$NOEMA_JOB_TEMP/quality-venv"
+          "$NOEMA_JOB_TEMP/quality-venv/bin/python" -m pip install --require-hashes --no-deps -r requirements-ci-hashes.txt
+          printf '%s/quality-venv/bin\n' "$NOEMA_JOB_TEMP" >> "$GITHUB_PATH"
+
+      - name: test noema-core (100% line+branch coverage gate)
+        working-directory: packages/noema-core
+        run: python -m pytest
+
+      - name: docstring coverage noema-core (100% gate)
+        working-directory: packages/noema-core
+        run: python -m interrogate -c pyproject.toml src/noema_core
+
+      - name: test (100% line+branch coverage gate)
+        run: python -m pytest
+
+      - name: docstring coverage (100% gate)
+        run: python -m interrogate -c pyproject.toml noema_reviewer
+
+      - name: smoke-test installed reviewer wheel and sdist-to-wheel path
+        run: |
+          set -euo pipefail
+          wheel_dir="$NOEMA_JOB_TEMP/noema-reviewer-wheel"
+          sdist_dir="$NOEMA_JOB_TEMP/noema-reviewer-sdist"
+          sdist_wheel_dir="$NOEMA_JOB_TEMP/noema-reviewer-sdist-wheel"
+          direct_venv="$NOEMA_JOB_TEMP/noema-reviewer-install-smoke"
+          sdist_venv="$NOEMA_JOB_TEMP/noema-reviewer-sdist-install-smoke"
+          mkdir -p "$wheel_dir" "$sdist_dir" "$sdist_wheel_dir"
+
+          python -m pip wheel . --no-deps --no-build-isolation --wheel-dir "$wheel_dir"
+          direct_wheel="$(find "$wheel_dir" -maxdepth 1 -type f -name 'noema_reviewer-*.whl' -print -quit)"
+          test -n "$direct_wheel"
+
+          SDIST_DIR="$sdist_dir" SDIST_NAME_FILE="$NOEMA_JOB_TEMP/noema-reviewer-sdist-name" python - <<'PY'
+          import os
+          from pathlib import Path
+          from build_backend import build_sdist
+
+          sdist_name = build_sdist(os.environ["SDIST_DIR"])
+          Path(os.environ["SDIST_NAME_FILE"]).write_text(sdist_name, encoding="utf-8")
+          PY
+          sdist="$sdist_dir/$(cat "$NOEMA_JOB_TEMP/noema-reviewer-sdist-name")"
+          test -f "$sdist"
+          python -m pip wheel "$sdist" --no-deps --no-build-isolation --wheel-dir "$sdist_wheel_dir"
+          sdist_wheel="$(find "$sdist_wheel_dir" -maxdepth 1 -type f -name 'noema_reviewer-*.whl' -print -quit)"
+          test -n "$sdist_wheel"
+
+          for contract in direct sdist; do
+            if [ "$contract" = direct ]; then
+              wheel="$direct_wheel"
+              venv_dir="$direct_venv"
+            else
+              wheel="$sdist_wheel"
+              venv_dir="$sdist_venv"
+            fi
+            python -m venv --system-site-packages "$venv_dir"
+            (
+              cd "$NOEMA_JOB_TEMP"
+              PYTHONPATH='' "$venv_dir/bin/python" -m pip install --no-deps "$wheel"
+              PYTHONPATH='' "$venv_dir/bin/python" - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          import noema_core
+          import noema_core.agent
+          import noema_reviewer
+          from noema_reviewer.cli import parse_args
+
+          canonical_agent = Path(os.environ["GITHUB_WORKSPACE"]) / "packages" / "noema-core" / "src" / "noema_core" / "agent.py"
+          installed_agent = Path(noema_core.agent.__file__)
+          assert hashlib.sha256(installed_agent.read_bytes()).digest() == hashlib.sha256(canonical_agent.read_bytes()).digest()
+          assert noema_core.NOEMA_PERSONA
+          assert noema_reviewer.build_agent is not None
+          assert parse_args([]).repo == ""
+          PY
+            )
+          done
+
+      - name: smoke-test isolated editable reviewer with locked runtime dependencies
+        run: |
+          set -euo pipefail
+          editable_venv="$NOEMA_JOB_TEMP/noema-reviewer-editable-smoke"
+          python -m venv "$editable_venv"
+          "$editable_venv/bin/python" -m pip install --require-hashes --no-deps -r requirements-ci-hashes.txt
+          "$editable_venv/bin/python" -m pip install --no-deps -e .
+          (
+            cd "$NOEMA_JOB_TEMP"
+            PYTHONPATH='' "$editable_venv/bin/python" - <<'PY'
+          import noema_core
+          import noema_reviewer
+
+          assert noema_core.build_agent is not None
+          assert noema_reviewer.build_agent is not None
+          PY
+          )
+
+      - name: install lock-pinned CodeGraph tooling for sandbox smoke test
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: npm ci --prefix ../.github/codegraph --ignore-scripts --omit=dev --no-audit --no-fund
+
+      - name: install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.74.0
+          cache: false
+
+      - name: prepare authenticated and scanned CodeGraph sandbox image
+        run: bash ../scripts/prepare-codegraph-sandbox.sh
+
+      - name: smoke-test the real no-network CodeGraph sandbox
+        run: |
+          set -euo pipefail
+          source_root="$NOEMA_JOB_TEMP/noema-codegraph-smoke"
+          mkdir -p "$source_root"
+          printf 'export const commercialReadiness = true;\n' >"$source_root/example.ts"
+          python - <<'PY'
+          import os
+          from noema_reviewer.sandbox import DockerCodeGraphRunner
+
+          runner = DockerCodeGraphRunner()
+          source_root = os.path.join(os.environ["NOEMA_JOB_TEMP"], "noema-codegraph-smoke")
+          assert runner(["codegraph", "init", "-i"], source_root) == ""
+          assert runner(["codegraph", "sync"], source_root) == ""
+          assert runner(["codegraph", "status"], source_root) == ""
+          output = runner(
+              ["codegraph", "explore", "commercialReadiness"],
+              source_root,
+          )
+          if (
+              "Sandbox copied 1 files" not in output
+              or "## codegraph explore" not in output
+              or "No relevant code found" in output
+              or "export const commercialReadiness = true;" not in output
+          ):
+              raise SystemExit("CodeGraph sandbox smoke did not retrieve the indexed fixture")
+          print(output[:2000])
+          PY
+
+
+      - name: Clean up job-private temporary state
+        if: ${{ always() && steps.guest_preflight.outputs.created == 'true' }}
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$RUNNER_TEMP/noema-reviewer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-reviewer"
+          test "$NOEMA_JOB_TEMP" = "$expected"
+          rm -rf -- "$NOEMA_JOB_TEMP"
