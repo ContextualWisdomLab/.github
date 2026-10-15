@@ -148,6 +148,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
         'case "$endpoint" in\n'
+        '  */git/ref/heads/*) test "${FAKE_BASE_REF_FAIL:-0}" = 0 || exit 1; if [ -n "${FAKE_BASE_REF_EXPECTED_PATH:-}" ]; then test "${endpoint:-${path:-}}" = "$FAKE_BASE_REF_EXPECTED_PATH"; fi; if [ -n "${FAKE_BASE_REF_JSON:-}" ]; then printf \'%s\\n\' "$FAKE_BASE_REF_JSON"; else printf \'%s\\n\' "$FAKE_PULL_JSON" | jq \'{ref:("refs/heads/"+(.base.ref//"main")),object:{type:"commit",sha:.base.sha}}\'; fi ;;\n'
         '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
         '  repos/ContextualWisdomLab/*/git/commits/*) printf \'%s\\n\' "$FAKE_PRODUCER_COMMIT_JSON" ;;\n'
         '  *) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
@@ -1212,6 +1213,7 @@ def _run_settlement_step(
         "  exit 1\n"
         "fi\n"
         'case "$endpoint" in\n'
+        '  */git/ref/heads/*) test "${FAKE_BASE_REF_FAIL:-0}" = 0 || exit 1; if [ -n "${FAKE_BASE_REF_EXPECTED_PATH:-}" ]; then test "${endpoint:-${path:-}}" = "$FAKE_BASE_REF_EXPECTED_PATH"; fi; if [ -n "${FAKE_BASE_REF_JSON:-}" ]; then printf \'%s\\n\' "$FAKE_BASE_REF_JSON"; else printf \'%s\\n\' "$FAKE_PULL_JSON" | jq \'{ref:("refs/heads/"+(.base.ref//"main")),object:{type:"commit",sha:.base.sha}}\'; fi ;;\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  repos/ContextualWisdomLab/naruon/actions/runs/42/jobs*) printf \'%s\\n\' "$FAKE_REQUIRED_JOB_PAGES" ;;\n'
         '  repos/ContextualWisdomLab/naruon/actions/runs/42) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
@@ -1819,3 +1821,72 @@ def test_owned_status_configuration_survives_failed_analysis_gate(tmp_path: Path
                                  "GITHUB_OUTPUT": str(output)})
     assert result.returncode == 0, result.stdout + result.stderr
     assert output.read_text().splitlines() == ["repository=disksage", "available=true"]
+
+
+def test_stale_pr_base_snapshot_uses_authenticated_branch_ref(tmp_path):
+    """A stale PR base snapshot cannot override the actual base branch tip."""
+    pull = _matching_pull_request()
+    pull['base']['sha'] = 'f' * 40
+    result = _run_validate_step(tmp_path, {'FAKE_BASE_REF_JSON': json.dumps({
+        'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'a' * 40}})}, pull)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('ref', [
+    {}, {'ref': 'refs/heads/other', 'object': {'type': 'commit', 'sha': 'a' * 40}},
+    {'ref': 'refs/heads/main', 'object': {'type': 'tag', 'sha': 'a' * 40}},
+    {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'bad'}},
+    {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'f' * 40}},
+])
+def test_branch_ref_mismatch_cannot_admit_dispatch(tmp_path, ref):
+    """Only an exact current branch commit may admit the protected handler."""
+    result = _run_validate_step(tmp_path, {'FAKE_BASE_REF_JSON': json.dumps(ref)}, _matching_pull_request())
+    assert result.returncode != 0
+
+
+def test_settlement_stale_snapshot_does_not_replace_current_branch(tmp_path):
+    """Settlement accepts bound current branch despite historical PR base.sha."""
+    pull = _matching_pull_request()
+    pull['base']['sha'] = 'f' * 40
+    result, post = _run_settlement_step(tmp_path, pull=pull, extra_env={
+        'FAKE_BASE_REF_JSON': json.dumps({'ref': 'refs/heads/main',
+                                        'object': {'type': 'commit', 'sha': 'a' * 40}})})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert post.exists()
+
+
+def test_settlement_changed_branch_does_not_wake_required_run(tmp_path):
+    """A moved actual base branch forbids wake even when the PR snapshot matches."""
+    result, post = _run_settlement_step(tmp_path, extra_env={
+        'FAKE_BASE_REF_JSON': json.dumps({'ref': 'refs/heads/main',
+                                        'object': {'type': 'commit', 'sha': 'f' * 40}})})
+    assert result.returncode != 0
+    assert not post.exists()
+
+
+@pytest.mark.parametrize('branch_sha,expected', [('a' * 40, 0), ('f' * 40, 1)])
+def test_prescan_rechecks_actual_base_branch(tmp_path, branch_sha, expected):
+    """Execute the privileged boundary with stale PR metadata and live ref drift."""
+    script = _extract_run_block(WORKFLOW_PATH.read_text(),
+                               'Re-validate live pull request metadata before privileged scan')
+    fake = tmp_path / 'gh'
+    fake.write_text('#!/bin/bash\ncase "$*" in\n'
+                    '*git/ref/heads/*) printf "%s\\n" "$FAKE_BASE_REF_JSON" ;;\n'
+                    '*) printf "%s\\n" "$FAKE_PULL_JSON" ;;\nesac\n')
+    fake.chmod(0o700)
+    pull = _matching_pull_request()
+    pull['base']['sha'] = 'e' * 40
+    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}",
+               FAKE_PULL_JSON=json.dumps(pull), FAKE_BASE_REF_JSON=json.dumps({
+                   'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': branch_sha}}),
+               TARGET_REPOSITORY='ContextualWisdomLab/naruon', PR_NUMBER='42',
+               EXPECTED_BASE_REF='main', EXPECTED_BASE_SHA='a' * 40,
+               EXPECTED_HEAD_REF='feature', EXPECTED_HEAD_SHA='b' * 40)
+    result = subprocess.run(['/bin/bash', '-c', script], env=env, capture_output=True, text=True)
+    assert result.returncode == expected, result.stdout + result.stderr
+
+
+def test_handler_ref_transport_failure_is_closed(tmp_path):
+    """No historical-base fallback when authenticated reference fetching fails."""
+    result = _run_validate_step(tmp_path, {'FAKE_BASE_REF_FAIL': '1'}, _matching_pull_request())
+    assert result.returncode != 0
