@@ -69,14 +69,24 @@ def _read_binding(binding: Path) -> bytes | None:
         os.close(descriptor)
 
 
+def _unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject a sidecar object that repeats a field."""
+    found: dict[str, object] = {}
+    for key, value in pairs:
+        if key in found:
+            raise ValueError("duplicate sidecar field")
+        found[key] = value
+    return found
+
+
 def _binding_matches(binding: Path, source: str) -> bool:
     """Return whether the sidecar is exactly this source identity."""
     payload = _read_binding(binding)
     if payload is None:
         return False
     try:
-        parsed = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_fields)
+    except (UnicodeDecodeError, ValueError):
         return False
     return parsed == {"source": source}
 

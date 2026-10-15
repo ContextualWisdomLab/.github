@@ -139,6 +139,78 @@ def test_relative_missing_and_nonregular_artifacts_are_stale(tmp_path):
     assert hard.value.code == "SRC03-ART-STALE"
 
 
+def test_duplicate_source_key_refuses_artifact_body(tmp_path):
+    """A repeated source key is stale and does not approve the artifact body."""
+    workspace, output = _output(tmp_path)
+    artifact = output / "podman-info.json"
+    body = b'{"host":{"sentinel":"FOREIGN-BODY-NOT-APPROVED"}}\n'
+    artifact.write_bytes(body)
+    sidecar = (
+        b'{"source":"' + OTHER.encode("ascii") + b'","source":"'
+        + HEAD.encode("ascii") + b'"}'
+    )
+    artifact.with_name(artifact.name + ".source.json").write_bytes(sidecar)
+    with pytest.raises(SourceArtifactError) as caught:
+        _admit(workspace, artifact)
+    assert caught.value.code == "SRC03-ART-STALE"
+    record = caught.value.record
+    assert record["result"] == "refused"
+    assert record["bound"] is False
+    assert record["source"] == HEAD
+    assert record["fixture"] == str(artifact)
+    assert b"FOREIGN-BODY-NOT-APPROVED" not in json.dumps(record).encode("utf-8")
+    assert artifact.read_bytes() == body
+    status = main(
+        [
+            "--workspace",
+            str(workspace),
+            "--job",
+            JOB,
+            "--source",
+            HEAD,
+            "--run-id",
+            RUN_ID,
+            "--run-attempt",
+            ATTEMPT,
+            "--artifact",
+            str(artifact),
+        ]
+    )
+    assert status == 1
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.ci.qsr_source_artifacts",
+            "--workspace",
+            str(workspace),
+            "--job",
+            JOB,
+            "--source",
+            HEAD,
+            "--run-id",
+            RUN_ID,
+            "--run-attempt",
+            ATTEMPT,
+            "--artifact",
+            str(artifact),
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    assert completed.returncode == 1
+    assert b"SRC03-ART-STALE" in completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["code"] == "SRC03-ART-STALE"
+    assert payload["bound"] is False
+    assert payload["result"] == "refused"
+    assert b"FOREIGN-BODY-NOT-APPROVED" not in completed.stdout
+    assert b"FOREIGN-BODY-NOT-APPROVED" not in completed.stderr
+    assert artifact.read_bytes() == body
+
+
 def test_bad_sidecar_is_stale_not_symlink_or_empty(tmp_path):
     """A nonempty regular artifact with an unbound sidecar stays stale."""
     workspace, output = _output(tmp_path)
