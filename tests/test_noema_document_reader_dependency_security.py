@@ -35,6 +35,8 @@ def test_document_reader_transitives_include_security_fixes() -> None:
     for package_name, minimum_version in {
         "fast-uri": (3, 1, 8),
         "ip-address": (10, 7, 1),
+        "@modelcontextprotocol/sdk": (1, 31, 0),
+        "proxy-addr": (2, 0, 8),
     }.items():
         locked_versions = _locked_versions(lock_data, package_name)
         assert locked_versions
@@ -59,4 +61,6 @@ def test_document_reader_source_owns_transitive_security_fixes() -> None:
     assert package_data["overrides"] == {
         "fast-uri": "3.1.8",
         "ip-address": "10.7.1",
+        "@modelcontextprotocol/sdk": "1.31.0",
+        "proxy-addr": "2.0.8",
     }

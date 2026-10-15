@@ -194,6 +194,35 @@ def test_bare_repository_directory_or_scope_root_is_rejected(
         )
 
 
+@pytest.mark.parametrize("report_text", [
+    "Assessed `python/fast_mlsirm/report.py@backup`; no findings.",
+    "Assessed `python/fast_mlsirm/report.py追加`; no findings.",
+    "Assessed `other/python/fast_mlsirm/report.py`; no findings.",
+    "Scope: `/workspace/strix-pr-scope.ABC123/python/fast_mlsirm@backup`.",
+    "Scope: `python/fast_mlsirm/../unrelated`. Reviewed `report.py`.",
+])
+def test_longer_or_traversing_report_identity_cannot_bind_scope(
+    tmp_path: Path, report_text: str
+) -> None:
+    """Otherwise-complete reports cannot authorize a partial path token."""
+    _write_report(tmp_path, report_text=report_text)
+    with pytest.raises(ValueError, match="does not identify a changed source file"):
+        report_scope.validate(tmp_path, [CHANGED_PATH])
+
+
+@pytest.mark.parametrize("report_text", [
+    "Assessed `python/fast_mlsirm/report.py:12:3`; no findings.",
+    "Assessed python/fast_mlsirm/report.py. No findings.",
+    "Directory `python/fast_mlsirm`; reviewed `report.py`.",
+])
+def test_exact_report_identity_with_context_is_accepted(
+    tmp_path: Path, report_text: str
+) -> None:
+    """Line references and separately named directory/file remain valid scope."""
+    _write_report(tmp_path, report_text=report_text)
+    report_scope.validate(tmp_path, [CHANGED_PATH])
+
+
 def test_cli_reports_validation_error_and_accepts_scoped_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

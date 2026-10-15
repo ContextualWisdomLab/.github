@@ -24,9 +24,10 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.smoke = SMOKE.read_text(encoding="utf-8")
 
     def test_default_scan_provisions_the_existing_gateway_sidecar(self) -> None:
-        """Every scan uses the five-provider gateway, never a direct pool."""
+        """Every scan uses literal auto through the gateway, never a direct pool."""
         self.assertIn("Provision contextual-orchestrator Strix sidecar", self.workflow)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.workflow)
+        self.assertIn("STRIX_MODEL: auto", self.workflow)
+        self.assertIn("CONTEXTUAL_ORCHESTRATOR_POOL: auto", self.workflow)
         self.assertIn("provider_mode=contextual_orchestrator", self.workflow)
         self.assertIn("STRIX_FALLBACK_MODELS: \"\"", self.workflow)
         self.assertNotIn(
@@ -48,7 +49,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         """A dispatch payload cannot select a direct provider route."""
         self.assertIn("github.event.client_payload.strix_llm", self.workflow)
         self.assertIn(
-            "Strix model overrides are limited to contextual-orchestrator/orchestrator/free",
+            "Strix model overrides must select literal auto",
             self.workflow,
         )
         for direct_route in ("nvidia_nim/*)", "openrouter/free", "openai-direct/gpt-5.4"):
@@ -75,7 +76,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.assertIn("contextual-orchestrator Strix sidecar", self.smoke)
         self.assertIn("active_strix_models=", self.smoke)
         self.assertIn(
-            '"$active_strix_models" = "contextual-orchestrator/orchestrator/free"',
+            '"$active_strix_models" = "auto"',
             self.smoke,
         )
         self.assertIn("Strix does not resolve a direct provider outside the gateway", self.smoke)

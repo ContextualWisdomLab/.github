@@ -10,7 +10,18 @@ from pathlib import Path
 
 # The PR scan target is a private directory holding only the changed files, so
 # a path under it (as Strix reports it) is bound to this invocation's scope.
-SCOPE_PATH_RE = re.compile(r"/workspace/strix-pr-scope\.[A-Za-z0-9]+/([A-Za-z0-9_./-]+)")
+# A sentence period ends a token only when a real delimiter (or end) follows it;
+# "name.:suffix" or "name.@suffix" is a different file, not the changed path.
+_TOKEN_DELIMITER = r"(?=$|[\s`\"'<>,;!?)])"
+PATH_TOKEN_END = (
+    r"(?=$|[\s`\"'<>,;!?)]"
+    r"|:(?=[0-9]+(?::[0-9]+)?(?:$|[\s`\"'<>,;!?)]|\." + _TOKEN_DELIMITER + r"))"
+    r"|\." + _TOKEN_DELIMITER + r")"
+)
+SCOPE_PATH_RE = re.compile(
+    r"(?<![\w./-])/workspace/strix-pr-scope\.[A-Za-z0-9]+/([A-Za-z0-9_./-]+)"
+    + PATH_TOKEN_END
+)
 
 
 def _names_scoped_ancestor(report: str, changed_paths: list[str]) -> bool:
@@ -22,8 +33,34 @@ def _names_scoped_ancestor(report: str, changed_paths: list[str]) -> bool:
     return False
 
 
+def _token(text: str) -> re.Pattern[str]:
+    """Match a path token only at whole-segment boundaries."""
+    return re.compile(rf"(?<![\w./-]){re.escape(text)}/?" + PATH_TOKEN_END)
+
+
+def _file_token(text: str) -> re.Pattern[str]:
+    """Match a filename token without accepting suffixes or child paths."""
+    return re.compile(rf"(?<![\w./-]){re.escape(text)}" + PATH_TOKEN_END)
+
+
+def names_changed_path(report: str, path: str) -> bool:
+    """Match exact file paths or a named directory plus its exact filename."""
+    if _file_token(path).search(report) is not None:
+        return True
+    directory, _, name = path.rpartition("/")
+    if not directory or _file_token(name).search(report) is None:
+        return False
+    if _token(directory).search(report) is not None:
+        return True
+    parts = directory.split("/")
+    return any(
+        _token("/".join(parts[:depth])).search(report)
+        for depth in range(2, len(parts) + 1)
+    )
+
+
 def validate(output: Path, changed_paths: list[str]) -> None:
-    """Validate that a completed Strix report covers changed source scope."""
+    """Raise ValueError unless one completed, unlinked report names changed scope."""
 
     if not output.is_dir() or output.is_symlink():
         raise ValueError("scan output directory is missing")
@@ -44,7 +81,7 @@ def validate(output: Path, changed_paths: list[str]) -> None:
     if metadata.get("status") != "completed" or results.get("scan_completed") is not True or results.get("success") is not True:
         raise ValueError("scan report is incomplete")
     report = report_path.read_text(encoding="utf-8")
-    if not any(path in report for path in changed_paths) and not _names_scoped_ancestor(report, changed_paths):
+    if not any(names_changed_path(report, path) for path in changed_paths) and not _names_scoped_ancestor(report, changed_paths):
         raise ValueError("scan report does not identify a changed source file")
 
 

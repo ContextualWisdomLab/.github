@@ -712,14 +712,9 @@ jobs:
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
           owner: ContextualWisdomLab
           repositories: ${{ steps.noema_credential.outputs.repository }}
-          permission-actions: read
-          permission-checks: read
           permission-contents: read
           permission-metadata: read
-          permission-pull-requests: write
-          permission-security-events: read
-          permission-statuses: read
-          permission-vulnerability-alerts: read
+          permission-pull-requests: read
 
       - name: Exchange Noema app token through OIDC
         if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'oidc'
@@ -812,7 +807,7 @@ jobs:
           visibility=""
           for target_visibility_attempt in 1 2 3 4 5 6; do
             if visibility="$(
-              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
+              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private == true then "private" elif .private == false then "public" else "" end)'
             )"; then
               break
             fi
@@ -896,6 +891,7 @@ jobs:
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
+          PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
@@ -906,6 +902,7 @@ jobs:
           fi
           python3 -m scripts.ci.personal_review_route \
             --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
+            --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
             --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
             --private-target "$PRIVATE_TARGET"
           echo 'selected=true' >>"$GITHUB_OUTPUT"
@@ -1019,6 +1016,8 @@ jobs:
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_ROUTE_SELECTED: ${{ steps.personal_route.outputs.selected }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -1048,8 +1047,10 @@ jobs:
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
           fi
           verdict_file="${RUNNER_TEMP}/noema-verdict-envelope.json"
-          rm -f "$verdict_file"
-          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --prepare-verdict-file "$verdict_file"
+          test ! -e "$verdict_file"
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py" \
+            --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD_SHA" --prepare-verdict-file "$verdict_file"
           if [ -f "$verdict_file" ]; then
             echo "prepared=true" >>"$GITHUB_OUTPUT"
           else
@@ -1071,6 +1072,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
+      - name: Refresh read-only Noema GitHub App metadata token after model
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
+        id: noema_publication_metadata_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_credential.outputs.repository }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
       - name: Refresh repository-scoped Noema GitHub App token for publication
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
         id: noema_github_app_publication_token
@@ -1080,14 +1094,9 @@ jobs:
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
           owner: ContextualWisdomLab
           repositories: ${{ steps.noema_credential.outputs.repository }}
-          permission-actions: read
-          permission-checks: read
           permission-contents: read
           permission-metadata: read
           permission-pull-requests: write
-          permission-security-events: read
-          permission-statuses: read
-          permission-vulnerability-alerts: read
 
       - name: Publish prepared Noema verdict on the exact live head
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
@@ -1096,6 +1105,8 @@ jobs:
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_publication_token.outputs['installation-id'] }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -1107,7 +1118,9 @@ jobs:
             echo "::error::Noema prepared-verdict output claimed success but its private envelope is missing."
             exit 1
           fi
-          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --publish-verdict-file "$verdict_file"
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py" \
+            --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD_SHA" --publish-verdict-file "$verdict_file"
 
   continue-noema-transport:
     needs: [admit-current-head, noema-review]

@@ -1208,7 +1208,10 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
         "state": review.get("state"),
         "body": review.get("body"),
         "submittedAt": review.get("submitted_at"),
-        "author": {"login": ((review.get("user") or {}).get("login"))},
+        "author": {
+            "login": ((review.get("user") or {}).get("login")),
+            **({"__typename": review["user"]["type"]} if (review.get("user") or {}).get("type") is not None else {}),
+        },
         "commit": {"oid": commit_id} if commit_id else None,
     }
 
@@ -2257,6 +2260,7 @@ def is_substantive_noema_app_approval(review: dict[str, Any], head: str) -> bool
     """
     if (
         review_author_login(review) not in {"cwl-noema-review", "cwl-noema-review[bot]"}
+        or (review.get("author") or {}).get("__typename") not in {None, "Bot"}
         or not is_bot_review_author(review)
         or (review.get("commit") or {}).get("oid") != head
         or not re.fullmatch(r"[0-9a-f]{40}", head)
@@ -2307,7 +2311,7 @@ def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
             or reviewer == author
             or is_automated_opencode_review(review)
             or reviewer == "github-actions"
-            or not review_matches_current_head(review, pr)
+            or (reviewer != "cwl-noema-review" and not review_matches_current_head(review, pr))
             or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
             or reviewer in seen_reviewers
         ):

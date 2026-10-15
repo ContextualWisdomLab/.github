@@ -1,0 +1,156 @@
+name: pg-erd-cloud quality
+
+# Fixed consumer only. Keep concurrency in the calling workflow, not here.
+# Requires disposable isolated capacity and consumer repository access.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 30
+    steps:
+      - name: Admit fixed caller before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          CALLER_REF: ${{ github.ref }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ "$CALLER_REPOSITORY" != "ContextualWisdomLab/pg-erd-cloud" ]; then
+            echo "Unsupported caller repository" >&2
+            exit 1
+          fi
+          case "$CALLER_EVENT" in
+            pull_request)
+              if [ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ] || [ "$PR_BASE_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+                echo "Unsupported pull request source" >&2
+                exit 1
+              fi
+              ;;
+            push|workflow_dispatch)
+              if [ "$CALLER_REF" != "refs/heads/main" ]; then
+                echo "Unsupported caller ref" >&2
+                exit 1
+              fi
+              ;;
+            *) echo "Unsupported caller event" >&2; exit 1 ;;
+          esac
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.10"
+
+      - name: Verify backend in a job-private environment
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          job_root="$(mktemp -d "${RUNNER_TEMP:?}/pg-erd-backend.XXXXXXXX")"
+          trap 'rm -rf -- "$job_root"' EXIT
+          unset PYTHONHOME PYTHONPATH
+          export PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+          export PIP_CONFIG_FILE=/dev/null
+          python -m venv "$job_root/venv"
+          export PATH="$job_root/venv/bin:$PATH"
+          cd backend
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --require-hashes -r ../.github/requirements.lock
+          cd ..
+          python -m unittest discover -s .github/tests -v
+          python .github/scripts/validate_codeql_backfill.py
+          actionlint .github/workflows/*.yml
+          shellcheck .github/scripts/*.sh
+          cd backend
+          export PYTHONPATH=.
+          mypy app
+          pytest -q
+
+  frontend:
+    # Persistent self-hosted hosts may inherit NODE_ENV=production.
+    env:
+      NODE_ENV: test
+    runs-on:
+      group: CWL CI isolated
+      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+    timeout-minutes: 30
+    steps:
+      - name: Admit fixed caller before checkout
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_EVENT: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          CALLER_REF: ${{ github.ref }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ "$CALLER_REPOSITORY" != "ContextualWisdomLab/pg-erd-cloud" ]; then
+            echo "Unsupported caller repository" >&2
+            exit 1
+          fi
+          case "$CALLER_EVENT" in
+            pull_request)
+              if [ "$PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ] || [ "$PR_BASE_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+                echo "Unsupported pull request source" >&2
+                exit 1
+              fi
+              ;;
+            push|workflow_dispatch)
+              if [ "$CALLER_REF" != "refs/heads/main" ]; then
+                echo "Unsupported caller ref" >&2
+                exit 1
+              fi
+              ;;
+            *) echo "Unsupported caller event" >&2; exit 1 ;;
+          esac
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "26"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci --include=dev
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build
+        working-directory: frontend
+        env:
+          NODE_ENV: production
+        run: npm run build
