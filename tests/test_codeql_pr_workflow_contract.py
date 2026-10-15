@@ -261,6 +261,8 @@ def _run_verdict_read(
     dispatch_jobs: dict | list[dict] | None = None,
     run_attempt: str = "2",
     live_state: str = "open",
+    live_base_snapshot: str = _TEST_BASE_SHA,
+    base_ref_json: dict | None = None,
     live_head: str = _TEST_HEAD_SHA,
     comparison: dict | None = None,
     required_created_at: str = "2026-09-27T11:08:00Z",
@@ -277,7 +279,7 @@ def _run_verdict_read(
     head_sha = _TEST_HEAD_SHA
     live_pr = {
         "head": {"sha": live_head},
-        "base": {"sha": _TEST_BASE_SHA},
+        "base": {"sha": live_base_snapshot, "ref": "main"},
         "merge_commit_sha": _TEST_PRODUCER_SOURCE_SHA,
         "state": live_state,
     }
@@ -293,6 +295,7 @@ def _run_verdict_read(
         'endpoint="${@: -1}"\n'
         'if printf \'%s\\n\' "$@" | grep -qx -- --slurp; then exit 2; fi\n'
         'case "$endpoint" in\n'
+        '  */git/ref/heads/*) test "${FAKE_BASE_REF_FAIL:-0}" = 0 || exit 1; if [ -n "${FAKE_BASE_REF_EXPECTED_PATH:-}" ]; then test "${endpoint:-${path:-}}" = "$FAKE_BASE_REF_EXPECTED_PATH"; fi; if [ -n "${FAKE_BASE_REF_JSON:-}" ]; then printf \'%s\\n\' "$FAKE_BASE_REF_JSON"; else printf \'%s\\n\' "$FAKE_PULL_JSON" | jq \'{ref:("refs/heads/"+(.base.ref//"main")),object:{type:"commit",sha:.base.sha}}\'; fi ;;\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */compare/*) printf '%s\\n' \"$FAKE_COMPARE_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
@@ -310,6 +313,7 @@ def _run_verdict_read(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_REQUIRED_CREATED_AT": required_created_at,
         "FAKE_PULL_JSON": json.dumps(live_pr),
+        "FAKE_BASE_REF_JSON": json.dumps(base_ref_json) if base_ref_json is not None else "",
         "FAKE_COMPARE_JSON": json.dumps(comparison if comparison is not None else {
             "status": "ahead", "behind_by": 0, "ahead_by": 1,
         }),
@@ -766,6 +770,7 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         'if [[ "$*" == *"/actions/runs/42 --jq .created_at" ]]; then printf \'%s\\n\' "$FAKE_REQUIRED_CREATED_AT"; exit 0; fi\n'
         'endpoint="${@: -1}"\n'
         'case "$endpoint" in\n'
+        '  */git/ref/heads/*) test "${FAKE_BASE_REF_FAIL:-0}" = 0 || exit 1; if [ -n "${FAKE_BASE_REF_EXPECTED_PATH:-}" ]; then test "${endpoint:-${path:-}}" = "$FAKE_BASE_REF_EXPECTED_PATH"; fi; if [ -n "${FAKE_BASE_REF_JSON:-}" ]; then printf \'%s\\n\' "$FAKE_BASE_REF_JSON"; else printf \'%s\\n\' "$FAKE_PULL_JSON" | jq \'{ref:("refs/heads/"+(.base.ref//"main")),object:{type:"commit",sha:.base.sha}}\'; fi ;;\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
         "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
@@ -782,7 +787,7 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         "FAKE_PULL_JSON": json.dumps(
             {
                 "head": {"sha": head_sha},
-                "base": {"sha": _TEST_BASE_SHA},
+                "base": {"sha": _TEST_BASE_SHA, "ref": "main"},
                 "merge_commit_sha": _TEST_PRODUCER_SOURCE_SHA,
                 "state": "open",
             }
@@ -865,6 +870,7 @@ def _write_coordinator_fakes(
         "fi\n"
         "body=\n"
         'case "$path" in\n'
+        '  */git/ref/heads/*) test "${FAKE_BASE_REF_FAIL:-0}" = 0 || exit 1; if [ -n "${FAKE_BASE_REF_EXPECTED_PATH:-}" ]; then test "${endpoint:-${path:-}}" = "$FAKE_BASE_REF_EXPECTED_PATH"; fi; if [ -n "${FAKE_BASE_REF_JSON:-}" ]; then printf \'%s\\n\' "$FAKE_BASE_REF_JSON"; else printf \'%s\\n\' "$FAKE_PULL_JSON" | jq \'{ref:("refs/heads/"+(.base.ref//"main")),object:{type:"commit",sha:.base.sha}}\'; fi ;;\n'
         "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
         "  */statuses) body=$FAKE_STATUSES_JSON ;;\n"
         "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
@@ -1203,3 +1209,32 @@ def test_codeql_metadata_jobs_release_runner_on_stalled_api() -> None:
         block = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
         assert re.search(rf"^    timeout-minutes: {minutes}$", block, re.MULTILINE), name
         assert "uses: github/codeql-action" not in block
+
+
+def test_coordinator_uses_branch_tip_when_pr_base_snapshot_is_stale(tmp_path):
+    """Dispatch actual named-branch evidence rather than PR creation-time base."""
+    result, _, body = _run_coordinator(tmp_path, pull={
+        'state': 'open', 'head': {'sha': 'b' * 40, 'ref': 'feature'},
+        'base': {'sha': 'f' * 40, 'ref': 'release/2026'}, 'merge_commit_sha': 'c' * 40},
+        env_overrides={'FAKE_BASE_REF_EXPECTED_PATH': 'repos/ContextualWisdomLab/naruon/git/ref/heads/release%2F2026', 'FAKE_BASE_REF_JSON': json.dumps({
+            'ref': 'refs/heads/release/2026', 'object': {'type': 'commit', 'sha': 'a' * 40}})})
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(body.read_text())['client_payload']
+    assert payload['pr_base_sha'] == 'a' * 40
+    assert payload['pr_base_ref'] == 'release/2026'
+
+
+def test_receipt_reader_uses_current_branch_despite_stale_snapshot(tmp_path):
+    """A real bound receipt remains usable when only the PR base snapshot is old."""
+    read, enforce = _run_verdict_read(tmp_path, [_bound_status('python', 'success')],
+                                    live_base_snapshot='f' * 40,
+                                    base_ref_json={'ref': 'refs/heads/main',
+                                                   'object': {'type': 'commit', 'sha': 'a' * 40}})
+    assert read.returncode == enforce.returncode == 0
+
+
+def test_coordinator_ref_read_failure_does_not_dispatch(tmp_path):
+    """No fallback to historical PR base metadata after an API transport failure."""
+    result, post, _ = _run_coordinator(tmp_path, env_overrides={'FAKE_BASE_REF_FAIL': '1'})
+    assert result.returncode != 0
+    assert not post.exists()

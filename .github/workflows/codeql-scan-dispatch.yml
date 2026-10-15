@@ -378,6 +378,14 @@ jobs:
             exit 1
           fi
 
+          # PR base.sha may be a stale snapshot; authenticate the current named branch.
+          base_ref_path="$(jq -nr --arg ref "$live_base_ref" '$ref | @uri')"
+          base_ref_json="$(gh api "repos/${TARGET_REPOSITORY}/git/ref/heads/${base_ref_path}")"
+          live_base_sha="$(jq -er --arg ref "refs/heads/${live_base_ref}" '
+            select(type == "object" and .ref == $ref and .object.type == "commit")
+            | .object.sha | select(type == "string" and test("^[0-9a-fA-F]{40}$"))
+          ' <<<"$base_ref_json")"
+
           mismatches=()
           [ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")
           [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
@@ -536,6 +544,14 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          # PR base.sha may be a stale snapshot; authenticate the current named branch.
+          base_ref_path="$(jq -nr --arg ref "$live_base_ref" '$ref | @uri')"
+          base_ref_json="$(gh api "repos/${TARGET_REPOSITORY}/git/ref/heads/${base_ref_path}")"
+          live_base_sha="$(jq -er --arg ref "refs/heads/${live_base_ref}" '
+            select(type == "object" and .ref == $ref and .object.type == "commit")
+            | .object.sha | select(type == "string" and test("^[0-9a-fA-F]{40}$"))
+          ' <<<"$base_ref_json")"
+
           if [ "$live_state" != "open" ] ||
             [ "$live_base_ref" != "$EXPECTED_BASE_REF" ] ||
             [ "$live_base_sha" != "$EXPECTED_BASE_SHA" ] ||
@@ -1021,11 +1037,22 @@ jobs:
           if [ "$(printf '%s' "$pull" | jq -r '.state // empty')" != "open" ] ||
             [ "$(printf '%s' "$pull" | jq -r '.base.repo.full_name // empty')" != "$TARGET_REPOSITORY" ] ||
             [ "$(printf '%s' "$pull" | jq -r '.base.ref // empty')" != "$BASE_REF" ] ||
-            [ "$(printf '%s' "$pull" | jq -r '.base.sha // empty')" != "$BASE_SHA" ] ||
             [ "$(printf '%s' "$pull" | jq -r '.head.repo.full_name // empty')" != "$TARGET_REPOSITORY" ] ||
             [ "$(printf '%s' "$pull" | jq -r '.head.ref // empty')" != "$HEAD_REF" ] ||
             [ "$(printf '%s' "$pull" | jq -r '.head.sha // empty')" != "$HEAD_SHA" ]; then
             echo "::error::CodeQL settlement rejected a closed PR, changed base, or stale head."
+            exit 1
+          fi
+
+          # PR base.sha may be a stale snapshot; authenticate the current named branch.
+          base_ref_path="$(jq -nr --arg ref "$BASE_REF" '$ref | @uri')"
+          base_ref_json="$(github_api "repos/${TARGET_REPOSITORY}/git/ref/heads/${base_ref_path}")"
+          live_base_sha="$(jq -er --arg ref "refs/heads/${BASE_REF}" '
+            select(type == "object" and .ref == $ref and .object.type == "commit")
+            | .object.sha | select(type == "string" and test("^[0-9a-fA-F]{40}$"))
+          ' <<<"$base_ref_json")"
+          if [ "$live_base_sha" != "$BASE_SHA" ]; then
+            echo "::error::CodeQL settlement rejected a changed base branch."
             exit 1
           fi
 
