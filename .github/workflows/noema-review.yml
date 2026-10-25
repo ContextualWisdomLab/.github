@@ -663,6 +663,7 @@ jobs:
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
           NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ vars.NOEMA_EXACT_CANARY_NON_ZDR || 'false' }}
         run: |
           set -euo pipefail
 
@@ -672,6 +673,15 @@ jobs:
           fi
           repository_name="${TARGET_REPOSITORY#*/}"
           echo "repository=$repository_name" >>"$GITHUB_OUTPUT"
+
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = "true" ]; then
+            if [ -n "${NOEMA_REVIEW_TOKEN:-}" ] || [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+              echo "::error::Non-ZDR canary requires native GitHub App selection; PAT precedence and OIDC fallback are unsupported. No model call is permitted."
+              exit 1
+            fi
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/k-csap-skills" ]; then
             if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then

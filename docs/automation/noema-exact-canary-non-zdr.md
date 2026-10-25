@@ -15,6 +15,15 @@ a separate NOEMA_EXACT_CANARY_API_KEY Secret: no fallback to or overwrite of the
 unresolved central Secret. Dedicated issuance/install must have authorized issuer
 custody receipts before activation. No dedicated Secret has been installed by
 this patch. The existing App publisher and exact-head verification are unchanged.
+The canary requires native GitHub App selection. If NOEMA_REVIEW_TOKEN would
+preempt the App, or only OIDC is available, credential selection explicitly rejects
+before model work; ambient GH_TOKEN is never borrowed. Normal mode retains its
+existing credential precedence. Activation must resolve this prerequisite without
+silently replacing any existing Secret.
+
+Workflow changes require two distinct probes under the existing substantive
+validator. The emitted schema and fixed approval instruction require two as well;
+one-probe responses remain rejected rather than weakening that validator.
 
 Admission authenticates current head, one added path and exact content digest.
 The HTTP producer repeats these checks and serializes only the approved YAML,

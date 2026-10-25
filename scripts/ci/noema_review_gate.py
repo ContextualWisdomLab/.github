@@ -1688,7 +1688,8 @@ def call_llm(
                 f'new file mode 100644\n--- /dev/null\n+++ b/{canary.PATH}\n'
                 f'@@ -0,0 +1,{len(content.splitlines())} @@\n'
                 + ''.join('+' + line for line in content.splitlines(keepends=True)))
-        payload_bytes = canary.serialize_payload(content, _noema_verdict_response_format(1))
+        payload_bytes = canary.serialize_payload(content, _noema_verdict_response_format(
+            _required_probe_count(diff, (canary.PATH,))))
     else:
         payload_bytes = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(

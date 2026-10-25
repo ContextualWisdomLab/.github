@@ -15,7 +15,7 @@ DIGEST = '5427ca0c17d818d49f9af91b5cd495ab4599c969b894cb2467b794d674a96d3d'
 SYSTEM = 'Return strict JSON only. Do not include markdown.'
 INSTRUCTION = ('Independently review this exact YAML for correctness and security. '
                'Return the declared response schema. Cite changed RIGHT-side lines. '
-               'For approval falsify at least one concrete regression hypothesis; '
+               'For approval falsify at least two distinct concrete regression hypotheses; '
                'for request_changes confirm a concrete finding. This is a complete '
                'new file; no other repository context is authorized.\n'
                f'Repository: {REPOSITORY}\nPR: {NUMBER}\nHead: {HEAD}\nPath: {PATH}\n')
@@ -41,8 +41,8 @@ def validate_payload(payload):
     """Verify complete actual JSON payload; no title, threads or extra context."""
     if type(payload) is not dict or set(payload) != {'model', 'response_format', 'messages'}:
         raise RuntimeError('Non-ZDR canary payload scope mismatch')
-    from scripts.ci.noema_review_gate import _noema_verdict_response_format
-    if payload['response_format'] != _noema_verdict_response_format(1):
+    from scripts.ci.noema_review_gate import _noema_verdict_response_format, _required_probe_count
+    if payload['response_format'] != _noema_verdict_response_format(_required_probe_count('', (PATH,))):
         raise RuntimeError('Non-ZDR canary schema scope mismatch')
     if payload['model'] != 'auto':
         raise RuntimeError('Non-ZDR canary model scope mismatch')

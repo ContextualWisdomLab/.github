@@ -29,6 +29,39 @@ class PaidAutoWorkflowTests(unittest.TestCase):
         # Existing enrolled sibling appears in trigger, selector, pytest and compile.
         self.assertEqual(source.count(path), source.count('tests/test_personal_review_route.py'))
 
+    def test_producer_paths_select_and_execute_regressions(self):
+        import yaml
+        workflow = yaml.load((ROOT / '.github/workflows/agent-review-runtime-quality-ci.yml').read_text(), Loader=yaml.BaseLoader)
+        steps = {s['name']: s for s in workflow['jobs']['agent_review_runtime_quality']['steps']}
+        shell = steps['Select affected contract suites']['run']
+        paths = ['.github/workflows/noema-review.yml', 'scripts/ci/noema_review_gate.py',
+                 'scripts/ci/noema_exact_canary.py', 'scripts/ci/personal_review_route.py',
+                 'tests/test_noema_exact_canary.py', 'tests/test_noema_paid_auto_authorization.py',
+                 '.github/workflows/agent-review-runtime-quality-ci.yml']
+        for path in paths + ['docs/unrelated.md']:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
+                output = pathlib.Path(directory) / 'output'
+                stub = 'git() { if [ "$1" = rev-parse ]; then printf "%s\\n" "$HEAD_SHA"; else printf "%s\\n" "$CHANGED_PATH"; fi; };\n'
+                env = dict(PATH=os.environ['PATH'], BASE_SHA='base', HEAD_SHA='head',
+                           CHANGED_PATH=path, GITHUB_OUTPUT=str(output))
+                result = subprocess.run(['bash', '-c', stub + shell], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                selected = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                if path == 'docs/unrelated.md':
+                    self.assertEqual(selected['review_repair'], 'false')
+                    continue
+                self.assertIn(path, workflow['on']['pull_request']['paths'])
+                self.assertEqual(selected['review_repair'], 'true')
+                command = steps['Verify scheduler and contextual-orchestrator review-repair contracts']['run']
+                # Execute actual command bodies, recording only the Python boundary.
+                recorder = 'python() { printf "%s\\n" "$*"; };\n'
+                run = subprocess.run(['bash', '-c', recorder + command], env=env, cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                pytest_calls = [line for line in run.stdout.splitlines() if line.startswith('-m pytest ')]
+                self.assertTrue(pytest_calls)
+                for test in ('tests/test_noema_exact_canary.py', 'tests/test_noema_paid_auto_authorization.py'):
+                    self.assertTrue(any(test in line.split() for line in pytest_calls), test)
+
     def test_noema_passes_explicit_default_closed_paid_authorization(self):
         source = (ROOT / '.github/workflows/noema-review.yml').read_text()
         self.assertIn("NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}", source)
