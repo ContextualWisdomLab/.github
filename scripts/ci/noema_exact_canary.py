@@ -22,16 +22,19 @@ INSTRUCTION = ('Independently review this exact YAML for correctness and securit
 
 
 def require_target(repo, number, head):
+    """Reject any repository, pull request or head outside exact consent."""
     if repo != REPOSITORY or type(number) is not int or number != NUMBER or head != HEAD:
         raise RuntimeError('Non-ZDR canary scope mismatch')
 
 
 def require_content(content):
+    """Admit only UTF-8 text with the explicitly consented content digest."""
     if type(content) is not str or hashlib.sha256(content.encode('utf-8')).hexdigest() != DIGEST:
         raise RuntimeError('Non-ZDR canary content scope mismatch')
 
 
 def messages(content):
+    """Build fixed instructions plus the digest-admitted file and nothing else."""
     require_content(content)
     return [{'role': 'system', 'content': SYSTEM},
             {'role': 'user', 'content': INSTRUCTION + content}]

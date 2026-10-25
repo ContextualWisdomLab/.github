@@ -3,6 +3,16 @@ import unittest
 from scripts.ci import noema_exact_canary as policy
 
 class ExactCanaryTests(unittest.TestCase):
+    def test_public_canary_helpers_have_docstrings(self):
+        """The canary module remains eligible for the 100% docstring gate."""
+        import ast
+        from pathlib import Path
+        tree = ast.parse(Path(policy.__file__).read_text())
+        helpers = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        for name in ('require_target', 'require_content', 'messages'):
+            with self.subTest(helper=name):
+                self.assertTrue(ast.get_docstring(helpers[name]), name)
+
     def test_actual_serialization_contains_only_approved_yaml(self):
         import json
         from unittest.mock import patch
