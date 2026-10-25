@@ -98,6 +98,46 @@ class ExactCanaryTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn('source=' + expected, output.read_text())
 
+    def test_advertised_minimum_survives_actual_validator(self):
+        import os
+        import json
+        import hashlib
+        from unittest.mock import patch
+        from scripts.ci import noema_review_gate as gate
+        content = 'name: synthetic\non: workflow_dispatch\n'
+        requests = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                schema = requests[-1]['response_format']['json_schema']['schema']
+                count = schema['properties']['adversarial_validation']['properties']['probes']['minItems']
+                verdict = {'decision': 'approve', 'summary': 'Synthetic review.', 'findings': [],
+                           'reviewed_lines': [{'path': policy.PATH, 'line': 1, 'side': 'RIGHT', 'analysis': 'Examined exact added workflow.'}],
+                           'adversarial_validation': {'status': 'passed', 'residual_risk': 'Offline fixture only.',
+                               'probes': [{'path': policy.PATH, 'line': i + 1, 'side': 'RIGHT',
+                                           'hypothesis': f'Regression {i}', 'attack_or_counterexample': f'Counterexample {i}',
+                                           'evidence': f'Exact line {i + 1}', 'outcome': 'falsified'} for i in range(count)]}}
+                return json.dumps({'choices': [{'message': {'content': json.dumps(verdict)}}]}).encode()
+        class Opener:
+            def open(self, request):
+                requests.append(json.loads(request.data))
+                return Response()
+        env = {'NOEMA_EXACT_CANARY_NON_ZDR': 'true',
+               'NOEMA_LLM_API_URL': 'https://litellm.poinnetworks.net/v1/chat/completions',
+               'NOEMA_LLM_API_KEY': 'synthetic', 'NOEMA_LLM_MODEL': 'auto'}
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(policy, 'DIGEST', hashlib.sha256(content.encode()).hexdigest()), \
+             patch.object(gate, 'reject_private_llm_url'), \
+             patch.object(gate, 'fetch_changed_files', return_value=[(policy.PATH, 'added')]), \
+             patch.object(gate, 'fetch_file_content_at_ref', return_value=content), \
+             patch.object(gate.urllib.request, 'build_opener', return_value=Opener()):
+            verdict = gate.call_llm(policy.REPOSITORY, 4, {'headRefOid': policy.HEAD},
+                                    'PRIVATE DIFF', False, policy.HEAD, 'PRIVATE THREAD', [policy.PATH])
+        self.assertEqual(verdict['decision'], 'approve')
+        self.assertEqual(len(verdict['adversarial_validation']['probes']), 2)
+        self.assertEqual(len(requests), 1)
+
     def test_scope_is_exact(self):
         policy.require_target(policy.REPOSITORY, policy.NUMBER, policy.HEAD)
         for args in [('foreign/repo', 4, policy.HEAD),
