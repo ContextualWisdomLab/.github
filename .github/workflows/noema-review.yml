@@ -1132,6 +1132,7 @@ jobs:
       - name: Publish prepared Noema verdict on the exact live head
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
         env:
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ steps.personal_route.outputs.exact_canary || 'false' }}
           GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_publication_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '')) || '' }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}

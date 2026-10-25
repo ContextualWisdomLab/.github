@@ -240,6 +240,57 @@ def test_ghas_runtime_step_runs_exact_tests_and_fails_closed(
     assert result.stdout == result.stderr == ""
 
 
+@pytest.mark.parametrize(
+    "changed_path",
+    ("tests/test_noema_canary_publication.py",
+     "tests/fixtures/noema_canary_publication_fixture.py"),
+)
+def test_publication_regressions_start_and_select_quality(
+    changed_path: str, tmp_path: Path
+) -> None:
+    """Enroll each publication input in the trigger and actual selector."""
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+    test_ghas_runtime_selector_executes_the_actual_shell(
+        changed_path, {"review_repair"}, tmp_path
+    )
+
+
+@pytest.mark.parametrize("pytest_exit", (0, 42))
+def test_publication_regressions_run_and_compile(
+    pytest_exit: int, tmp_path: Path
+) -> None:
+    """Observe real step argv and prevent compile after failed pytest."""
+    step = _workflow_text().split(
+        "- name: Verify scheduler and contextual-orchestrator review-repair contracts", 1
+    )[1].split("      - name:", 1)[0]
+    assert "if: steps.affected_suites.outputs.review_repair == 'true'" in step
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    calls = tmp_path / "calls.txt"
+    recorder = ('python() { printf "%s\\n" "$*" >> "$CALLS"; '
+                'if [[ "$*" == *pytest* ]]; then return "$PYTEST_EXIT"; fi; }\n')
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         recorder + script], cwd=REPOSITORY_ROOT,
+        env={**os.environ, "CALLS": str(calls), "PYTEST_EXIT": str(pytest_exit)},
+        text=True, capture_output=True, check=False,
+    )
+    rows = [line.split() for line in calls.read_text().splitlines()]
+    assert rows[0][:3] == ["-m", "pytest", "-q"]
+    assert rows[0].count("tests/test_noema_canary_publication.py") == 1
+    assert "tests/fixtures/noema_canary_publication_fixture.py" not in rows[0]
+    assert result.returncode == pytest_exit
+    assert result.stdout == result.stderr == ""
+    if pytest_exit:
+        assert len(rows) == 1
+    else:
+        assert len(rows) == 3
+        assert rows[2][:3] == ["-m", "compileall", "-q"]
+        for path in ("tests/test_noema_canary_publication.py",
+                     "tests/fixtures/noema_canary_publication_fixture.py"):
+            assert rows[2].count(path) == 1
+
+
 def test_exact_head_is_verified_before_selected_suites_run() -> None:
     """Reject a checkout that differs from the pull request's current head."""
 

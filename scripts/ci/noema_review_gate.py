@@ -265,6 +265,8 @@ def parse_http_retry_after_seconds(headers: Any) -> int | None:
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
     """Return actionable trusted diagnostics without reflecting model values."""
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") != "false":
+        return "canary-operation-failed"
     message = scrub_sensitive_data(str(exc)) or type(exc).__name__
     if not isinstance(exc, NoemaModelOutputError):
         return message
@@ -415,7 +417,18 @@ query($owner: String!, $name: String!, $number: Int!) {
 def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     """Fetch the pull request data required for Noema review gating."""
     owner, name = split_repo(repo)
-    data = graphql(PR_QUERY, owner=owner, name=name, number=number)
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") == "true":
+        from scripts.ci.noema_exact_canary import HEAD, require_target
+        require_target(repo, number, HEAD)
+        query = """query($owner:String!,$name:String!,$number:Int!) {
+          repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+            number author { login } isDraft state headRefOid baseRefOid
+            reviews(last:100) { nodes { state body author { login } commit { oid } } }
+          } }
+        }"""
+    else:
+        query = PR_QUERY
+    data = graphql(query, owner=owner, name=name, number=number)
     pr = data.get("data", {}).get("repository", {}).get("pullRequest")
     if not pr:
         raise RuntimeError(f"PR #{number} was not found in {repo}")
@@ -1765,6 +1778,13 @@ def call_llm(
                 served_model = model_value if isinstance(model_value, str) else None
             finally:
                 exc.close()
+        if exact_canary == "true":
+            served_model = None
+            gateway_telemetry = {
+                key: value for key, value in gateway_telemetry.items()
+                if key in {"provider_attempt_count", "attempt_number", "upstream_status"}
+                and type(value) is int
+            }
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
@@ -1812,6 +1832,8 @@ def call_llm(
             f"Noema review failed closed: {current_failure}{suffix}"
         ) from exc
     elapsed = time.monotonic() - attempt_started
+    if exact_canary == "true":
+        served_model = None
     print(
         f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
         f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
@@ -1931,10 +1953,16 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
-    diff, truncated = fetch_diff(repo, number)
-    changed_files = fetch_changed_files(repo, number)
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") == "true":
+        from scripts.ci.noema_exact_canary import require_target
+        require_target(repo, number, expected_head)
+        changed_files = fetch_changed_files(repo, number)
+        diff, truncated, review_context = "", False, ""
+    else:
+        diff, truncated = fetch_diff(repo, number)
+        changed_files = fetch_changed_files(repo, number)
+        review_context = build_review_context(repo, number, pr, changed_files)
     changed_paths = tuple(path for path, _status in changed_files)
-    review_context = build_review_context(repo, number, pr, changed_files)
     verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
     try:
@@ -1969,6 +1997,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") != "false":
+        from scripts.ci.noema_exact_canary import run_private_cli
+        raise SystemExit(run_private_cli(lambda: main(sys.argv[1:])))
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:

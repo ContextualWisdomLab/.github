@@ -163,3 +163,109 @@ class ExactCanaryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+"""Public CLI privacy regression using real consumers and finite IO adapters."""
+import hashlib, json, os, pathlib, subprocess, sys, uuid
+import pytest
+
+ROOT=pathlib.Path(__file__).resolve().parents[1]
+
+MATRIX = [(entry, stage+':'+kind)
+    for entry,stages in [('prepare',('pr','files','content','http','enter','read','close','envelope','fsync')),
+                         ('policy',('pr','files','content')),
+                         ('gate',('pr','files','content','http','enter','read','close','readback')),
+                         ('publish',('pr','cleanup'))]
+    for stage in stages for kind in ('nonzero','decode','runtime','os','value','interrupt','exit')
+    if kind!='nonzero' or stage in {'pr','files','content','readback'}]
+MATRIX += [('prepare',stage+':'+kind) for stage in ('error_read','error_close') for kind in ('runtime','os','value','interrupt','exit')]
+MATRIX += [(entry,case) for entry in ('prepare','gate') for case in ('http:url','http:http','verdict:invalid','model_decode:invalid')]
+MATRIX += [('prepare','telemetry:success'),('prepare','context:runtime'),('prepare','context:os'),('prepare','context:interrupt'),('prepare','context:exit'),('prepare','diff:nonzero'),('prepare','success:ok'),('policy','success:ok'),('publish','parse_envelope:decode')]
+MATRIX += [(entry,stage+':'+kind) for entry,stages in (
+    ('workflow_admit',('pr','files','content')),('workflow_prepare',('pr','files','content','read','close','fsync')))
+    for stage in stages for kind in ('nonzero','os','interrupt','exit')
+    if kind!='nonzero' or stage in {'pr','files','content'}]
+MATRIX += [('workflow_admit','success:ok'),('workflow_prepare','success:ok')]
+MATRIX += [('native_'+entry,case) for entry,case in (
+    ('prepare','pr:nonzero'),('prepare','files:nonzero'),('prepare','content:nonzero'),
+    ('prepare','success:ok'),('policy','content:nonzero'),('policy','success:ok'))]
+
+@pytest.mark.parametrize('entry,case', MATRIX)
+def test_public_cli_does_not_expose_private_context(entry,case,tmp_path):
+    marker='PRIVATE_CANARY_'+uuid.uuid4().hex
+    input_file=tmp_path/'input.json';state_file=tmp_path/'state.json'
+    input_file.write_text(json.dumps({'entry':entry,'case':case,'marker':marker}))
+    source=str(ROOT)
+    workflow=entry.startswith('workflow_')
+    native=entry.startswith('native_')
+    actual_entry={'workflow_admit':'policy','workflow_prepare':'prepare'}.get(entry,entry.removeprefix('native_'))
+    input_file.write_text(json.dumps({'entry':actual_entry,'case':case,'marker':marker,'native':native}))
+    environment={'PATH':os.environ['PATH'],'HOME':str(tmp_path),'TMPDIR':str(tmp_path),
+       'NOEMA_EXACT_CANARY_NON_ZDR':'true','NOEMA_LLM_API_URL':'https://litellm.poinnetworks.net/v1/chat/completions',
+       'NOEMA_LLM_MODEL':'auto','NOEMA_LLM_API_KEY':'synthetic',
+       'NOEMA_REVIEW_TOKEN_SOURCE':'noema-review-github-app','NOEMA_REVIEW_ACTOR':'cwl-noema-review[bot]',
+       'NOEMA_REVIEW_INSTALLATION_ID':'1','FIXTURE_SOURCE':source,'FIXTURE_INPUT':str(input_file),'FIXTURE_STATE':str(state_file)}
+    command=[sys.executable,'-I','-B',str(ROOT/'tests/fixtures/noema_canary_cli_fixture.py')]
+    if native:
+        import shlex
+        launcher=tmp_path/'native-bin';launcher.mkdir()
+        script=launcher/'gh'
+        script.write_text('#!/bin/sh\nexec '+shlex.join([sys.executable,'-I','-B',str(ROOT/'tests/fixtures/noema_canary_github_fixture.py')])+' "$@"\n')
+        script.chmod(0o700)
+        environment['PATH']=str(launcher)+os.pathsep+environment['PATH']
+    if workflow:
+        import shlex
+        import yaml
+        launcher=tmp_path/'bin';launcher.mkdir()
+        script=launcher/'python3'
+        script.write_text('#!/bin/sh\nexec '+shlex.join(command)+' "$@"\n');script.chmod(0o700)
+        environment.update(PATH=str(launcher)+os.pathsep+environment['PATH'],TARGET_REPOSITORY=policy.REPOSITORY,
+          PR_NUMBER='4',EXPECTED_HEAD_SHA=policy.HEAD,NOEMA_EXACT_CANARY_API_KEY='synthetic',GH_TOKEN='synthetic',
+          PERSONAL_ROUTE_SELECTED='true',GITHUB_WORKSPACE=str(ROOT),RUNNER_TEMP=str(tmp_path),GITHUB_OUTPUT=str(tmp_path/'out'))
+        workflow_doc=yaml.load((ROOT/'.github/workflows/noema-review.yml').read_text(),Loader=yaml.BaseLoader)
+        step_name='Admit existing personal LiteLLM auto route' if entry=='workflow_admit' else 'Prepare Noema model verdict'
+        step=next(s for s in workflow_doc['jobs']['noema-review']['steps'] if s.get('name')==step_name)
+        command=['bash','-c',step['run']]
+    if sys.platform=='darwin':
+        profile='(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath '+json.dumps(str(tmp_path))+'))'
+        command=['/usr/bin/sandbox-exec','-p',profile,*command]
+    result=subprocess.run(command,env=environment,cwd=source,capture_output=True,timeout=20)
+    (tmp_path/'stdout.bin').write_bytes(result.stdout);(tmp_path/'stderr.bin').write_bytes(result.stderr)
+    record={'entry':entry,'case':case,'exit':result.returncode,'stdout_sha256':hashlib.sha256(result.stdout).hexdigest(),
+       'stderr_sha256':hashlib.sha256(result.stderr).hexdigest(),'marker_in_logs':marker.encode() in result.stdout+result.stderr}
+    state=json.loads(state_file.read_text())
+    record['external_calls']=state['external_calls'];record['requests']=len(state['http_requests']);record['publications']=state['publications']
+    record['stage_faults']=state['stage_faults'];record['context_skipped']=state.get('context_skipped',False)
+    record['marker_in_requests']=any(marker in r['data'] for r in state['http_requests'])
+    if state['http_requests']:
+        payload=json.loads(state['http_requests'][0]['data'])
+        assert set(payload)=={'model','messages','response_format'}
+        assert payload['model']=='auto'
+        assert payload['messages']==[{'role':'system','content':'Return strict JSON only. Do not include markdown.'},
+          {'role':'user','content':'Independently review this exact YAML for correctness and security. Return the declared response schema. Cite changed RIGHT-side lines. For approval falsify at least two distinct concrete regression hypotheses; for request_changes confirm a concrete finding. This is a complete new file; no other repository context is authorized.\nRepository: ContextualWisdomLab/traveling-agent\nPR: 4\nHead: bf85ddde01f871f0e713db54aae5a16883777d9f\nPath: .github/workflows/docker-ephemeral-canary.yml\nname: synthetic\non: workflow_dispatch\n'}]
+    (tmp_path/'result.json').write_text(json.dumps(record,indent=2))
+    if workflow:
+        assert not any(stage in state['external_calls'] for stage in ('diff','context'))
+        if case=='success:ok':
+            assert result.returncode==0
+            outputs=(tmp_path/'out').read_text()
+            assert ('selected=true' if entry=='workflow_admit' else 'prepared=true') in outputs
+        else:
+            assert result.returncode!=0
+    assert not record['marker_in_logs'], 'Private sentinel reached the actual public CLI output'
+    assert not record['marker_in_requests'], 'Private sentinel reached the actual HTTP request payload'
+    assert record['publications']==0
+    stage,kind=case.split(':',1)
+    skipped=entry=='prepare' and state.get('context_skipped',False) and stage in {'context','diff'}
+    success=stage in {'success','telemetry'} or skipped or (stage=='context' and kind=='runtime')
+    expected=0 if success else 130 if kind=='interrupt' else 1
+    if not workflow:
+        assert result.returncode==expected
+    if not success and stage in {'pr','files','content','readback'}:
+        assert stage in state['external_calls'], 'Failure boundary was not reached'
+    if stage in {'envelope','fsync','cleanup'}:
+        assert stage in state['stage_faults'], 'File lifecycle boundary was not reached'
+    if stage in {'http','enter','read','close','error_read','error_close','verdict','model_decode','telemetry','envelope','fsync'}:
+        assert record['requests']==1
+    if stage in {'pr','files','content','parse_envelope','cleanup'}:
+        assert record['requests']==0

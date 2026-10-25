@@ -86,5 +86,20 @@ def main():
     require_content(gate.fetch_file_content_at_ref(args.repo, PATH, HEAD))
 
 
+def run_private_cli(callback):
+    """Keep canary CLI failures finite without rendering private exceptions."""
+    import sys
+    try:
+        return callback()
+    except BaseException as exc:
+        if isinstance(exc, SystemExit) and (exc.code is None or type(exc.code) is int):
+            raise SystemExit(exc.code) from None
+        if isinstance(exc, KeyboardInterrupt):
+            print('::error::Non-ZDR canary interrupted; private diagnostics withheld.', file=sys.stderr)
+            raise SystemExit(130) from None
+        print('::error::Non-ZDR canary failed closed; private diagnostics withheld.', file=sys.stderr)
+        raise SystemExit(1) from None
+
+
 if __name__ == '__main__':
-    main()
+    run_private_cli(main)
