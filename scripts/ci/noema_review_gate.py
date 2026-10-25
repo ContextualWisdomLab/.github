@@ -66,6 +66,20 @@ NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
 # noema_review_handoff.py.
 NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
+# Personal auto advertises 500,000 input tokens. Bound the complete JSON
+# request conservatively by UTF-8 bytes (including schema/envelope), reserving
+# 8,192 for chat framing. Do not apply this route's capacity to other models.
+MAX_AUTO_REVIEW_REQUEST_BYTES = 500000 - 8192
+
+
+def complete_auto_input() -> bool:
+    """Select only the existing personal-auto endpoint, not arbitrary aliases."""
+    return (
+        os.environ.get("NOEMA_LLM_MODEL", "").strip() == "auto"
+        and os.environ.get("NOEMA_LLM_API_URL", "").strip()
+        == "https://litellm.poinnetworks.net/v1/chat/completions"
+    )
+
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
@@ -553,8 +567,12 @@ def require_distinct_pr_author(pr: dict[str, Any], actor: str) -> str:
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
-    """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
+    """Keep complete personal-auto diffs; retain the legacy other-route bound."""
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
+    if complete_auto_input():
+        if len(diff.encode("utf-8")) > MAX_AUTO_REVIEW_REQUEST_BYTES:
+            raise RuntimeError("Noema complete review input exceeds personal auto budget")
+        return diff, False
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
         marker = "[overlong changed line content omitted]"
@@ -1638,6 +1656,8 @@ def call_llm(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
     reject_private_llm_url(api_url)
+    if complete_auto_input() and truncated:
+        raise RuntimeError("Noema complete review input requires an untruncated diff")
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1646,7 +1666,10 @@ def call_llm(
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
-    allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    allowed_locations_json = (
+        json.dumps({"locations": allowed_locations, "truncated": False}, separators=(",", ":"))
+        if complete_auto_input() else _bounded_allowed_locations_json(allowed_locations)
+    )
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -1705,6 +1728,8 @@ def call_llm(
             _required_probe_count(diff, (canary.PATH,))))
     else:
         payload_bytes = json.dumps(payload).encode("utf-8")
+    if complete_auto_input() and len(payload_bytes) > MAX_AUTO_REVIEW_REQUEST_BYTES:
+        raise RuntimeError("Noema complete review input exceeds personal auto budget")
     request = urllib.request.Request(
         api_url,
         data=payload_bytes,

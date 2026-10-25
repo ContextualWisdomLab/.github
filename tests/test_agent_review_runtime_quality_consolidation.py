@@ -148,6 +148,9 @@ def test_ghas_runtime_changes_start_the_quality_runner(changed_path: str) -> Non
 @pytest.mark.parametrize(
     ("changed_path", "expected_suites"),
     (
+        ("tests/test_noema_complete_auto_input.py", {"review_repair"}),
+        ("scripts/ci/noema_review_gate.py", {"noema", "review_repair"}),
+        ("scripts/ci/noema_exact_canary.py", {"review_repair"}),
         ("scripts/ci/codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_analyses_pagination.py", {"ghas"}),
@@ -243,7 +246,9 @@ def test_ghas_runtime_step_runs_exact_tests_and_fails_closed(
 @pytest.mark.parametrize(
     "changed_path",
     ("tests/test_noema_canary_publication.py",
-     "tests/fixtures/noema_canary_publication_fixture.py"),
+     "tests/fixtures/noema_canary_publication_fixture.py",
+     "tests/test_noema_complete_auto_input.py",
+     "scripts/ci/noema_exact_canary.py"),
 )
 def test_publication_regressions_start_and_select_quality(
     changed_path: str, tmp_path: Path
@@ -278,6 +283,7 @@ def test_publication_regressions_run_and_compile(
     rows = [line.split() for line in calls.read_text().splitlines()]
     assert rows[0][:3] == ["-m", "pytest", "-q"]
     assert rows[0].count("tests/test_noema_canary_publication.py") == 1
+    assert rows[0].count("tests/test_noema_complete_auto_input.py") == 1
     assert "tests/fixtures/noema_canary_publication_fixture.py" not in rows[0]
     assert result.returncode == pytest_exit
     assert result.stdout == result.stderr == ""
@@ -287,6 +293,9 @@ def test_publication_regressions_run_and_compile(
         assert len(rows) == 3
         assert rows[2][:3] == ["-m", "compileall", "-q"]
         for path in ("tests/test_noema_canary_publication.py",
+                     "tests/test_noema_complete_auto_input.py",
+                     "scripts/ci/noema_review_gate.py",
+                     "scripts/ci/noema_exact_canary.py",
                      "tests/fixtures/noema_canary_publication_fixture.py"):
             assert rows[2].count(path) == 1
 
