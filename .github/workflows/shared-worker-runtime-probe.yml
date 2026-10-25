@@ -1,0 +1,29 @@
+name: Shared worker runtime probe
+
+# Trusted metadata only: this does not admit product or PR workloads.
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  probe:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/shared-worker-runtime-probe.yml@refs/heads/main'
+    runs-on:
+      group: CWL central control
+      labels: [self-hosted, Linux, X64, cwlab-control]
+    timeout-minutes: 5
+    steps:
+      - name: Observe installed runtime without workload execution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          command -v docker
+          docker version --format '{{json .}}'
+          docker info --format '{"ServerVersion":{{json .ServerVersion}},"Driver":{{json .Driver}},"CgroupVersion":{{json .CgroupVersion}},"SecurityOptions":{{json .SecurityOptions}}}'
+          printf '%s\n' 'Runtime observation only; disposable job custody and network admission remain separate.'
