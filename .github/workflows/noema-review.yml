@@ -893,6 +893,7 @@ jobs:
           NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}
           NOEMA_EXACT_CANARY_NON_ZDR: ${{ vars.NOEMA_EXACT_CANARY_NON_ZDR || 'false' }}
           NOEMA_EXACT_CANARY_API_KEY: ${{ secrets.NOEMA_EXACT_CANARY_API_KEY }}
+          GH_TOKEN: ${{ steps.noema_github_app_token.outputs.token }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
           PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
