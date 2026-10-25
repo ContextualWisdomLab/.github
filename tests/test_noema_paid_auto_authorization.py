@@ -9,6 +9,26 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class PaidAutoWorkflowTests(unittest.TestCase):
+    def test_paid_regressions_enrolled_in_runtime_quality(self):
+        source = (ROOT / '.github/workflows/agent-review-runtime-quality-ci.yml').read_text()
+        path = 'tests/test_noema_paid_auto_authorization.py'
+        trigger = source.split('jobs:', 1)[0]
+        self.assertIn('"' + path + '"', trigger)
+        section = source.split('      - name: Select affected contract suites\n', 1)[1]
+        block = section.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0]
+        shell = '\n'.join(line[10:] for line in block.splitlines())
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'output'
+            stub = 'git() { if [ "$1" = rev-parse ]; then printf "%s\\n" "$HEAD_SHA"; else printf "%s\\n" "$CHANGED_PATH"; fi; };\n'
+            env = dict(os.environ, BASE_SHA='base', HEAD_SHA='head',
+                       CHANGED_PATH=path, GITHUB_OUTPUT=str(output))
+            result = subprocess.run(['bash', '-c', stub + shell], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('review_repair=true', output.read_text())
+        # Existing enrolled sibling appears in trigger, selector, pytest and compile.
+        self.assertEqual(source.count(path), source.count('tests/test_personal_review_route.py'))
+
     def test_noema_passes_explicit_default_closed_paid_authorization(self):
         source = (ROOT / '.github/workflows/noema-review.yml').read_text()
         self.assertIn("NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}", source)
