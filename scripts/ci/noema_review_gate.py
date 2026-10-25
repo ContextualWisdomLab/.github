@@ -1668,9 +1668,32 @@ def call_llm(
             prompt,
         ],
     }
+    exact_canary = os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false")
+    if exact_canary not in {"true", "false"}:
+        raise RuntimeError("Non-ZDR canary mode is invalid")
+    if exact_canary == "true":
+        from scripts.ci import noema_exact_canary as canary
+        canary.require_target(repo, number, expected_head)
+        if pr.get("headRefOid") != expected_head or truncated:
+            raise RuntimeError("Non-ZDR canary head scope mismatch")
+        if api_url != 'https://litellm.poinnetworks.net/v1/chat/completions' or model != 'auto':
+            raise RuntimeError("Non-ZDR canary route scope mismatch")
+        if tuple(changed_paths) != (canary.PATH,) or fetch_changed_files(repo, number) != [(canary.PATH, 'added')]:
+            raise RuntimeError("Non-ZDR canary changed-file scope mismatch")
+        content = fetch_file_content_at_ref(repo, canary.PATH, expected_head)
+        canary.require_content(content)
+        # Reconstruct the complete new-file diff from admitted bytes. Never send
+        # caller diff, title, threads, base source or other repository context.
+        diff = (f'diff --git a/{canary.PATH} b/{canary.PATH}\n'
+                f'new file mode 100644\n--- /dev/null\n+++ b/{canary.PATH}\n'
+                f'@@ -0,0 +1,{len(content.splitlines())} @@\n'
+                + ''.join('+' + line for line in content.splitlines(keepends=True)))
+        payload_bytes = canary.serialize_payload(content, _noema_verdict_response_format(1))
+    else:
+        payload_bytes = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         api_url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=payload_bytes,
         headers={
             "authorization": f"Bearer {api_key}",
             "content-type": "application/json",

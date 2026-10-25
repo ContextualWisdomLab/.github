@@ -75,6 +75,8 @@ on:
       - "tests/test_review_auto_route.py"
       - "tests/test_personal_review_route.py"
       - "tests/test_noema_paid_auto_authorization.py"
+      - "tests/test_noema_exact_canary.py"
+      - "scripts/ci/noema_exact_canary.py"
       - "tests/test_tokyo_review_consumer.py"
       - "tests/test_review_auto_cost_admission.py"
       - "tests/test_review_ai_app_independence.py"
@@ -306,6 +308,8 @@ jobs:
               tests/test_review_auto_route.py|\
               tests/test_personal_review_route.py|\
               tests/test_noema_paid_auto_authorization.py|\
+              tests/test_noema_exact_canary.py|\
+              scripts/ci/noema_exact_canary.py|\
               tests/test_tokyo_review_consumer.py|\
               tests/test_review_auto_cost_admission.py|\
               tests/test_review_ai_app_independence.py|\
@@ -507,6 +511,7 @@ jobs:
             tests/test_review_auto_route.py \
             tests/test_personal_review_route.py \
             tests/test_noema_paid_auto_authorization.py \
+            tests/test_noema_exact_canary.py \
             tests/test_tokyo_review_consumer.py \
             tests/test_review_auto_cost_admission.py \
             tests/test_review_ai_app_independence.py \
@@ -554,6 +559,7 @@ jobs:
             tests/test_review_auto_route.py \
             tests/test_personal_review_route.py \
             tests/test_noema_paid_auto_authorization.py \
+            tests/test_noema_exact_canary.py \
             tests/test_tokyo_review_consumer.py \
             tests/test_review_auto_cost_admission.py \
             tests/test_review_ai_app_independence.py \

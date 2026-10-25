@@ -891,12 +891,24 @@ jobs:
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ vars.NOEMA_EXACT_CANARY_NON_ZDR || 'false' }}
+          NOEMA_EXACT_CANARY_API_KEY: ${{ secrets.NOEMA_EXACT_CANARY_API_KEY }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
           PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
           set -euo pipefail
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'true' ]; then
+            test -n "${NOEMA_EXACT_CANARY_API_KEY:-}"
+            python3 -m scripts.ci.noema_exact_canary \
+              --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+              --expected-head "$EXPECTED_HEAD_SHA"
+            echo 'selected=true' >>"$GITHUB_OUTPUT"
+            echo 'exact_canary=true' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'false'
           if [ -z "${LLM_GATEWAY_API_KEY:-}" ]; then
             echo '::error::STOP: existing personal review Secret is unavailable.'
             exit 1
@@ -1018,6 +1030,8 @@ jobs:
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_ROUTE_SELECTED: ${{ steps.personal_route.outputs.selected }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ steps.personal_route.outputs.exact_canary || 'false' }}
+          NOEMA_EXACT_CANARY_API_KEY: ${{ secrets.NOEMA_EXACT_CANARY_API_KEY }}
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
         run: |
@@ -1030,6 +1044,10 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot prepare a verdict."
             exit 1
+          fi
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'true' ]; then
+            test -n "${NOEMA_EXACT_CANARY_API_KEY:-}"
+            LLM_GATEWAY_API_KEY="$NOEMA_EXACT_CANARY_API_KEY"
           fi
           if [ "${PERSONAL_ROUTE_SELECTED:-}" = 'true' ]; then
             test -n "${LLM_GATEWAY_API_KEY:-}"
