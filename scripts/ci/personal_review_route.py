@@ -10,10 +10,11 @@ MODEL = 'personal-litellm/auto'
 
 
 def require_admission(*, zero_cost: bool, zero_retention: bool, private_target: bool,
-                      public_auto_authorized: bool = False) -> None:
-    """Admit owner-authorized public routing; private supplier gates stay intact."""
+                      public_auto_authorized: bool = False,
+                      paid_auto_authorized: bool = False) -> None:
+    """Admit explicit cost authority without relaxing private retention."""
     authorized_public = private_target is False and public_auto_authorized is True
-    if zero_cost is not True and not authorized_public:
+    if zero_cost is not True and not authorized_public and paid_auto_authorized is not True:
         raise RuntimeError('STOP: personal auto zero-cost supplier is not attested')
     if private_target and zero_retention is not True:
         raise RuntimeError('STOP: private personal auto zero-retention supplier is not attested')
@@ -38,6 +39,7 @@ def configure_opencode(path: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Validate trusted nonsecret admission inputs and optionally reset config."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--paid-auto-authorized', choices=('true', 'false'), default='false')
     parser.add_argument('--zero-cost', choices=('true', 'false'), required=True)
     parser.add_argument('--zero-retention', choices=('true', 'false'), required=True)
     parser.add_argument('--private-target', choices=('true', 'false'), required=True)
@@ -47,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     require_admission(zero_cost=args.zero_cost == 'true',
                       zero_retention=args.zero_retention == 'true',
                       private_target=args.private_target == 'true',
-                      public_auto_authorized=args.public_auto_authorized == 'true')
+                      public_auto_authorized=args.public_auto_authorized == 'true',
+                      paid_auto_authorized=args.paid_auto_authorized == 'true')
     if args.opencode_config is not None:
         configure_opencode(args.opencode_config)
     return 0

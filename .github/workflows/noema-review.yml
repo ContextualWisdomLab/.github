@@ -890,6 +890,7 @@ jobs:
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
+          NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
           PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
@@ -901,6 +902,7 @@ jobs:
             exit 1
           fi
           python3 -m scripts.ci.personal_review_route \
+            --paid-auto-authorized "$NOEMA_REVIEW_PAID_AUTO_AUTHORIZED" \
             --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
             --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
             --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
