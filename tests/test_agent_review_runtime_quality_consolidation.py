@@ -148,6 +148,8 @@ def test_ghas_runtime_changes_start_the_quality_runner(changed_path: str) -> Non
 @pytest.mark.parametrize(
     ("changed_path", "expected_suites"),
     (
+        ("tests/test_noema_complete_auto_input.py", {"review_repair"}),
+        ("scripts/ci/noema_review_gate.py", {"noema", "review_repair"}),
         ("scripts/ci/codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_analyses_pagination.py", {"ghas"}),
@@ -385,3 +387,17 @@ def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
     assert "outputs.exact_artifact == 'true'" in workflow
     assert "--include=scripts/ci/verify_exact_artifact_sbom_handoff.py" in workflow
     assert "interrogate --fail-under=100" in workflow
+
+
+def test_complete_serializer_enrollment():
+    workflow = _workflow_text()
+    path = "tests/test_noema_complete_auto_input.py"
+    trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{path}"' in trigger
+    assert workflow.count(path) == 4
+    step = next(part for part in workflow.split('      - name: ')
+                if 'python -m pytest -q' in part and path in part)
+    pytest_args = step.split('python -m pytest -q', 1)[1].split('python -m interrogate', 1)[0]
+    compile_args = step.split('python -m compileall -q', 1)[1]
+    assert pytest_args.count(path) == 1
+    assert compile_args.count(path) == 1
