@@ -257,7 +257,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "TARGET_WORKSPACE_SHA" "strix workflow pins target workspace SHA"
 	assert_file_contains "$workflow_file" "TRUSTED_WORKSPACE=\$trusted_workspace" "strix workflow exports a trusted workspace path"
 	assert_file_contains "$workflow_file" "git -C \"\$TRUSTED_WORKSPACE\"" "strix workflow runs git only inside trusted workspace"
-	assert_file_contains "$workflow_file" 'working-directory: ${{ runner.temp }}/trusted-workspace' "strix workflow executes privileged steps from the trusted workspace"
+	assert_file_contains "$workflow_file" 'working-directory: ${{ env.TRUSTED_WORKSPACE }}' "strix workflow executes privileged steps from the allocated trusted workspace"
 	assert_file_contains "$workflow_file" 'mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"' "strix workflow creates the scheduler policy directory before materializing PR-head scheduler policy"
 	assert_file_contains "$workflow_file" 'git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"' "strix workflow materializes the PR-head workflow for required-path self-test"
 	assert_file_contains "$workflow_file" "STRIX_REPO_ROOT:" "strix workflow passes target repository root to the central Strix gate"
