@@ -14,6 +14,11 @@ else:  # pragma: no cover - exercised by the Python 3.10 CI lane
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_COVERAGE_OMISSIONS = {
     "tests/*",
+    # Published scanner regression scripts are test harnesses, not production.
+    # Both production scanner modules remain measured at the original 100% bar.
+    "infra/security-scanners/test_adapter.py",
+    "infra/security-scanners/parity_regressions.py",
+    "infra/security-scanners/provenance_regressions.py",
 }
 
 

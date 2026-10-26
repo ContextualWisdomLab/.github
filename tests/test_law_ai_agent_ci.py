@@ -435,7 +435,7 @@ def short_temp_root():
     base = Path(tempfile.gettempdir()).resolve()
     if len(str(base)) + len('/l.XXXXXXXX/lawci.XXXXXX') < 65:
         return base
-    base = (Path.home() / '.cache/law-ci-tests').resolve()
+    base = (Path.home() / '.cache/l').resolve()
     if len(str(base)) + len('/l.XXXXXXXX/lawci.XXXXXX') >= 65:
         raise ValueError('no short temporary root for law CI tests')
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -456,13 +456,13 @@ def test_short_temp_root_is_canonical_and_socket_bounded(tmp_path, monkeypatch, 
     elif layout == 'long':
         candidate = tmp_path / ('temp-' + 'x' * 80)
         candidate.mkdir()
-        expected = (Path.home() / '.cache/law-ci-tests').resolve()
+        expected = (Path.home() / '.cache/l').resolve()
     elif layout == 'default':
         monkeypatch.delenv('TMPDIR', raising=False)
         monkeypatch.setattr(tempfile, 'tempdir', None)
         candidate = Path(tempfile.gettempdir()).resolve()
         expected = candidate if len(str(candidate)) + len('/l.XXXXXXXX/lawci.XXXXXX') < 65 else (
-            Path.home() / '.cache/law-ci-tests').resolve()
+            Path.home() / '.cache/l').resolve()
     if layout != 'default':
         monkeypatch.setattr(tempfile, 'gettempdir', lambda: str(candidate))
     selected = short_temp_root()
@@ -501,6 +501,7 @@ def test_synthetic_child_failure_and_cleanup_are_not_success(tmp_path, stop_fail
     tools = tmp_path / 'tools'
     tools.mkdir()
     scripts = {
+        'id': '#!/bin/bash\nif [[ "$*" == -un ]]; then printf "law-ci-fixture\\n"; else /usr/bin/id "$@"; fi\n',
         'git': '#!/bin/bash\nif [[ "$*" == *rev-parse* ]]; then printf "%s\\n" "$LAW_CI_SOURCE_SHA"; else tar -cf - --files-from /dev/null; fi\n',
         'uv': '#!/bin/bash\nif [[ "$1" == --version ]]; then printf "uv 0.12.5 synthetic-only\\n"; else exit 37; fi\n',
         'pg_config': '#!/bin/bash\nprintf "%s\\n" "$SYNTHETIC_TOOLS"\n',
