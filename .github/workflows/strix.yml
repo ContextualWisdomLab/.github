@@ -790,6 +790,29 @@ jobs:
           esac
           echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
 
+      - name: Allocate this job's target workspace
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import tempfile
+
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if not parent.is_absolute() or any(ord(c) < 32 for c in str(parent)):
+              raise RuntimeError("refusing invalid Strix temporary root")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed Strix temporary ancestry")
+          # Never reinitialize the fixed path left by an earlier job.
+          root = Path(tempfile.mkdtemp(prefix="strix-workspace-", dir=parent))
+          info = root.stat()
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"TRUSTED_WORKSPACE={root}\n")
+              output.write(f"TRUSTED_WORKSPACE_DEVICE={info.st_dev}\n")
+              output.write(f"TRUSTED_WORKSPACE_INODE={info.st_ino}\n")
+          PY
+
       - name: Materialize target workspace
         if: github.event_name != 'repository_dispatch'
         env:
@@ -798,8 +821,8 @@ jobs:
           TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
         run: |
           set -euo pipefail
-          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
-          mkdir -p "$trusted_workspace"
+          trusted_workspace="$TRUSTED_WORKSPACE"
+          test -d "$trusted_workspace"
           git init -q "$trusted_workspace"
           gh auth setup-git
           git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
@@ -848,8 +871,8 @@ jobs:
             exit 1
           fi
 
-          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
-          mkdir -p "$trusted_workspace"
+          trusted_workspace="$TRUSTED_WORKSPACE"
+          test -d "$trusted_workspace"
           git init -q "$trusted_workspace"
           gh auth setup-git
           git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
@@ -1170,10 +1193,10 @@ jobs:
         # temporary scope with execute bits stripped, then scans that scope as
         # data. PR evidence uses the __PR_SCOPE__ sentinel so the scanner target
         # cannot accidentally remain the trusted base checkout.
-        working-directory: ${{ runner.temp }}/trusted-workspace
+        working-directory: ${{ env.TRUSTED_WORKSPACE }}
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
-          STRIX_REPO_ROOT: ${{ runner.temp }}/trusted-workspace
+          STRIX_REPO_ROOT: ${{ env.TRUSTED_WORKSPACE }}
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
@@ -1411,6 +1434,41 @@ jobs:
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
+
+      - name: Clean up this job's target workspace
+        if: always() && env.TRUSTED_WORKSPACE != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+
+          root = Path(os.environ["TRUSTED_WORKSPACE"])
+          parent = Path(os.environ["RUNNER_TEMP"])
+          if (not root.is_absolute() or root.parent != parent
+                  or not re.fullmatch(r"strix-workspace-[A-Za-z0-9_-]+", root.name)
+                  or any(ord(c) < 32 for c in str(root))):
+              raise RuntimeError("refusing unrelated Strix workspace cleanup path")
+          for ancestor in (parent, *parent.parents):
+              if ancestor.is_symlink() or not ancestor.is_dir():
+                  raise RuntimeError("refusing changed Strix workspace ancestry")
+          try:
+              info = root.lstat()
+          except FileNotFoundError:
+              print("Owned Strix workspace is already absent.")
+          else:
+              if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                      or info.st_dev != int(os.environ["TRUSTED_WORKSPACE_DEVICE"])
+                      or info.st_ino != int(os.environ["TRUSTED_WORKSPACE_INODE"])):
+                  raise RuntimeError("refusing changed Strix workspace identity")
+              # No shared-temp sweep, symlink following or old-workspace repair.
+              shutil.rmtree(root)
+              print("Removed this job's target workspace.")
+          PY
 
       - name: Clean up this job's pinned GitHub CLI
         if: always() && env.CWL_GH_ROOT != ''
