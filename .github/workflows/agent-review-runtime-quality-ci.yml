@@ -77,6 +77,8 @@ on:
       - "tests/test_noema_paid_auto_authorization.py"
       - "tests/test_noema_exact_canary.py"
       - "tests/test_noema_complete_auto_input.py"
+      - "tests/fixtures/noema_canary_cli_fixture.py"
+      - "tests/fixtures/noema_canary_github_fixture.py"
       - "tests/test_noema_canary_publication.py"
       - "tests/fixtures/noema_canary_publication_fixture.py"
       - "scripts/ci/noema_exact_canary.py"
@@ -316,6 +318,8 @@ jobs:
               tests/test_noema_paid_auto_authorization.py|\
               tests/test_noema_exact_canary.py|\
               tests/test_noema_complete_auto_input.py|\
+              tests/fixtures/noema_canary_cli_fixture.py|\
+              tests/fixtures/noema_canary_github_fixture.py|\
               tests/test_noema_canary_publication.py|\
               tests/fixtures/noema_canary_publication_fixture.py|\
               scripts/ci/noema_exact_canary.py|\
@@ -560,6 +564,8 @@ jobs:
           python -m compileall -q \
             scripts/ci/noema_review_gate.py \
             scripts/ci/noema_exact_canary.py \
+            tests/fixtures/noema_canary_cli_fixture.py \
+            tests/fixtures/noema_canary_github_fixture.py \
             tests/fixtures/noema_canary_publication_fixture.py \
             scripts/ci/pr_review_conflict_scope.py \
             scripts/ci/pr_review_autofix_context.py \
