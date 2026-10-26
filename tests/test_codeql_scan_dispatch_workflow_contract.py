@@ -1013,7 +1013,7 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
 
     assert "GATE_OUTCOME" in publish
     assert 'if [ "$GATE_OUTCOME" = "success" ]; then' in publish
-    assert "exact completed scan and preserved SARIF artifact remain" in publish
+    assert "exact completed scan, durable custody receipt and processed target SARIF remain" in publish
     assert "continue-on-error:" not in publish
     assert "cancel-in-progress: true" not in publish
 
@@ -1086,10 +1086,11 @@ def _run_settlement_step(
     run: dict | None = None,
     required_jobs: list[dict] | None = None,
     handler_jobs: list[dict] | None = None,
-    handler_artifacts: list[dict] | None = None,
+    handler_receipts: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the run-wide settlement block against fixture-backed API responses."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
@@ -1165,18 +1166,47 @@ def _run_settlement_step(
             ],
         },
     ]
-    handler_artifacts = handler_artifacts or [
-        {
-            "name": "codeql-dispatch-python-100-1",
-            "expired": False,
-            "size_in_bytes": 10,
-        },
-        {
-            "name": "codeql-dispatch-actions-100-1",
-            "expired": False,
-            "size_in_bytes": 10,
-        },
-    ]
+    # Synthetic REST is the sole external substitution. Execute the real
+    # verifier CLI/main and all receipt/identity predicates in-process.
+    from tests.test_codeql_sarif_publication import Actor, identity, module
+    publication = module()
+    receipts = {}
+    analyses = {}
+    for index, language in enumerate(("python", "actions")):
+        sid = f"upload-{language}"
+        aid = 17 + index
+        receipt = {
+            "schema": publication.SCHEMA, "state": "complete", "minimum_retention_days": 7,
+            "identity": identity() | {"repository": "ContextualWisdomLab/naruon", "language": language},
+            "uploads": [{"sarif_id": sid, "analysis_id": aid, "analysis_key": "API",
+                         "source_sha256": "1" * 64, "upload_sha256": "2" * 64,
+                         "processed_subset_sha256": "3" * 64}],
+        }
+        if handler_receipts is None or language in handler_receipts:
+            receipts[str(200 + index)] = publication.receipt_line(receipt)
+        analyses[str(aid)] = Actor().analysis | {"id": aid, "sarif_id": sid, "category": f"/language:{language}"}
+    for index, job in enumerate(handler_jobs):
+        job.setdefault("id", 200 + index)
+        job.setdefault("run_id", 100)
+    fake_data = tmp_path / "sarif-readbacks.json"
+    fake_data.write_text(json.dumps(analyses))
+    fake_temp = tmp_path / "runner-temp"
+    fake_temp.mkdir()
+    helper = fake_temp / "codeql_sarif_publication.py"
+    helper.write_text(
+        "import importlib.util,json,os,pathlib,sys\n"
+        f"spec=importlib.util.spec_from_file_location('publication', {str(REPO_ROOT / 'scripts/ci/codeql_sarif_publication.py')!r})\n"
+        "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        "def api(method,path,**kwargs):\n"
+        " assert method=='GET', 'no mutation in receipt verification'\n"
+        " if '/sarifs/' in path: return {'processing_status':'complete'}\n"
+        " data=json.loads(pathlib.Path(os.environ['FAKE_SARIF_DATA']).read_text())\n"
+        " return data[path.rsplit('/',1)[-1]]\n"
+        "m.GitHubAPI=lambda token: api\n"
+        "raise SystemExit(m.main())\n"
+    )
+    receipt_data = tmp_path / "receipt-logs.json"
+    receipt_data.write_text(json.dumps(receipts))
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), "Settle exact CodeQL required run"
     )
@@ -1216,7 +1246,7 @@ def _run_settlement_step(
         '  repos/ContextualWisdomLab/naruon/actions/runs/42/jobs*) printf \'%s\\n\' "$FAKE_REQUIRED_JOB_PAGES" ;;\n'
         '  repos/ContextualWisdomLab/naruon/actions/runs/42) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/100/jobs*) printf \'%s\\n\' "$FAKE_HANDLER_JOB_PAGES" ;;\n'
-        '  repos/ContextualWisdomLab/.github/actions/runs/100/artifacts*) printf \'%s\\n\' "$FAKE_HANDLER_ARTIFACT_PAGES" ;;\n'
+        '  repos/ContextualWisdomLab/.github/actions/jobs/*/logs) "$FAKE_PYTHON" -c \'import json,os,sys; print(json.load(open(os.environ["FAKE_RECEIPT_DATA"])).get(sys.argv[1].split("/")[-2], ""))\' "$endpoint" ;;\n'
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -1229,9 +1259,12 @@ def _run_settlement_step(
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_REQUIRED_JOB_PAGES": "\n".join(json.dumps({"jobs": [job]}) for job in required_jobs),
         "FAKE_HANDLER_JOB_PAGES": json.dumps({"jobs": handler_jobs}),
-        "FAKE_HANDLER_ARTIFACT_PAGES": json.dumps(
-            {"artifacts": handler_artifacts}
-        ),
+        "RUNNER_TEMP": str(fake_temp),
+        "FAKE_RECEIPT_DATA": str(receipt_data),
+        "FAKE_SARIF_DATA": str(fake_data),
+        "FAKE_PYTHON": sys.executable,
+        "SARIF_READ_TOKEN": "synthetic-read-token",
+        "WORKFLOW_SHA": "c" * 40,
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_EXIT": "0",
         "FAKE_DENIED_TOKEN": "",
@@ -1533,20 +1566,11 @@ def test_dispatch_settlement_all_mode_reruns_success_and_failure_jobs(tmp_path: 
     ]
 
 
-def test_dispatch_settlement_rejects_missing_handler_artifact(tmp_path: Path) -> None:
-    result, post_log = _run_settlement_step(
-        tmp_path,
-        handler_artifacts=[
-            {
-                "name": "codeql-dispatch-python-100-1",
-                "expired": False,
-                "size_in_bytes": 10,
-            }
-        ],
-    )
+def test_dispatch_settlement_rejects_missing_handler_receipt(tmp_path: Path) -> None:
+    result, post_log = _run_settlement_step(tmp_path, handler_receipts=["python"])
 
     assert result.returncode == 1
-    assert "incomplete handler gate or SARIF evidence for actions" in result.stdout
+    assert "publication/custody incomplete" in result.stderr
     assert not post_log.exists()
 
 
@@ -1634,13 +1658,7 @@ def test_dispatch_settlement_rejects_unproven_matrix_subset(tmp_path: Path) -> N
                 "conclusion": "success",
             }
         ],
-        handler_artifacts=[
-            {
-                "name": "codeql-dispatch-actions-100-1",
-                "expired": False,
-                "size_in_bytes": 10,
-            }
-        ],
+        handler_receipts=["actions"],
     )
 
     assert result.returncode == 1

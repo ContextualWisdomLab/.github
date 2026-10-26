@@ -439,7 +439,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: read
+      security-events: write # Same-target SARIF POST; cross-repo uses a separate scoped token.
       id-token: write
       statuses: write # Required for downscoped OIDC status publication.
     strategy:
@@ -556,7 +556,10 @@ jobs:
           python3 -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_sarif_gate.py').read())"
           gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/codeql_ghas_configuration_identity.py?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode >"$RUNNER_TEMP/codeql_ghas_configuration_identity.py"
-          python3 -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_ghas_configuration_identity.py').read())"
+          python3 -I -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_ghas_configuration_identity.py').read())"
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/codeql_sarif_publication.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$RUNNER_TEMP/codeql_sarif_publication.py"
+          python3 -I -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_sarif_publication.py').read())"
 
       - name: Materialize pull request head for CodeQL scan
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -659,9 +662,46 @@ jobs:
           echo "::error::no configured credential can read target CodeQL analyses; GHAS configuration identity cannot be proven."
           exit 1
 
+      - name: Mint target-scoped Noema SARIF publication token
+        id: noema_sarif_token
+        if: always() && steps.live_metadata.outcome == 'success' && needs.validate-dispatch.outputs.target_repository != github.repository && steps.noema_analysis_config.outputs.available == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_analysis_config.outputs.repository }}
+          permission-security-events: write
+
+      - name: Publish and verify CodeQL SARIF in target code scanning
+        id: sarif_publication
+        if: always() && steps.live_metadata.outcome == 'success' && (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || steps.noema_sarif_token.outputs.token }}
+          REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+          LANGUAGE: ${{ matrix.language }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # Outside checkout and RUNNER_TEMP: original evidence must survive
+          # checkout cleanup, job posts and upload/processing failure. No GC here.
+          custody="$(dirname "$RUNNER_WORKSPACE")/.cwl-codeql-sarif/${RUN_ID}/${RUN_ATTEMPT}/${LANGUAGE}"
+          echo "::add-mask::$custody"
+          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            echo "::error::CodeQL SARIF checkout does not match the admitted head."
+            exit 1
+          fi
+          python3 -I "$RUNNER_TEMP/codeql_sarif_publication.py" publish --identity-env \
+            --source codeql-results-dispatch --custody "$custody"
+
       - name: Verify GHAS base/head CodeQL configuration identity
         id: ghas_configuration_identity
-        if: steps.gate.outcome == 'success'
+        if: steps.gate.outcome == 'success' && steps.sarif_publication.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.ghas_analysis_token.outputs.token }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
@@ -693,13 +733,23 @@ jobs:
 
       - name: Preserve CodeQL SARIF evidence
         id: sarif_upload
-        if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codeql-dispatch-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: codeql-results-dispatch
-          if-no-files-found: error
-          retention-days: 7
+        if: always() && steps.sarif_publication.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || steps.noema_sarif_token.outputs.token }}
+          REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+          LANGUAGE: ${{ matrix.language }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # Preserve the established receiver step name, but actually rehash
+          # original/upload/readback bytes and recheck the accepted analysis.
+          custody="$(dirname "$RUNNER_WORKSPACE")/.cwl-codeql-sarif/${RUN_ID}/${RUN_ATTEMPT}/${LANGUAGE}"
+          python3 -I "$RUNNER_TEMP/codeql_sarif_publication.py" verify-custody --identity-env --custody "$custody"
 
       - name: Mint target-scoped Noema CodeQL status token
         id: noema_status_token
@@ -850,7 +900,7 @@ jobs:
           fi
 
           if [ "$GATE_OUTCOME" = "success" ]; then
-            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The exact completed scan and preserved SARIF artifact remain the authenticated fallback evidence."
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The exact completed scan, durable custody receipt and processed target SARIF remain the authenticated fallback evidence."
             exit 0
           fi
 
@@ -872,8 +922,19 @@ jobs:
     permissions:
       actions: write
       contents: read
+      security-events: read # Readback only; never reuse the lifecycle token to upload.
       id-token: write
     steps:
+      - name: Fetch pinned SARIF settlement verifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/codeql_sarif_publication.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$RUNNER_TEMP/codeql_sarif_publication.py"
+          python3 -I -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_sarif_publication.py').read())"
+
       - name: Exchange OpenCode app token for run settlement
         id: target_app_token
         env:
@@ -966,8 +1027,21 @@ jobs:
           repositories: ${{ steps.noema_settlement_config.outputs.repository }}
           permission-actions: write
 
+      - name: Mint target-scoped Noema SARIF settlement reader
+        id: noema_sarif_reader
+        if: needs.validate-dispatch.outputs.target_repository != github.repository && steps.noema_settlement_config.outputs.available == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_settlement_config.outputs.repository }}
+          permission-security-events: read
+
       - name: Settle exact CodeQL required run
         env:
+          SARIF_READ_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || steps.noema_sarif_reader.outputs.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           NOEMA_WAKE_TOKEN: ${{ steps.noema_settlement_token.outputs.token || '' }}
           TARGET_APP_WAKE_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
@@ -1094,17 +1168,16 @@ jobs:
             exit 1
           fi
 
-          if ! handler_job_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" | jq -s .)" ||
-            ! handler_artifact_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" | jq -s .)"; then
+          if ! handler_job_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" | jq -s .)"; then
             echo "::error::CodeQL settlement could not read exact handler evidence."
             exit 1
           fi
           handler_jobs="$(printf '%s' "$handler_job_pages" | jq -c '[.[] | .jobs[]?]')"
-          handler_artifacts="$(printf '%s' "$handler_artifact_pages" | jq -c '[.[] | .artifacts[]?]')"
           while IFS= read -r required_job; do
             language="$(printf '%s' "$required_job" | jq -r '.language')"
             expected_job_name="CodeQL dispatch scan (${language})"
-            expected_artifact_name="codeql-dispatch-${language}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            # A successful preserved-evidence step now means real target SARIF
+            # processing plus durable original-byte custody, not CreateArtifact.
             handler_job_count="$(printf '%s' "$handler_jobs" | jq --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
               [.[] | select(
                 .name == $name
@@ -1115,13 +1188,30 @@ jobs:
                 and ([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length) == 1
               )] | length
             ')"
-            handler_artifact_count="$(printf '%s' "$handler_artifacts" | jq --arg name "$expected_artifact_name" '
-              [.[] | select(.name == $name and (.expired == false) and (.size_in_bytes > 0))] | length
-            ')"
-            if [ "$handler_job_count" -ne 1 ] || [ "$handler_artifact_count" -ne 1 ]; then
+            if [ "$handler_job_count" -ne 1 ]; then
               echo "::error::CodeQL settlement rejected incomplete handler gate or SARIF evidence for ${language}."
               exit 1
             fi
+            if ! handler_job_id="$(printf '%s' "$handler_jobs" | jq -er --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" --argjson run "$GITHUB_RUN_ID" '
+              [.[] | select(.name == $name and .run_attempt == $attempt and .run_id == $run)]
+              | select(length == 1) | .[0].id | select(type == "number" and . > 0 and . == floor)
+            ')"; then
+              echo "::error::CodeQL settlement rejected missing exact handler job ID."
+              exit 1
+            fi
+            if ! [[ "$handler_job_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::CodeQL settlement rejected missing exact handler job ID."
+              exit 1
+            fi
+            receipt_log="$(mktemp "$RUNNER_TEMP/codeql-sarif-receipt.XXXXXX")"
+            if ! GH_TOKEN="$HANDLER_READ_TOKEN" gh api --allow-escape-sequences \
+              "repos/${GITHUB_REPOSITORY}/actions/jobs/${handler_job_id}/logs" >"$receipt_log"; then
+              echo "::error::CodeQL settlement could not read authenticated SARIF receipt."
+              exit 1
+            fi
+            GH_TOKEN="$SARIF_READ_TOKEN" REPOSITORY="$TARGET_REPOSITORY" LANGUAGE="$language" \
+              RUN_ID="$GITHUB_RUN_ID" RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+              python3 -I "$RUNNER_TEMP/codeql_sarif_publication.py" verify-log --identity-env --log "$receipt_log"
             clean_gate_count="$(printf '%s' "$handler_jobs" | jq --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
               [.[] | select(
                 .name == $name
