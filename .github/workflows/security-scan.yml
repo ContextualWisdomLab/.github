@@ -248,7 +248,7 @@ jobs:
           test -s old-results.json
           test -s new-results.json
       - name: Print OSV findings being compared
-        shell: python3 {0}
+        shell: python3 -I {0}
         run: |
           import json
           from pathlib import Path
@@ -297,7 +297,7 @@ jobs:
             --fail-on-vuln=true
       - name: Mark clean OSV SARIF as comprehensive
         if: always() && hashFiles('results.sarif') != ''
-        shell: python3 {0}
+        shell: python3 -I {0}
         run: |
           import json
           from pathlib import Path
@@ -532,10 +532,35 @@ jobs:
           ' gitleaks-results.sarif | sort | uniq -c
       - name: Filter test-classified Gitleaks SARIF results
         if: always() && hashFiles('gitleaks-results.sarif') != ''
+        # Do not execute the pull request's copy of the filtering helper.
+        shell: python3 -I {0}
         run: |
-          python3 scripts/ci/filter_gitleaks_sarif.py \
-            gitleaks-results.sarif \
-            gitleaks-results.upload.sarif
+          import json
+          from pathlib import Path
+
+          sarif = json.loads(Path('gitleaks-results.sarif').read_text(encoding='utf-8'))
+          if not isinstance(sarif, dict):
+              raise SystemExit('Gitleaks SARIF must contain a JSON object')
+          removed = 0
+          for run in sarif.get('runs') or []:
+              if not isinstance(run, dict) or not isinstance(run.get('results'), list):
+                  continue
+              kept = []
+              for result in run['results']:
+                  classifications = []
+                  if isinstance(result, dict):
+                      classifications.extend(result.get('classifications') or [])
+                      properties = result.get('properties')
+                      if isinstance(properties, dict):
+                          classifications.extend(properties.get('classifications') or [])
+                  if 'test' in {str(value).lower() for value in classifications}:
+                      removed += 1
+                  else:
+                      kept.append(result)
+              run['results'] = kept
+          Path('gitleaks-results.upload.sarif').write_text(
+              json.dumps(sarif, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print(f'Filtered {removed} test-classified Gitleaks SARIF result(s).')
       - name: Upload gitleaks SARIF to code scanning
         if: always() && hashFiles('gitleaks-results.upload.sarif') != ''
         continue-on-error: true
@@ -609,7 +634,7 @@ jobs:
           fi
       - name: Print Trivy findings that failed the gate
         # SARIF-only output otherwise leaves failures as just "exit code 1".
-        shell: python3 {0}
+        shell: python3 -I {0}
         run: |
           import json, pathlib
 
@@ -703,8 +728,8 @@ jobs:
           results_format: sarif
           publish_results: false
       - name: Filter delegated PR-only Scorecard SARIF findings
+        shell: python3 -I {0}
         run: |
-          python3 <<'PY'
           import json
           import pathlib
 
@@ -741,7 +766,6 @@ jobs:
               f"{governance_delegated} PR-only Scorecard fuzzing posture finding(s) "
               "to default-branch governance tracking."
           )
-          PY
       - name: Upload Scorecard SARIF to code scanning
         id: upload_scorecard_sarif
         # Scorecard is soft repository-posture evidence; upload quota is external.
