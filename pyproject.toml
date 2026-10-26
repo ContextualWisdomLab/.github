@@ -18,9 +18,12 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 branch = true
-source = ["scripts/ci"]
+source = ["scripts/ci", "infra/security-scanners"]
 omit = [
     "tests/*",
+    "infra/security-scanners/test_adapter.py",
+    "infra/security-scanners/parity_regressions.py",
+    "infra/security-scanners/provenance_regressions.py",
 ]
 
 [tool.coverage.report]
