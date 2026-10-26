@@ -663,6 +663,7 @@ jobs:
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
           NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ vars.NOEMA_EXACT_CANARY_NON_ZDR || 'false' }}
         run: |
           set -euo pipefail
 
@@ -672,6 +673,15 @@ jobs:
           fi
           repository_name="${TARGET_REPOSITORY#*/}"
           echo "repository=$repository_name" >>"$GITHUB_OUTPUT"
+
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = "true" ]; then
+            if [ -n "${NOEMA_REVIEW_TOKEN:-}" ] || [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+              echo "::error::Non-ZDR canary requires native GitHub App selection; PAT precedence and OIDC fallback are unsupported. No model call is permitted."
+              exit 1
+            fi
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/k-csap-skills" ]; then
             if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
@@ -890,17 +900,32 @@ jobs:
         if: env.PR_NUMBER != '' && steps.live_draft.outputs.live_draft != 'true'
         env:
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
+          NOEMA_REVIEW_PAID_AUTO_AUTHORIZED: ${{ vars.NOEMA_REVIEW_PAID_AUTO_AUTHORIZED || 'false' }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ vars.NOEMA_EXACT_CANARY_NON_ZDR || 'false' }}
+          NOEMA_EXACT_CANARY_API_KEY: ${{ secrets.NOEMA_EXACT_CANARY_API_KEY }}
+          GH_TOKEN: ${{ steps.noema_github_app_token.outputs.token }}
           PERSONAL_REVIEW_ZERO_COST_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZERO_COST_ATTESTED || 'false' }}
           PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED: ${{ vars.PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED || 'false' }}
           PERSONAL_REVIEW_ZDR_ATTESTED: ${{ vars.PERSONAL_REVIEW_ZDR_ATTESTED || 'false' }}
           PRIVATE_TARGET: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
           set -euo pipefail
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'true' ]; then
+            test -n "${NOEMA_EXACT_CANARY_API_KEY:-}"
+            python3 -m scripts.ci.noema_exact_canary \
+              --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+              --expected-head "$EXPECTED_HEAD_SHA"
+            echo 'selected=true' >>"$GITHUB_OUTPUT"
+            echo 'exact_canary=true' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'false'
           if [ -z "${LLM_GATEWAY_API_KEY:-}" ]; then
             echo '::error::STOP: existing personal review Secret is unavailable.'
             exit 1
           fi
           python3 -m scripts.ci.personal_review_route \
+            --paid-auto-authorized "$NOEMA_REVIEW_PAID_AUTO_AUTHORIZED" \
             --zero-cost "$PERSONAL_REVIEW_ZERO_COST_ATTESTED" \
             --public-auto-authorized "$PERSONAL_REVIEW_PUBLIC_AUTO_AUTHORIZED" \
             --zero-retention "$PERSONAL_REVIEW_ZDR_ATTESTED" \
@@ -1016,6 +1041,8 @@ jobs:
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
           LLM_GATEWAY_API_KEY: ${{ secrets.LLM_GATEWAY_API_KEY }}
           PERSONAL_ROUTE_SELECTED: ${{ steps.personal_route.outputs.selected }}
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ steps.personal_route.outputs.exact_canary || 'false' }}
+          NOEMA_EXACT_CANARY_API_KEY: ${{ secrets.NOEMA_EXACT_CANARY_API_KEY }}
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
         run: |
@@ -1028,6 +1055,10 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot prepare a verdict."
             exit 1
+          fi
+          if [ "${NOEMA_EXACT_CANARY_NON_ZDR:-false}" = 'true' ]; then
+            test -n "${NOEMA_EXACT_CANARY_API_KEY:-}"
+            LLM_GATEWAY_API_KEY="$NOEMA_EXACT_CANARY_API_KEY"
           fi
           if [ "${PERSONAL_ROUTE_SELECTED:-}" = 'true' ]; then
             test -n "${LLM_GATEWAY_API_KEY:-}"
@@ -1101,6 +1132,7 @@ jobs:
       - name: Publish prepared Noema verdict on the exact live head
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
         env:
+          NOEMA_EXACT_CANARY_NON_ZDR: ${{ steps.personal_route.outputs.exact_canary || 'false' }}
           GH_TOKEN: ${{ env.TARGET_REPOSITORY == 'ContextualWisdomLab/k-csap-skills' && steps.noema_github_app_publication_token.outputs.token || (env.TARGET_REPOSITORY != 'ContextualWisdomLab/k-csap-skills' && (steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '')) || '' }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}

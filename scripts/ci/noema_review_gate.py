@@ -66,6 +66,20 @@ NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
 # noema_review_handoff.py.
 NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
+# Personal auto advertises 500,000 input tokens. Bound the complete JSON
+# request conservatively by UTF-8 bytes (including schema/envelope), reserving
+# 8,192 for chat framing. Do not apply this route's capacity to other models.
+MAX_AUTO_REVIEW_REQUEST_BYTES = 500000 - 8192
+
+
+def complete_auto_input() -> bool:
+    """Select only the existing personal-auto endpoint, not arbitrary aliases."""
+    return (
+        os.environ.get("NOEMA_LLM_MODEL", "").strip() == "auto"
+        and os.environ.get("NOEMA_LLM_API_URL", "").strip()
+        == "https://litellm.poinnetworks.net/v1/chat/completions"
+    )
+
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
@@ -265,6 +279,8 @@ def parse_http_retry_after_seconds(headers: Any) -> int | None:
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
     """Return actionable trusted diagnostics without reflecting model values."""
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") != "false":
+        return "canary-operation-failed"
     message = scrub_sensitive_data(str(exc)) or type(exc).__name__
     if not isinstance(exc, NoemaModelOutputError):
         return message
@@ -415,7 +431,18 @@ query($owner: String!, $name: String!, $number: Int!) {
 def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     """Fetch the pull request data required for Noema review gating."""
     owner, name = split_repo(repo)
-    data = graphql(PR_QUERY, owner=owner, name=name, number=number)
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") == "true":
+        from scripts.ci.noema_exact_canary import HEAD, require_target
+        require_target(repo, number, HEAD)
+        query = """query($owner:String!,$name:String!,$number:Int!) {
+          repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+            number author { login } isDraft state headRefOid baseRefOid
+            reviews(last:100) { nodes { state body author { login } commit { oid } } }
+          } }
+        }"""
+    else:
+        query = PR_QUERY
+    data = graphql(query, owner=owner, name=name, number=number)
     pr = data.get("data", {}).get("repository", {}).get("pullRequest")
     if not pr:
         raise RuntimeError(f"PR #{number} was not found in {repo}")
@@ -540,8 +567,12 @@ def require_distinct_pr_author(pr: dict[str, Any], actor: str) -> str:
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
-    """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
+    """Keep complete personal-auto diffs; retain the legacy other-route bound."""
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
+    if complete_auto_input():
+        if len(diff.encode("utf-8")) > MAX_AUTO_REVIEW_REQUEST_BYTES:
+            raise RuntimeError("Noema complete review input exceeds personal auto budget")
+        return diff, False
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
         marker = "[overlong changed line content omitted]"
@@ -1625,6 +1656,8 @@ def call_llm(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
     reject_private_llm_url(api_url)
+    if complete_auto_input() and truncated:
+        raise RuntimeError("Noema complete review input requires an untruncated diff")
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1633,7 +1666,10 @@ def call_llm(
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
-    allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    allowed_locations_json = (
+        json.dumps({"locations": allowed_locations, "truncated": False}, separators=(",", ":"))
+        if complete_auto_input() else _bounded_allowed_locations_json(allowed_locations)
+    )
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -1668,9 +1704,35 @@ def call_llm(
             prompt,
         ],
     }
+    exact_canary = os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false")
+    if exact_canary not in {"true", "false"}:
+        raise RuntimeError("Non-ZDR canary mode is invalid")
+    if exact_canary == "true":
+        from scripts.ci import noema_exact_canary as canary
+        canary.require_target(repo, number, expected_head)
+        if pr.get("headRefOid") != expected_head or truncated:
+            raise RuntimeError("Non-ZDR canary head scope mismatch")
+        if api_url != 'https://litellm.poinnetworks.net/v1/chat/completions' or model != 'auto':
+            raise RuntimeError("Non-ZDR canary route scope mismatch")
+        if tuple(changed_paths) != (canary.PATH,) or fetch_changed_files(repo, number) != [(canary.PATH, 'added')]:
+            raise RuntimeError("Non-ZDR canary changed-file scope mismatch")
+        content = fetch_file_content_at_ref(repo, canary.PATH, expected_head)
+        canary.require_content(content)
+        # Reconstruct the complete new-file diff from admitted bytes. Never send
+        # caller diff, title, threads, base source or other repository context.
+        diff = (f'diff --git a/{canary.PATH} b/{canary.PATH}\n'
+                f'new file mode 100644\n--- /dev/null\n+++ b/{canary.PATH}\n'
+                f'@@ -0,0 +1,{len(content.splitlines())} @@\n'
+                + ''.join('+' + line for line in content.splitlines(keepends=True)))
+        payload_bytes = canary.serialize_payload(content, _noema_verdict_response_format(
+            _required_probe_count(diff, (canary.PATH,))))
+    else:
+        payload_bytes = json.dumps(payload).encode("utf-8")
+    if complete_auto_input() and len(payload_bytes) > MAX_AUTO_REVIEW_REQUEST_BYTES:
+        raise RuntimeError("Noema complete review input exceeds personal auto budget")
     request = urllib.request.Request(
         api_url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=payload_bytes,
         headers={
             "authorization": f"Bearer {api_key}",
             "content-type": "application/json",
@@ -1741,6 +1803,13 @@ def call_llm(
                 served_model = model_value if isinstance(model_value, str) else None
             finally:
                 exc.close()
+        if exact_canary == "true":
+            served_model = None
+            gateway_telemetry = {
+                key: value for key, value in gateway_telemetry.items()
+                if key in {"provider_attempt_count", "attempt_number", "upstream_status"}
+                and type(value) is int
+            }
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
@@ -1788,6 +1857,8 @@ def call_llm(
             f"Noema review failed closed: {current_failure}{suffix}"
         ) from exc
     elapsed = time.monotonic() - attempt_started
+    if exact_canary == "true":
+        served_model = None
     print(
         f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
         f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
@@ -1907,10 +1978,16 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
-    diff, truncated = fetch_diff(repo, number)
-    changed_files = fetch_changed_files(repo, number)
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") == "true":
+        from scripts.ci.noema_exact_canary import require_target
+        require_target(repo, number, expected_head)
+        changed_files = fetch_changed_files(repo, number)
+        diff, truncated, review_context = "", False, ""
+    else:
+        diff, truncated = fetch_diff(repo, number)
+        changed_files = fetch_changed_files(repo, number)
+        review_context = build_review_context(repo, number, pr, changed_files)
     changed_paths = tuple(path for path, _status in changed_files)
-    review_context = build_review_context(repo, number, pr, changed_files)
     verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
     try:
@@ -1945,6 +2022,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") != "false":
+        from scripts.ci.noema_exact_canary import run_private_cli
+        raise SystemExit(run_private_cli(lambda: main(sys.argv[1:])))
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:

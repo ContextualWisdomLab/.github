@@ -164,10 +164,16 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         print("Current head already has a Noema review; verdict preparation skipped.")
         return 0
 
-    diff, truncated = gate.fetch_diff(repo, number)
-    changed_files = gate.fetch_changed_files(repo, number)
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") == "true":
+        from scripts.ci import noema_exact_canary as canary
+        canary.require_target(repo, number, expected)
+        changed_files = gate.fetch_changed_files(repo, number)
+        diff, truncated, review_context = "", False, ""
+    else:
+        diff, truncated = gate.fetch_diff(repo, number)
+        changed_files = gate.fetch_changed_files(repo, number)
+        review_context = gate.build_review_context(repo, number, pull_request, changed_files)
     changed_paths = tuple(file_path for file_path, _status in changed_files)
-    review_context = gate.build_review_context(repo, number, pull_request, changed_files)
     try:
         verdict = gate.call_llm(
             repo,
@@ -325,6 +331,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    if os.environ.get("NOEMA_EXACT_CANARY_NON_ZDR", "false") != "false":
+        from scripts.ci.noema_exact_canary import run_private_cli
+        raise SystemExit(run_private_cli(lambda: main(sys.argv[1:])))
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:

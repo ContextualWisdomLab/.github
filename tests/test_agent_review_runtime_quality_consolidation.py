@@ -148,6 +148,9 @@ def test_ghas_runtime_changes_start_the_quality_runner(changed_path: str) -> Non
 @pytest.mark.parametrize(
     ("changed_path", "expected_suites"),
     (
+        ("tests/test_noema_complete_auto_input.py", {"review_repair"}),
+        ("scripts/ci/noema_review_gate.py", {"noema", "review_repair"}),
+        ("scripts/ci/noema_exact_canary.py", {"review_repair"}),
         ("scripts/ci/codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_configuration_identity.py", {"ghas"}),
         ("tests/test_codeql_ghas_analyses_pagination.py", {"ghas"}),
@@ -238,6 +241,140 @@ def test_ghas_runtime_step_runs_exact_tests_and_fails_closed(
     assert calls.read_text().splitlines() == expected
     assert result.returncode == pytest_exit
     assert result.stdout == result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    ("tests/test_noema_canary_publication.py",
+     "tests/fixtures/noema_canary_publication_fixture.py",
+     "tests/test_noema_complete_auto_input.py",
+     "scripts/ci/noema_exact_canary.py"),
+)
+def test_publication_regressions_start_and_select_quality(
+    changed_path: str, tmp_path: Path
+) -> None:
+    """Enroll each publication input in the trigger and actual selector."""
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+    test_ghas_runtime_selector_executes_the_actual_shell(
+        changed_path, {"review_repair"}, tmp_path
+    )
+
+
+CANARY_CLI_FIXTURES = (
+    "tests/fixtures/noema_canary_cli_fixture.py",
+    "tests/fixtures/noema_canary_github_fixture.py",
+)
+
+
+@pytest.mark.parametrize("changed_path", CANARY_CLI_FIXTURES)
+def test_canary_cli_fixture_starts_quality_runner(changed_path: str) -> None:
+    """A fixture-only PR must start the workflow, not just a sibling test edit."""
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+
+
+@pytest.mark.parametrize("changed_path", CANARY_CLI_FIXTURES)
+def test_canary_cli_fixture_selects_review_repair_with_real_git_diff(
+    changed_path: str, tmp_path: Path
+) -> None:
+    """Run the unchanged selector against a real one-file, two-commit PR."""
+    repo = tmp_path / "source"
+    repo.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+               GIT_TERMINAL_PROMPT="0")
+
+    def git(*args: str) -> str:
+        """Execute only real Git with fixture-local author and no hooks."""
+        return subprocess.check_output(
+            ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+             "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             *args], cwd=repo, env=env, text=True,
+        ).strip()
+
+    git("init", "--quiet")
+    fixture = repo / changed_path
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes((REPOSITORY_ROOT / changed_path).read_bytes())
+    git("add", "--", changed_path)
+    git("commit", "--quiet", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    with fixture.open("a") as stream:
+        stream.write("\n# Fixture-only change.\n")
+    git("add", "--", changed_path)
+    git("commit", "--quiet", "-m", "fixture change")
+    head = git("rev-parse", "HEAD")
+    assert git("diff", "--name-only", f"{base}...{head}") == changed_path
+    step = _workflow_text().split("- name: Select affected contract suites", 1)[1]
+    script = textwrap.dedent(step.split("      - name:", 1)[0].split("        run: |\n", 1)[1])
+    output = tmp_path / "suites"
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+        cwd=repo, env={**env, "BASE_SHA": base, "HEAD_SHA": head,
+                       "GITHUB_OUTPUT": str(output)},
+        text=True, capture_output=True, check=True,
+    )
+    suites = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert suites == {name: str(name == "review_repair").lower() for name in
+                      ("noema", "opencode", "strix", "queue", "review_repair",
+                       "commercial_readiness", "exact_artifact", "ghas")}
+    assert result.stdout == result.stderr == ""
+
+
+def test_canary_cli_fixture_selects_hashed_review_dependencies() -> None:
+    """The selected suite must install its actual CLI/YAML test dependencies."""
+    step = _workflow_text().split("- name: Install exact review dependencies", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    assert "steps.affected_suites.outputs.review_repair == 'true'" in step
+    assert "--require-hashes" in step
+    assert "-r requirements-opencode-review-ci-hashes.txt" in step
+    assert "-r requirements-noema-document-ci-hashes.txt" in step
+
+
+@pytest.mark.parametrize("pytest_exit", (0, 42))
+def test_publication_regressions_run_and_compile(
+    pytest_exit: int, tmp_path: Path
+) -> None:
+    """Observe real step argv and prevent compile after failed pytest."""
+    step = _workflow_text().split(
+        "- name: Verify scheduler and contextual-orchestrator review-repair contracts", 1
+    )[1].split("      - name:", 1)[0]
+    assert "if: steps.affected_suites.outputs.review_repair == 'true'" in step
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    calls = tmp_path / "calls.txt"
+    recorder = ('python() { printf "%s\\n" "$*" >> "$CALLS"; '
+                'if [[ "$*" == *pytest* ]]; then return "$PYTEST_EXIT"; fi; }\n')
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+         recorder + script], cwd=REPOSITORY_ROOT,
+        env={**os.environ, "CALLS": str(calls), "PYTEST_EXIT": str(pytest_exit)},
+        text=True, capture_output=True, check=False,
+    )
+    rows = [line.split() for line in calls.read_text().splitlines()]
+    assert rows[0][:3] == ["-m", "pytest", "-q"]
+    assert rows[0].count("tests/test_noema_exact_canary.py") == 1
+    assert rows[0].count("tests/test_noema_canary_publication.py") == 1
+    assert rows[0].count("tests/test_noema_complete_auto_input.py") == 1
+    for fixture in (*CANARY_CLI_FIXTURES,
+                    "tests/fixtures/noema_canary_publication_fixture.py"):
+        assert fixture not in rows[0]
+    assert result.returncode == pytest_exit
+    assert result.stdout == result.stderr == ""
+    if pytest_exit:
+        assert len(rows) == 1
+    else:
+        assert len(rows) == 3
+        assert rows[2][:3] == ["-m", "compileall", "-q"]
+        for path in ("tests/test_noema_canary_publication.py",
+                     "tests/test_noema_exact_canary.py",
+                     *CANARY_CLI_FIXTURES,
+                     "tests/test_noema_complete_auto_input.py",
+                     "scripts/ci/noema_review_gate.py",
+                     "scripts/ci/noema_exact_canary.py",
+                     "tests/fixtures/noema_canary_publication_fixture.py"):
+            assert rows[2].count(path) == 1
 
 
 def test_exact_head_is_verified_before_selected_suites_run() -> None:

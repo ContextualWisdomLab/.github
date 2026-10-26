@@ -74,6 +74,15 @@ on:
       - "tests/test_contextual_orchestrator_review_launcher.py"
       - "tests/test_review_auto_route.py"
       - "tests/test_personal_review_route.py"
+      - "tests/test_noema_paid_auto_authorization.py"
+      - "tests/test_noema_exact_canary.py"
+      - "tests/test_noema_complete_auto_input.py"
+      - "tests/fixtures/noema_canary_cli_fixture.py"
+      - "tests/fixtures/noema_canary_github_fixture.py"
+      - "tests/test_noema_canary_publication.py"
+      - "tests/fixtures/noema_canary_publication_fixture.py"
+      - "scripts/ci/noema_exact_canary.py"
+      - "scripts/ci/noema_review_gate.py"
       - "tests/test_tokyo_review_consumer.py"
       - "tests/test_review_auto_cost_admission.py"
       - "tests/test_review_ai_app_independence.py"
@@ -222,6 +231,7 @@ jobs:
                 review_repair_suite=true
                 ;;
               .github/workflows/noema-review.yml|\
+              scripts/ci/noema_review_gate.py|\
               .github/actions/noema-review/two_phase.py|\
               tests/test_noema_reviewer_token_lifetime.py|\
               tests/test_noema_two_phase_handoff.py|\
@@ -234,6 +244,7 @@ jobs:
               tests/test_noema_document_review_context.py|\
               docs/doctoring/noema-review-token-lifetime.md)
                 noema_suite=true
+                review_repair_suite=true
                 ;;
               .github/workflows/opencode-review-dispatch.yml|\
               scripts/ci/ensure_rust_llvm19.sh|\
@@ -304,6 +315,14 @@ jobs:
               tests/test_contextual_orchestrator_review_launcher.py|\
               tests/test_review_auto_route.py|\
               tests/test_personal_review_route.py|\
+              tests/test_noema_paid_auto_authorization.py|\
+              tests/test_noema_exact_canary.py|\
+              tests/test_noema_complete_auto_input.py|\
+              tests/fixtures/noema_canary_cli_fixture.py|\
+              tests/fixtures/noema_canary_github_fixture.py|\
+              tests/test_noema_canary_publication.py|\
+              tests/fixtures/noema_canary_publication_fixture.py|\
+              scripts/ci/noema_exact_canary.py|\
               tests/test_tokyo_review_consumer.py|\
               tests/test_review_auto_cost_admission.py|\
               tests/test_review_ai_app_independence.py|\
@@ -504,6 +523,10 @@ jobs:
             tests/test_contextual_orchestrator_review_launcher.py \
             tests/test_review_auto_route.py \
             tests/test_personal_review_route.py \
+            tests/test_noema_paid_auto_authorization.py \
+            tests/test_noema_exact_canary.py \
+            tests/test_noema_complete_auto_input.py \
+            tests/test_noema_canary_publication.py \
             tests/test_tokyo_review_consumer.py \
             tests/test_review_auto_cost_admission.py \
             tests/test_review_ai_app_independence.py \
@@ -539,6 +562,11 @@ jobs:
             scripts/ci/contextual_orchestrator_review_policy.py \
             scripts/ci/contextual_orchestrator_review_launcher.py
           python -m compileall -q \
+            scripts/ci/noema_review_gate.py \
+            scripts/ci/noema_exact_canary.py \
+            tests/fixtures/noema_canary_cli_fixture.py \
+            tests/fixtures/noema_canary_github_fixture.py \
+            tests/fixtures/noema_canary_publication_fixture.py \
             scripts/ci/pr_review_conflict_scope.py \
             scripts/ci/pr_review_autofix_context.py \
             tests/test_pr_review_conflict_scope.py \
@@ -550,6 +578,10 @@ jobs:
             tests/test_contextual_orchestrator_review_launcher.py \
             tests/test_review_auto_route.py \
             tests/test_personal_review_route.py \
+            tests/test_noema_paid_auto_authorization.py \
+            tests/test_noema_exact_canary.py \
+            tests/test_noema_complete_auto_input.py \
+            tests/test_noema_canary_publication.py \
             tests/test_tokyo_review_consumer.py \
             tests/test_review_auto_cost_admission.py \
             tests/test_review_ai_app_independence.py \
