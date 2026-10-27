@@ -69,7 +69,8 @@ def _read_bound(path, digest=None, readonly=False):
             raise ValueError("input must be bounded, single-link and read-only")
         value = stream.read(65537)
         after = os.fstat(stream.fileno())
-    if before != after or len(value) > 65536:
+    stable = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_mtime", "st_ctime")
+    if any(getattr(before, key) != getattr(after, key) for key in stable) or len(value) > 65536:
         raise ValueError("input changed while reading")
     if digest is not None and (type(digest) is not str or hashlib.sha256(value).hexdigest() != digest):
         raise ValueError("immutable input digest mismatch")

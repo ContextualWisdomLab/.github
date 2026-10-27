@@ -304,3 +304,24 @@ def test_lock_hardlink_cannot_split_authority(tmp_path):
         assert target.read_bytes() == b"untouched"
     finally:
         if owner.lock_fd is not None: os.close(owner.lock_fd)
+
+
+def test_access_time_only_change_does_not_reject_snapshot(tmp_path, monkeypatch):
+    """A read may update atime on Linux; that is not input-content drift."""
+    path = tmp_path / "readonly"
+    path.write_bytes(b"immutable")
+    path.chmod(0o444)
+    original = os.fstat
+    calls = 0
+    def fstat(fd):
+        nonlocal calls
+        info = original(fd)
+        calls += 1
+        if calls == 3:
+            from types import SimpleNamespace
+            fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            fields["st_atime"] = info.st_atime + 1
+            return SimpleNamespace(**fields)
+        return info
+    monkeypatch.setattr(m.os, "fstat", fstat)
+    assert m._read_bound(path, readonly=True) == b"immutable"
