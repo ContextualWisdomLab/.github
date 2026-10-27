@@ -48,8 +48,9 @@ jobs:
 
   python:
     name: python
-    needs: python-matrix
-    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')) }}
+    needs: [python-matrix, gpu-smoke]
+    # A skipped/draft/cancelled dependency must not produce a green required gate.
+    if: ${{ always() }}
     runs-on:
       group: CWL CI isolated
       labels: [self-hosted, linux, x64, cwlab-ci-isolated]
@@ -58,6 +59,29 @@ jobs:
         run: |
           echo "python-matrix result=${{ needs.python-matrix.result }}"
           test "${{ needs.python-matrix.result }}" = "success"
+      - name: Require the existing software GPU evidence
+        if: ${{ always() }}
+        run: |
+          test "${{ needs.gpu-smoke.result }}" = "success"
+      - name: Reject unadmitted mandatory hardware execution
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          # This is an explicit incomplete-supplier hold, NOT a hardware job or
+          # receipt validator. Software tests stay unchanged until the existing
+          # owner connects an admitted isolated runner, exclusive lease and
+          # original child wait/cleanup custody. Labels, flags and JUnit alone
+          # cannot establish physical dispatch through the numerical consumer.
+          printf '%s\n' \
+            'BLOCKED: mandatory hardware execution is not admitted.' \
+            'Required unchanged cases (each once, no skip/failure/extra):' \
+            'tests/test_bifactor_bootstrap_benchmark.py::test_joint_bootstrap_cpu_vs_gpu_wall_time_and_parity' \
+            'tests/test_bifactor_gpu.py::test_bifactor_gpu_equivalence_multigroup' \
+            'tests/test_bifactor_bootstrap_benchmark.py::test_joint_bootstrap_cpu_vs_gpu_wall_time_q121' \
+            'The q121 case requires STAGE5_HIGH_Q=1 for workload selection only.' \
+            'Missing: admitted physical adapter route, exclusive lease/child settlement,' \
+            'source/compiled-extension/dispatch identity and exact-case run-bound receipts.' >&2
+          exit 1
 
 
   rust:
