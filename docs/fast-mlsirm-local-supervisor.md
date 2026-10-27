@@ -41,6 +41,21 @@ native wait failure, interruption inside Popen before handle return, interpreter
 SIGKILL and arbitrary descendant escape are **not proven settlement guarantees**.
 The fixed finite child restriction is essential; no shared resource is acquired.
 
+The embedding caller must preserve **exclusive original-child reaping** from
+admission through settlement: no competing `waitpid`/`wait` actor, process-global
+SIGCHLD policy change, or native `sigaction` auto-reaping policy is supported.
+Active Python-visible SIGCHLD dispositions other than `SIG_DFL` (including
+`SIG_IGN` and custom handlers) reject before lock acquisition or spawn. The
+supervisor never changes process-global signal policy. This admission check is
+not an atomic defense against a cooperating caller violating that contract;
+`Popen.wait()` and `Popen.returncode` alone cannot distinguish CPython's ECHILD
+fallback from an authentic exit0 after another actor consumes the status.
+The exact integer returned by the original wait is stored on the owner before
+publishing `waited`; journal retirement checks its type and agreement with both
+the Popen and settlement fields. Same-owner reconciliation projects that captured
+code even when an interrupt prevented the caller from receiving the wait return.
+Missing or inconsistent wait evidence retains the unresolved owner and lock.
+
 The private root and ancestors must remain caller-owned and quiescent. Symlinks,
 parent traversal, nonregular bounded inputs, writable declared immutable input,
 hard-linked inputs/locks and digest drift reject. These checks do not create an
@@ -57,7 +72,13 @@ separately by the trusted caller; `lease` must equal this owner's generated toke
 The actual owned fixed child emits **synthetic** local JUnit/call envelope bytes.
 It does not execute the named numerical tests. After exact child wait, the real
 receipt consumer joins those bytes before settlement; malformed evidence returns
-`receipt_rejected`, not `local_success`.
+`receipt_rejected`, not `local_success`. Until receipt consumption completes, the
+owner carries nonpassing `receipt_interrupted` with `receipt_validated: false`.
+If consumption is interrupted, the original exception propagates and the owner
+retains its lock; `reconcile()` persists that nonpassing state without reloading
+or retrying receipt files. Even valid bytes interrupted before consumption do
+not become success on journal retry. Receipt-mode `local_success` is admissible
+only after validation completed and `receipt_validated` is explicitly `true`.
 
 The closed `local-exact3-v1` envelope checks nonempty exact-once three required
 node IDs, unique call IDs, passed outcomes, matching JUnit classname/name and

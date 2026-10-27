@@ -9,6 +9,7 @@ import stat
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -89,12 +90,21 @@ class Supervisor:
         self.token = uuid.uuid4().hex
         self.claimed = False
         self.waited = False
+        self.wait_returncode = None
+        self.receipt_required = False
         self.secondary = []
 
     def _finish(self):
         """Persist exact original wait before lock retirement; failed I/O retains it."""
-        if not self.waited or self.result is None:
+        if (not self.waited or self.result is None or self.child is None
+                or type(self.wait_returncode) is not int
+                or type(self.child.returncode) is not int
+                or self.wait_returncode != self.child.returncode
+                or type(self.result.get("wait_returncode")) is not int
+                or self.result["wait_returncode"] != self.wait_returncode):
             raise ValueError("original child settlement unknown")
+        if self.receipt_required and self.result["status"] == "local_success" and self.result.get("receipt_validated") is not True:
+            raise ValueError("receipt validation incomplete")
         _atomic_write(self.root / "settlement.json", json.dumps(self.result, sort_keys=True))
         # Do not unlink/replace the lock inode. An ambiguous close is not retried.
         fd, self.lock_fd = self.lock_fd, None
@@ -107,6 +117,7 @@ class Supervisor:
         code = self.child.wait(timeout=timeout)
         if type(code) is not int or type(self.child.returncode) is not int or code != self.child.returncode:
             raise ValueError("original wait mismatch")
+        self.wait_returncode = code
         self.waited = True
         return code
 
@@ -124,7 +135,8 @@ class Supervisor:
         if self.lock_fd is None or not self.claimed or self.result is None:
             raise ValueError("no retained attempt")
         if not self.waited:
-            self.result["wait_returncode"] = self._wait(2)
+            self._wait(2)
+        self.result["wait_returncode"] = self.wait_returncode
         return self._finish()
 
     def run(self, mode, timeout=2, cancel=None, input_path=None, input_sha256=None, expected=None):
@@ -135,6 +147,8 @@ class Supervisor:
             raise ValueError("only fixed local workloads are admitted; native adapter missing")
         if not (type(timeout) is int or type(timeout) is float) or not 0 < timeout <= 5:
             raise ValueError("finite local timeout must be in (0, 5]")
+        if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+            raise ValueError("exclusive child reaping requires default SIGCHLD")
         self.root = _no_symlink(self.root)
         binding = None
         if mode == "receipt":
@@ -151,6 +165,7 @@ class Supervisor:
             receipts._binding(payload["binding"])
             if payload["binding"] != binding:
                 raise ValueError("immutable expectation mismatch")
+        self.receipt_required = binding is not None
         self.lock_fd = _open_regular_nofollow(
             self.root / "local.lock", os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
         )
@@ -221,10 +236,12 @@ class Supervisor:
                     code = self._drain()
                 except BaseException as cleanup:
                     self.secondary.append(cleanup)
-        self.result = {"status": status, "wait_returncode": code,
+        self.result = {"status": "receipt_interrupted" if binding is not None and status == "local_success" else status,
+                       "wait_returncode": self.wait_returncode,
                        "pid": self.child.pid if self.child is not None else None,
                        "token": self.token, "hardware_admitted": False,
-                       "scope": "local-only"}
+                       "scope": "local-only",
+                       **({"receipt_validated": False} if binding is not None else {})}
         if primary is not None:
             if self.waited:
                 try:
@@ -237,6 +254,7 @@ class Supervisor:
                 receipts.validate(_read_bound(self.root / "local-receipt.json"),
                                   _read_bound(self.root / "local-junit.xml"), binding)
                 self.result["receipt_validated"] = True
+                self.result["status"] = "local_success"
             except (ValueError, OSError):
                 self.result["status"] = "receipt_rejected"
                 self.result["receipt_validated"] = False
