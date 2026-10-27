@@ -48,8 +48,9 @@ jobs:
 
   python:
     name: python
-    needs: python-matrix
-    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')) }}
+    needs: [python-matrix, gpu-smoke]
+    # A skipped/draft/cancelled dependency must not produce a green required gate.
+    if: ${{ always() }}
     runs-on:
       group: CWL CI isolated
       labels: [self-hosted, linux, x64, cwlab-ci-isolated]
@@ -58,6 +59,23 @@ jobs:
         run: |
           echo "python-matrix result=${{ needs.python-matrix.result }}"
           test "${{ needs.python-matrix.result }}" = "success"
+      - name: Require the existing software GPU evidence
+        if: ${{ always() }}
+        run: |
+          test "${{ needs.gpu-smoke.result }}" = "success"
+      - name: Require settled same-call native hardware evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          NATIVE_RUN: ${{ github.run_id }}
+          NATIVE_ATTEMPT: ${{ github.run_attempt }}
+          NATIVE_SOURCE: ${{ github.sha }}
+        run: |
+          # Fixed custodian-installed consumer; never execute a PR checkout here.
+          # Missing installation/spool is refusal. This does not provision or
+          # dispatch hardware, and the software obligations remain unchanged.
+          /usr/bin/python3 -I /opt/cwlab/fast-mlsirm-native/fast_mlsirm_native_gate.py \
+            "$NATIVE_RUN" "$NATIVE_ATTEMPT" "$NATIVE_SOURCE"
 
 
   rust:
