@@ -20,8 +20,8 @@ concurrency:
 jobs:
   recover-missing-pypi:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     permissions:
       contents: read

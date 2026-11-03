@@ -24,8 +24,8 @@ permissions:
 jobs:
   validate:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, Linux, X64]
     timeout-minutes: 5
     outputs:
       runner_matrix: ${{ steps.runner.outputs.runner_matrix }}

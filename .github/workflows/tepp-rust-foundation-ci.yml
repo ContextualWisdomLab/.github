@@ -19,8 +19,8 @@ jobs:
   repository-contracts:
     name: Repository contracts and Python branch coverage
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 10
     steps:
       - name: Checkout exact head
@@ -63,8 +63,8 @@ jobs:
   rust-quality:
     name: Format, lint, test, rustdoc, and dependency policy
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - name: Checkout exact head
@@ -138,8 +138,8 @@ jobs:
   production-coverage:
     name: Production line and branch coverage
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 45
     steps:
       - name: Checkout exact head
@@ -286,8 +286,8 @@ jobs:
   live-postgres:
     name: Live PostgreSQL integration
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     services:
       postgres:

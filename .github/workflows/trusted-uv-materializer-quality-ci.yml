@@ -55,8 +55,8 @@ jobs:
   minimum-python-contract:
     name: Python 3.10 compatibility contract
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 10
     steps:
       - name: Harden runner
@@ -103,8 +103,8 @@ jobs:
   full-quality-gate:
     name: Python 3.14 full quality gate
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - name: Harden runner

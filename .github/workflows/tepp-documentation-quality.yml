@@ -11,8 +11,8 @@ jobs:
   validate:
     name: Validate planning and governance contracts
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 10
     steps:
       - name: Checkout exact head

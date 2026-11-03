@@ -65,8 +65,8 @@ jobs:
   verify-evidence-artifact:
     name: Verify inert sealed evidence
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     permissions:
       actions: read
@@ -183,8 +183,8 @@ jobs:
     name: Attest exact wheel and sdist SBOMs
     needs: verify-evidence-artifact
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     permissions:
       actions: read

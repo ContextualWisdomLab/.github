@@ -17,8 +17,8 @@ jobs:
     name: Format, lint, test, and rustdoc
     if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     services:
       postgres:
@@ -110,8 +110,8 @@ jobs:
     name: Production line coverage
     if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     services:
       postgres:
@@ -221,8 +221,8 @@ jobs:
     name: Production branch coverage
     if: ${{ github.repository == 'ContextualWisdomLab/psychometrics-commons' && github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.state == 'open' && github.event.pull_request.number > 0 && startsWith(github.ref, 'refs/pull/') && endsWith(github.ref, '/merge') && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'main' }}
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 15
     services:
       postgres:

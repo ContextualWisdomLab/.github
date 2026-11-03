@@ -72,8 +72,8 @@ jobs:
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 5
     permissions:
       contents: read
@@ -129,8 +129,8 @@ jobs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 25
     permissions:
       actions: read
@@ -361,8 +361,8 @@ jobs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       pull-requests: read
@@ -464,8 +464,8 @@ jobs:
     name: gitleaks (secret scan)
     if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       security-events: write
@@ -556,8 +556,8 @@ jobs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       security-events: write
@@ -669,8 +669,8 @@ jobs:
     needs: changed-scope
     if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:

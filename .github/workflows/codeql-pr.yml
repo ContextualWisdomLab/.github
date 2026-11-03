@@ -61,8 +61,8 @@ jobs:
     # Draft PRs get no runner; ready_for_review re-runs this on the same head.
     if: (github.event.action != 'closed') && (github.event.pull_request.draft != true || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     runs-on:
-      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).group }}
+      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).labels }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -167,8 +167,8 @@ jobs:
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
     runs-on:
-      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).group }}
+      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).labels }}
     # Verdict reads have exceeded five minutes; retain the ten-minute control budget.
     timeout-minutes: 10
     permissions:
@@ -522,8 +522,8 @@ jobs:
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
     runs-on:
-      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).group }}
+      labels: ${{ (fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}')).labels }}
     timeout-minutes: 5
     permissions:
       contents: read

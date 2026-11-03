@@ -7,8 +7,8 @@ permissions:
 jobs:
   validate:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, Linux, X64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:

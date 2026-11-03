@@ -163,8 +163,8 @@ jobs:
   prepare:
     name: Verify exact distributions and approve the licence closure
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -458,8 +458,8 @@ jobs:
     name: Strix ${{ matrix.key }}
     needs: prepare
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 360
     permissions:
       contents: read
@@ -714,8 +714,8 @@ jobs:
     needs: prepare
     if: ${{ needs.prepare.outputs.has_overflow == 'true' }}
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 360
     permissions:
       contents: read
@@ -733,8 +733,8 @@ jobs:
            (needs.prepare.outputs.has_overflow == 'false' && needs.strix_overflow.result == 'skipped')) }}
     name: Collect every Strix binding and seal the complete verdict
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 180
     permissions:
       contents: read

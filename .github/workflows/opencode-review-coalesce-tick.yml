@@ -55,8 +55,8 @@ jobs:
     # an inert echo under the org concurrent-job ceiling.
     if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true' && github.repository == 'ContextualWisdomLab/.github' && github.event_name == 'schedule' && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review-coalesce-tick.yml@refs/heads/main'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 4
     permissions:
       actions: write

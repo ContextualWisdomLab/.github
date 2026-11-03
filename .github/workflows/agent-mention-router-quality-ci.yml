@@ -47,8 +47,8 @@ env:
 jobs:
   quality:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - name: Harden runner

@@ -16,8 +16,8 @@ jobs:
     # on PRs. Default setup is disabled; this reusable workflow uploads SARIF.
     name: Analyze (actions)
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       security-events: write
@@ -39,8 +39,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     name: Analyze (python)
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       security-events: write

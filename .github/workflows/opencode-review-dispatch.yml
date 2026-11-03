@@ -467,8 +467,8 @@ jobs:
     # Pull-request merge-tree tests run only on the clean-per-job isolated pool.
     # Keep metadata and review publication on their separate trusted jobs.
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 300
     permissions:
       # Private source uses a same-run artifact; public source uses tokenless Git.

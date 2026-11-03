@@ -38,8 +38,8 @@ permissions:
 jobs:
   quality-gate:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout exact source revision

@@ -47,8 +47,8 @@ jobs:
     name: Detect Python
     if: github.event.action != 'closed'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     outputs:
       has_python: ${{ steps.detect.outputs.has_python }}
       has_manifest: ${{ steps.detect.outputs.has_manifest }}
@@ -80,8 +80,8 @@ jobs:
     needs: detect-python
     if: github.event.action != 'closed' && needs.detect-python.outputs.has_python == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
       security-events: write
@@ -209,8 +209,8 @@ jobs:
     needs: detect-python
     if: github.event.action != 'closed' && needs.detect-python.outputs.has_manifest == 'true'
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: CWL central control
+      labels: [self-hosted, linux, x64]
     permissions:
       contents: read
     steps:
