@@ -31,6 +31,14 @@ on:
         description: Space-separated file list passed to `python -m compileall -q`
         required: true
         type: string
+      use_repository_hosted_substitute:
+        description: >-
+          Choose the caller's repository-scoped hosted-substitute runner
+          instead of the shared isolated group. Both choices are fixed and
+          self-hosted; the caller cannot name an arbitrary runner.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,8 +46,8 @@ permissions:
 jobs:
   quality-gate:
     runs-on:
-      group: CWL CI isolated
-      labels: [self-hosted, linux, x64, cwlab-ci-isolated]
+      group: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"Default","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"Default","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout exact source revision

@@ -161,7 +161,7 @@ def test_isolated_fallback_never_selects_privileged_group() -> None:
                 assert json.loads(match.group(1)) == expected, (
                     path, job_id, 'unsafe fallback', fallback,
                 )
-    assert observed == 29, ('conditional runner fallback coverage', observed)
+    assert observed == 30, ('conditional runner fallback coverage', observed)
 
 
 def test_isolated_label_is_scoped_to_dedicated_runner_group() -> None:

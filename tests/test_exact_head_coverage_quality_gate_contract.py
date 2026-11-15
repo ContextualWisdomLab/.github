@@ -132,3 +132,32 @@ def test_js_caller_trigger_covers_this_contract_test_file() -> None:
     trigger = js_caller.split("\npermissions:\n", 1)[0]
 
     assert f"'{SELF_TEST_PATH}'" in trigger
+
+
+def test_runner_choice_is_a_fixed_boolean_with_isolated_default() -> None:
+    """Callers pick between two fixed self-hosted selectors, never a free one."""
+    workflow = _text(GATE_WORKFLOW)
+    header = workflow.split("\npermissions:\n", 1)[0]
+    match = re.search(
+        r"(?ms)^      use_repository_hosted_substitute:\n(?P<body>(?:^        .*\n)+)",
+        header,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert re.search(r"(?m)^        required: false\s*$", body)
+    assert re.search(r"(?m)^        type: boolean\s*$", body)
+    assert re.search(r"(?m)^        default: false\s*$", body)
+
+    isolated = (
+        'fromJSON(\'{"group":"CWL CI isolated","labels":'
+        '["self-hosted","linux","x64","cwlab-ci-isolated"]}\')'
+    )
+    substitute = (
+        'fromJSON(\'{"group":"Default","labels":'
+        '["self-hosted","linux","x64","hosted-substitute"]}\')'
+    )
+    choice = f"(inputs.use_repository_hosted_substitute && {substitute} || {isolated})"
+    assert f"      group: ${{{{ {choice}.group }}}}" in workflow
+    assert f"      labels: ${{{{ {choice}.labels }}}}" in workflow
+    assert "inputs.runs_on" not in workflow
+    assert not re.search(r"(?m)^    runs-on: (?:ubuntu-|windows-|macos-)", workflow)
