@@ -46,8 +46,8 @@ permissions:
 jobs:
   quality-gate:
     runs-on:
-      group: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"Default","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"Default","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+      group: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
+      labels: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout exact source revision

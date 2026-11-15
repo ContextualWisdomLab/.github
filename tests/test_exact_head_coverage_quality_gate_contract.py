@@ -148,13 +148,16 @@ def test_runner_choice_is_a_fixed_boolean_with_isolated_default() -> None:
     assert re.search(r"(?m)^        type: boolean\s*$", body)
     assert re.search(r"(?m)^        default: false\s*$", body)
 
+    # Repository runners belong to no organization group, so the substitute
+    # branch is a label array. Naming group Default would exclude them.
+    assert "group: Default" not in workflow
+    substitute = (
+        'fromJSON(\'{"group":"","labels":'
+        '["self-hosted","linux","x64","hosted-substitute"]}\')'
+    )
     isolated = (
         'fromJSON(\'{"group":"CWL CI isolated","labels":'
         '["self-hosted","linux","x64","cwlab-ci-isolated"]}\')'
-    )
-    substitute = (
-        'fromJSON(\'{"group":"Default","labels":'
-        '["self-hosted","linux","x64","hosted-substitute"]}\')'
     )
     choice = f"(inputs.use_repository_hosted_substitute && {substitute} || {isolated})"
     assert f"      group: ${{{{ {choice}.group }}}}" in workflow
