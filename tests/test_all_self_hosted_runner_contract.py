@@ -82,6 +82,11 @@ def test_nonprivileged_runners_require_isolated_label() -> None:
                     'self-hosted', 'linux', 'x64', 'k-csap-isolated',
                 }, (path, job_id, 'missing or unexpected repository-scoped labels', runner)
             else:
+                # The quality gate resolves to a label array only when the caller
+                # opts in, and to the isolated object otherwise.
+                if (path.name, job_id) == ('exact-head-coverage-quality-gate.yml', 'quality-gate'):
+                    assert runner == '${{ fromJSON(inputs.use_repository_hosted_substitute && \'["self-hosted","linux","x64","hosted-substitute"]\' || \'{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}\') }}', (path, job_id, runner)
+                    continue
                 assert isinstance(runner, str) and 'cwlab-ci-isolated' in runner, (path, job_id, runner)
     assert observed, 'runner selector coverage is empty'
 
@@ -161,7 +166,7 @@ def test_isolated_fallback_never_selects_privileged_group() -> None:
                 assert json.loads(match.group(1)) == expected, (
                     path, job_id, 'unsafe fallback', fallback,
                 )
-    assert observed == 29, ('conditional runner fallback coverage', observed)
+    assert observed == 30, ('conditional runner fallback coverage', observed)
 
 
 def test_isolated_label_is_scoped_to_dedicated_runner_group() -> None:
