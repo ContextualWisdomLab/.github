@@ -45,9 +45,7 @@ permissions:
 
 jobs:
   quality-gate:
-    runs-on:
-      group: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).group }}
-      labels: ${{ (inputs.use_repository_hosted_substitute && fromJSON('{"group":"","labels":["self-hosted","linux","x64","hosted-substitute"]}') || fromJSON('{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}')).labels }}
+    runs-on: ${{ fromJSON(inputs.use_repository_hosted_substitute && '["self-hosted","linux","x64","hosted-substitute"]' || '{"group":"CWL CI isolated","labels":["self-hosted","linux","x64","cwlab-ci-isolated"]}') }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout exact source revision
